@@ -1,0 +1,80 @@
+# Render Blueprint for CareerPilot AI.
+# Deploys two web services: backend (Spring Boot, Java 21) and agent-service (Python + LangGraph).
+# Postgres is external (Neon). Frontend deploys separately on Vercel.
+# After connecting this repo at https://dashboard.render.com/blueprints, fill in the env vars
+# marked `sync: false` from the Render dashboard.
+
+services:
+  - type: web
+    name: careerpilot-agent
+    runtime: docker
+    plan: free
+    region: oregon
+    rootDir: agent-service
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: AI_PROVIDER
+        value: gemini
+      - key: AI_MODEL
+        value: gemini-2.5-flash       # cheaper than 2.5-pro; matches free-tier rate limits
+      - key: GEMINI_API_KEY
+        sync: false                    # paste in dashboard
+      - key: DATABASE_URL              # libpq form, Neon DIRECT endpoint (no -pooler)
+        sync: false
+      - key: LOG_LEVEL
+        value: INFO
+
+  - type: web
+    name: careerpilot-backend
+    runtime: docker
+    plan: free
+    region: oregon
+    rootDir: backend
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /actuator/health
+    autoDeploy: true
+    envVars:
+      - key: JWT_SECRET
+        generateValue: true            # Render generates a long random string
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: SPRING_DATASOURCE_URL     # JDBC form, Neon DIRECT endpoint (no -pooler)
+        sync: false
+      - key: SPRING_DATASOURCE_USERNAME
+        sync: false
+      - key: SPRING_DATASOURCE_PASSWORD
+        sync: false
+      - key: AGENT_SERVICE_URL
+        fromService:
+          type: web
+          name: careerpilot-agent
+          property: hostport           # https://careerpilot-agent.onrender.com
+      - key: AI_PROVIDER
+        value: gemini
+      - key: AI_MODEL
+        value: gemini-2.5-flash
+      # Redis — Upstash. Fill SPRING_DATA_REDIS_HOST/PORT/PASSWORD/SSL in dashboard.
+      - key: SPRING_DATA_REDIS_HOST
+        sync: false
+      - key: SPRING_DATA_REDIS_PORT
+        value: "6379"
+      - key: SPRING_DATA_REDIS_PASSWORD
+        sync: false
+      - key: SPRING_DATA_REDIS_SSL
+        value: "true"
+      # Kafka — not deployed for the free demo. The producer logs warnings but the app keeps working.
+      - key: SPRING_KAFKA_BOOTSTRAP_SERVERS
+        value: "localhost:9092"
+      # S3 — Cloudflare R2 (free 10GB). Fill in dashboard.
+      - key: S3_ENDPOINT
+        sync: false
+      - key: S3_REGION
+        value: auto                    # R2 uses 'auto'
+      - key: S3_BUCKET
+        sync: false
+      - key: S3_ACCESS_KEY
+        sync: false
+      - key: S3_SECRET_KEY
+        sync: false

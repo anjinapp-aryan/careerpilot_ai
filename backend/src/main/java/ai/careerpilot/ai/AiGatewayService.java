@@ -117,11 +117,13 @@ public class AiGatewayService {
             }
 
             try {
-                log.info("Using {} Provider", p.displayName());
+                log.info("Job Match Request Received - Using {} Provider", p.displayName());
                 metrics.recordCall(p.name());
                 Supplier<T> decorated = Retry.decorateSupplier(retryRegistry.retry(p.name()),
                         CircuitBreaker.decorateSupplier(cb, () -> call.apply(p)));
-                return decorated.get();
+                T result = decorated.get();
+                log.info("Response Returned from {}", p.displayName());
+                return result;
             } catch (CallNotPermittedException e) {
                 last = e;
                 log.warn("{} circuit opened mid-flight — skipping to fallback", p.displayName());
@@ -129,11 +131,12 @@ public class AiGatewayService {
             } catch (Exception e) {
                 last = e;
                 metrics.recordFailure(p.name());
+                log.error("{} Provider failed: {} - {}", p.displayName(), e.getClass().getSimpleName(), e.getMessage(), e);
                 if (hasNext) {
                     metrics.recordFallback();
                     log.warn("{} Failed → Switching to {}", p.displayName(), chain.get(i + 1).displayName());
                 } else {
-                    log.error("{} Failed and no fallback remains: {}", p.displayName(), e.toString());
+                    log.error("All {} providers exhausted for operation '{}'", chain.size(), op);
                 }
             }
         }
@@ -162,25 +165,32 @@ public class AiGatewayService {
             return streamFrom(chain, idx + 1, messages, system, temperature);
         }
 
-        log.info("Using {} Provider (stream)", p.displayName());
+        log.info("Copilot Request Received - Using {} Provider (stream)", p.displayName());
         metrics.recordCall(p.name());
         long start = System.nanoTime();
         AtomicBoolean emitted = new AtomicBoolean(false);
 
         return p.streamChat(messages, system, temperature)
                 .doOnNext(t -> emitted.set(true))
-                .doOnComplete(() -> cb.onSuccess(System.nanoTime() - start, TimeUnit.NANOSECONDS))
+                .doOnComplete(() -> {
+                    long elapsedMs = (System.nanoTime() - start) / 1_000_000;
+                    log.info("Response Returned from {} in {}ms", p.displayName(), elapsedMs);
+                    cb.onSuccess(System.nanoTime() - start, TimeUnit.NANOSECONDS);
+                })
                 .onErrorResume(err -> {
                     cb.onError(System.nanoTime() - start, TimeUnit.NANOSECONDS, err);
                     metrics.recordFailure(p.name());
+                    log.error("{} Provider failed: {} - {}", p.displayName(), err.getClass().getSimpleName(), err.getMessage(), err);
                     if (emitted.get()) {
                         // Tokens already streamed to the client — cannot transparently fail over.
-                        log.error("{} failed mid-stream: {}", p.displayName(), err.toString());
+                        log.error("{} failed mid-stream — cannot failover", p.displayName());
                         return Flux.error(err);
                     }
                     if (hasNext) {
                         metrics.recordFallback();
-                        log.warn("{} Failed → Switching to {} (stream)", p.displayName(), chain.get(idx + 1).displayName());
+                        log.warn("{} Failed → Switching to {}", p.displayName(), chain.get(idx + 1).displayName());
+                    } else {
+                        log.error("All {} providers exhausted", chain.size());
                     }
                     return streamFrom(chain, idx + 1, messages, system, temperature);
                 });

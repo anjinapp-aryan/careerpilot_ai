@@ -16,8 +16,8 @@ public class JobService {
 
     public JobService(JobRepository jobs) { this.jobs = jobs; }
 
-    public Page<Job> search(String q, int page, int size) {
-        return jobs.search(q, PageRequest.of(page, Math.min(size, 100)));
+    public Page<Job> search(UUID orgId, String q, int page, int size) {
+        return jobs.search(orgId, q, PageRequest.of(page, Math.min(size, 100)));
     }
 
     @Transactional
@@ -26,7 +26,8 @@ public class JobService {
         return jobs.save(j);
     }
 
-    public Job get(UUID id) {
-        return jobs.findById(id).orElseThrow();
+    public Job get(UUID orgId, UUID id) {
+        return jobs.findByIdAndOrgId(id, orgId)
+                .orElseThrow(() -> new IllegalArgumentException("Job not found or access denied"));
     }
 }

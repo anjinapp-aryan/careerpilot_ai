@@ -17,10 +17,12 @@ public class JobController {
     public JobController(JobService jobs) { this.jobs = jobs; }
 
     @GetMapping
-    public Page<Job> search(@RequestParam(required = false) String q,
+    public Page<Job> search(AuthenticatedUser user,
+                            @RequestParam(required = false) String q,
                             @RequestParam(defaultValue = "0") int page,
                             @RequestParam(defaultValue = "20") int size) {
-        return jobs.search(q, page, size);
+        // Multi-tenant: filter by org
+        return jobs.search(user.orgId(), q, page, size);
     }
 
     @PostMapping
@@ -29,7 +31,8 @@ public class JobController {
     }
 
     @GetMapping("/{id}")
-    public Job get(@PathVariable UUID id) {
-        return jobs.get(id);
+    public Job get(AuthenticatedUser user, @PathVariable UUID id) {
+        // Multi-tenant: verify ownership
+        return jobs.get(user.orgId(), id);
     }
 }

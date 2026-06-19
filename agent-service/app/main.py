@@ -2,20 +2,71 @@
 from __future__ import annotations
 
 import logging
+import logging.config
 import uuid
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from .config import settings
 from .graph import get_compiled_graph
+from .rate_limiter import GeminiRateLimiter
 
-logging.basicConfig(level=getattr(logging, settings.log_level, logging.INFO))
+# ---------------------------------------------------------------------------
+# Structured JSON logging — wire up python-json-logger before anything else
+# ---------------------------------------------------------------------------
+
+def _configure_logging(level: str) -> None:
+    """
+    Configure the root logger to emit JSON lines.
+    All log.info("event_name", extra={...}) calls will include structured fields.
+    """
+    logging.config.dictConfig({
+        "version": 1,
+        "disable_existing_loggers": False,
+        "formatters": {
+            "json": {
+                "()": "pythonjsonlogger.jsonlogger.JsonFormatter",
+                "fmt": "%(asctime)s %(name)s %(levelname)s %(message)s",
+                "datefmt": "%Y-%m-%dT%H:%M:%SZ",
+            }
+        },
+        "handlers": {
+            "stdout": {
+                "class": "logging.StreamHandler",
+                "stream": "ext://sys.stdout",
+                "formatter": "json",
+            }
+        },
+        "root": {
+            "handlers": ["stdout"],
+            "level": level.upper(),
+        },
+    })
+
+
+_configure_logging(settings.log_level)
 log = logging.getLogger("careerpilot.agent")
 
 app = FastAPI(title="CareerPilot Agent Service", version="0.1.0")
 
+# Exact origins only, driven by CORS_ALLOWED_ORIGINS — no wildcards. The agent
+# service is normally only called server-to-server by the backend, but the
+# interactive /docs page and any direct browser testing need this.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[o.strip() for o in settings.cors_allowed_origins.split(",") if o.strip()],
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "Accept"],
+)
+
+
+# ---------------------------------------------------------------------------
+# Request/response models
+# ---------------------------------------------------------------------------
 
 class JobDescriptionDTO(BaseModel):
     id: str
@@ -49,6 +100,10 @@ class RunResponse(BaseModel):
     state: dict[str, Any]
 
 
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
 def _config(thread_id: str) -> dict:
     return {"configurable": {"thread_id": thread_id}}
 
@@ -61,9 +116,36 @@ def _classify(state: dict[str, Any]) -> str:
     return "completed"
 
 
+# ---------------------------------------------------------------------------
+# Routes
+# ---------------------------------------------------------------------------
+
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok", "provider": settings.ai_provider, "model": settings.ai_model}
+
+
+@app.get("/metrics")
+def get_metrics() -> dict[str, Any]:
+    """
+    Expose rate-limiter counters.
+
+    Returns Prometheus-ready counter names so a future /metrics scrape endpoint
+    can map them directly to prometheus_client.Counter objects.
+
+    Example response:
+        {
+            "requests_total": 42,
+            "requests_delayed": 7,
+            "requests_retried": 2,
+            "tokens_consumed": 18400,
+            "rate_limit_hits": 7
+        }
+    """
+    instance = GeminiRateLimiter._instance
+    if instance is None:
+        return {}
+    return instance.metrics
 
 
 @app.post("/runs", response_model=RunResponse)
@@ -83,14 +165,22 @@ def start_run(req: StartRunRequest) -> RunResponse:
         "errors": [],
         "cost_usd": 0.0,
     }
+    log.info(
+        "workflow_run_started",
+        extra={
+            "event": "workflow_run_started",
+            "thread_id": thread_id,
+            "user_id": req.user_id,
+            "target_role": req.target_role,
+        },
+    )
     try:
         final_state = graph.invoke(initial, config=_config(thread_id))
     except Exception as e:  # noqa: BLE001
-        # NodeInterrupt and other interrupts surface here; fetch the snapshot.
         snapshot = graph.get_state(_config(thread_id))
         if snapshot and snapshot.next:
             return RunResponse(thread_id=thread_id, status="interrupted", state=snapshot.values)
-        log.exception("run failed")
+        log.exception("workflow_run_failed", extra={"event": "workflow_run_failed", "thread_id": thread_id})
         raise HTTPException(status_code=500, detail=str(e))
     return RunResponse(thread_id=thread_id, status=_classify(final_state), state=final_state)
 
@@ -109,6 +199,14 @@ def resume_run(req: ResumeRunRequest) -> RunResponse:
             "human_decision": req.human_decision,
             "human_feedback": req.human_feedback,
             "awaiting_human_approval": False,
+        },
+    )
+    log.info(
+        "workflow_run_resumed",
+        extra={
+            "event": "workflow_run_resumed",
+            "thread_id": req.thread_id,
+            "decision": req.human_decision,
         },
     )
     final_state = graph.invoke(None, config=cfg)

@@ -37,8 +37,9 @@ class CareerState(TypedDict, total=False):
     career_roadmap: dict
     skill_gaps: list[str]
 
-    # Salary
-    salary_intelligence: dict
+    # Salary  (NB: key must NOT match the "salary_intelligence" node name —
+    # LangGraph forbids a state key that collides with a node id)
+    salary_insights: dict
 
     # Human approval gate
     awaiting_human_approval: bool

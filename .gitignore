@@ -1,0 +1,23 @@
+# Java
+target/
+*.jar
+
+# Maven
+.mvn/wrapper/maven-wrapper.jar
+
+# IDE
+.idea/
+.vscode/
+
+# Python
+.venv/
+__pycache__/
+
+# Node
+node_modules/
+
+# Logs
+*.log
+
+.env
+.env.*

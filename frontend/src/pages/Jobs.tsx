@@ -1,68 +1,343 @@
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { motion } from 'framer-motion';
+import {
+  Bookmark,
+  Building2,
+  CalendarDays,
+  DollarSign,
+  Filter,
+  MapPin,
+  Plus,
+  Search,
+  Send,
+  SlidersHorizontal,
+} from 'lucide-react';
 import { api } from '@/lib/api';
+import { PageHeader } from '@/components/common/PageHeader';
+import { Button } from '@/components/ui/button';
+import { Card } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { Input, Label, Textarea } from '@/components/ui/input';
+import { Skeleton } from '@/components/ui/skeleton';
+import { EmptyState } from '@/components/ui/empty-state';
+import { useToast } from '@/components/ui/toast';
+import {
+  Dialog,
+  DialogBody,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from '@/components/ui/dialog';
+import { cn } from '@/lib/cn';
+import type { Job, JobsPage } from '@/types/workflow';
 
-interface Job {
-  id: string;
-  title: string;
-  company: string;
-  location: string;
-  description: string;
-  salaryRange?: string;
+const EMPTY_DRAFT = { title: '', company: '', location: '', description: '', salaryRange: '' };
+
+function companyColor(name: string) {
+  const palette = ['bg-primary/10 text-primary', 'bg-secondary/10 text-secondary', 'bg-success/10 text-success', 'bg-warning/10 text-warning'];
+  let h = 0;
+  for (const c of name) h = (h * 31 + c.charCodeAt(0)) % palette.length;
+  return palette[h];
 }
 
 export default function Jobs() {
   const qc = useQueryClient();
+  const { toast } = useToast();
   const [q, setQ] = useState('');
+  const [location, setLocation] = useState('');
+  const [remoteOnly, setRemoteOnly] = useState(false);
+  const [company, setCompany] = useState('');
   const [showNew, setShowNew] = useState(false);
-  const [draft, setDraft] = useState({ title: '', company: '', location: '', description: '', salaryRange: '' });
+  const [showFilters, setShowFilters] = useState(false);
+  const [draft, setDraft] = useState(EMPTY_DRAFT);
 
-  const { data } = useQuery({
+  const { data, isLoading } = useQuery<JobsPage>({
     queryKey: ['jobs', q],
     queryFn: async () => (await api.get('/api/jobs', { params: { q } })).data,
   });
 
-  async function create() {
-    await api.post('/api/jobs', draft);
-    setShowNew(false);
-    setDraft({ title: '', company: '', location: '', description: '', salaryRange: '' });
-    qc.invalidateQueries({ queryKey: ['jobs'] });
-  }
+  const create = useMutation({
+    mutationFn: async () => (await api.post('/api/jobs', draft)).data as Job,
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['jobs'] });
+      setShowNew(false);
+      setDraft(EMPTY_DRAFT);
+      toast({ variant: 'success', title: 'Job added' });
+    },
+    onError: () => toast({ variant: 'error', title: 'Could not add job' }),
+  });
+
+  const track = useMutation({
+    mutationFn: async ({ jobId, status }: { jobId: string; status: string }) =>
+      (await api.post('/api/applications', { jobId, status })).data,
+    onSuccess: (_d, v) => {
+      qc.invalidateQueries({ queryKey: ['applications'] });
+      qc.invalidateQueries({ queryKey: ['dashboard'] });
+      toast({
+        variant: 'success',
+        title: v.status === 'SAVED' ? 'Job saved' : 'Application created',
+        description: 'Track it from the Applications board.',
+      });
+    },
+    onError: () => toast({ variant: 'error', title: 'Action failed' }),
+  });
+
+  const jobs = data?.content ?? [];
+  const filtered = useMemo(
+    () =>
+      jobs.filter((j) => {
+        if (location && !(j.location ?? '').toLowerCase().includes(location.toLowerCase())) return false;
+        if (company && !j.company.toLowerCase().includes(company.toLowerCase())) return false;
+        if (remoteOnly && !/remote/i.test(`${j.location ?? ''} ${j.title}`)) return false;
+        return true;
+      }),
+    [jobs, location, company, remoteOnly],
+  );
+
+  const activeFilters = [location, company].filter(Boolean).length + (remoteOnly ? 1 : 0);
+
+  const filterPanel = (
+    <div className="space-y-5">
+      <div className="flex items-center justify-between">
+        <h2 className="flex items-center gap-2 text-sm font-semibold text-foreground">
+          <SlidersHorizontal className="h-4 w-4" /> Filters
+        </h2>
+        {activeFilters > 0 && (
+          <button
+            onClick={() => {
+              setLocation('');
+              setCompany('');
+              setRemoteOnly(false);
+            }}
+            className="text-xs font-medium text-primary hover:underline"
+          >
+            Clear
+          </button>
+        )}
+      </div>
+      <div>
+        <Label>Location</Label>
+        <Input value={location} onChange={(e) => setLocation(e.target.value)} placeholder="e.g. Berlin, US" />
+      </div>
+      <div>
+        <Label>Company</Label>
+        <Input value={company} onChange={(e) => setCompany(e.target.value)} placeholder="e.g. Stripe" />
+      </div>
+      <label className="flex cursor-pointer items-center justify-between rounded-lg border border-border bg-card px-3 py-2.5">
+        <span className="text-sm font-medium text-foreground">Remote only</span>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={remoteOnly}
+          onClick={() => setRemoteOnly((v) => !v)}
+          className={cn('relative h-5 w-9 rounded-full transition-colors', remoteOnly ? 'bg-primary' : 'bg-muted')}
+        >
+          <span
+            className={cn(
+              'absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform',
+              remoteOnly ? 'translate-x-4' : 'translate-x-0.5',
+            )}
+          />
+        </button>
+      </label>
+    </div>
+  );
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold">Jobs</h1>
-        <button className="bg-brand-600 text-white px-3 py-2 rounded-md text-sm" onClick={() => setShowNew(!showNew)}>
-          {showNew ? 'Cancel' : 'Add job'}
-        </button>
-      </div>
-      <input className="w-full border rounded-md p-2" placeholder="Search title or company"
-             value={q} onChange={(e) => setQ(e.target.value)} />
+      <PageHeader
+        title="Jobs"
+        description="Discover roles, track openings, and push them into your pipeline."
+        actions={
+          <>
+            <Button variant="outline" className="lg:hidden" onClick={() => setShowFilters((v) => !v)}>
+              <Filter className="h-4 w-4" /> Filters{activeFilters ? ` (${activeFilters})` : ''}
+            </Button>
+            <Button onClick={() => setShowNew(true)}>
+              <Plus className="h-4 w-4" /> Add job
+            </Button>
+          </>
+        }
+      />
 
-      {showNew && (
-        <div className="bg-white border rounded-lg p-4 space-y-2">
-          {(['title', 'company', 'location', 'salaryRange'] as const).map((k) => (
-            <input key={k} className="w-full border rounded-md p-2"
-                   placeholder={k}
-                   value={(draft as any)[k]}
-                   onChange={(e) => setDraft({ ...draft, [k]: e.target.value })} />
-          ))}
-          <textarea className="w-full border rounded-md p-2 h-32" placeholder="Job description"
-                    value={draft.description}
-                    onChange={(e) => setDraft({ ...draft, description: e.target.value })} />
-          <button className="bg-brand-600 text-white px-3 py-2 rounded-md text-sm" onClick={create}>Save</button>
-        </div>
-      )}
+      <div className="grid gap-6 lg:grid-cols-[260px_1fr]">
+        {/* Left: filters */}
+        <aside className="hidden lg:block">
+          <Card className="sticky top-20 p-5">{filterPanel}</Card>
+        </aside>
+        {showFilters && (
+          <Card className="p-5 lg:hidden">{filterPanel}</Card>
+        )}
 
-      <div className="bg-white rounded-lg border border-slate-100 divide-y">
-        {(data?.content ?? []).map((j: Job) => (
-          <div key={j.id} className="p-3 text-sm">
-            <div className="font-medium">{j.title} <span className="text-slate-500">— {j.company}</span></div>
-            <div className="text-slate-500">{j.location} {j.salaryRange ? `• ${j.salaryRange}` : ''}</div>
+        {/* Right: results */}
+        <div className="space-y-4">
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder="Search by title or company…"
+              className="h-11 pl-9"
+            />
           </div>
-        ))}
+
+          <p className="text-sm text-muted-foreground">
+            {isLoading ? 'Searching…' : `${filtered.length} role${filtered.length === 1 ? '' : 's'} found`}
+          </p>
+
+          {isLoading ? (
+            <div className="space-y-4">
+              {Array.from({ length: 4 }).map((_, i) => (
+                <Skeleton key={i} className="h-36 rounded-xl" />
+              ))}
+            </div>
+          ) : filtered.length === 0 ? (
+            <EmptyState
+              icon={Building2}
+              title="No jobs found"
+              description="Adjust your filters or add a job posting to start tracking it."
+              action={
+                <Button onClick={() => setShowNew(true)}>
+                  <Plus className="h-4 w-4" /> Add job
+                </Button>
+              }
+            />
+          ) : (
+            <div className="space-y-4">
+              {filtered.map((job, i) => (
+                <JobCard
+                  key={job.id}
+                  job={job}
+                  index={i}
+                  onSave={() => track.mutate({ jobId: job.id, status: 'SAVED' })}
+                  onApply={() => track.mutate({ jobId: job.id, status: 'APPLIED' })}
+                  busy={track.isPending}
+                />
+              ))}
+            </div>
+          )}
+        </div>
       </div>
+
+      {/* Add job dialog */}
+      <Dialog open={showNew} onOpenChange={setShowNew} size="lg">
+        <DialogHeader onClose={() => setShowNew(false)}>
+          <DialogTitle>Add a job</DialogTitle>
+          <DialogDescription>Track a role you found elsewhere.</DialogDescription>
+        </DialogHeader>
+        <DialogBody className="space-y-4">
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div>
+              <Label>Title</Label>
+              <Input value={draft.title} onChange={(e) => setDraft({ ...draft, title: e.target.value })} placeholder="Senior Software Engineer" />
+            </div>
+            <div>
+              <Label>Company</Label>
+              <Input value={draft.company} onChange={(e) => setDraft({ ...draft, company: e.target.value })} placeholder="Acme Inc." />
+            </div>
+            <div>
+              <Label>Location</Label>
+              <Input value={draft.location} onChange={(e) => setDraft({ ...draft, location: e.target.value })} placeholder="Remote, US" />
+            </div>
+            <div>
+              <Label>Salary range</Label>
+              <Input value={draft.salaryRange} onChange={(e) => setDraft({ ...draft, salaryRange: e.target.value })} placeholder="$150k – $190k" />
+            </div>
+          </div>
+          <div>
+            <Label>Description</Label>
+            <Textarea
+              value={draft.description}
+              onChange={(e) => setDraft({ ...draft, description: e.target.value })}
+              placeholder="Paste the job description…"
+              className="min-h-[120px]"
+            />
+          </div>
+        </DialogBody>
+        <DialogFooter>
+          <Button variant="ghost" onClick={() => setShowNew(false)}>
+            Cancel
+          </Button>
+          <Button
+            onClick={() => create.mutate()}
+            loading={create.isPending}
+            disabled={!draft.title || !draft.company || !draft.description}
+          >
+            Save job
+          </Button>
+        </DialogFooter>
+      </Dialog>
     </div>
+  );
+}
+
+interface JobCardProps {
+  job: Job;
+  index: number;
+  onSave: () => void;
+  onApply: () => void;
+  busy: boolean;
+}
+
+function JobCard({ job, index, onSave, onApply, busy }: JobCardProps) {
+  const isRemote = /remote/i.test(`${job.location ?? ''} ${job.title}`);
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ delay: index * 0.04 }}
+    >
+      <Card className="p-5 transition-shadow hover:shadow-md">
+        <div className="flex gap-4">
+          <span className={cn('flex h-12 w-12 shrink-0 items-center justify-center rounded-xl text-base font-semibold', companyColor(job.company))}>
+            {job.company.slice(0, 2).toUpperCase()}
+          </span>
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-start justify-between gap-2">
+              <div className="min-w-0">
+                <h3 className="truncate text-base font-semibold text-foreground">{job.title}</h3>
+                <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
+                  <Building2 className="h-3.5 w-3.5" /> {job.company}
+                </p>
+              </div>
+              {isRemote && <Badge tone="success">Remote</Badge>}
+            </div>
+
+            <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs text-muted-foreground">
+              {job.location && (
+                <span className="flex items-center gap-1">
+                  <MapPin className="h-3.5 w-3.5" /> {job.location}
+                </span>
+              )}
+              {job.salaryRange && (
+                <span className="flex items-center gap-1">
+                  <DollarSign className="h-3.5 w-3.5" /> {job.salaryRange}
+                </span>
+              )}
+              {job.postedAt && (
+                <span className="flex items-center gap-1">
+                  <CalendarDays className="h-3.5 w-3.5" /> {new Date(job.postedAt).toLocaleDateString()}
+                </span>
+              )}
+            </div>
+
+            {job.description && (
+              <p className="mt-3 line-clamp-2 text-sm text-muted-foreground">{job.description}</p>
+            )}
+
+            <div className="mt-4 flex items-center gap-2">
+              <Button size="sm" onClick={onApply} disabled={busy}>
+                <Send className="h-3.5 w-3.5" /> Apply
+              </Button>
+              <Button size="sm" variant="outline" onClick={onSave} disabled={busy}>
+                <Bookmark className="h-3.5 w-3.5" /> Save
+              </Button>
+            </div>
+          </div>
+        </div>
+      </Card>
+    </motion.div>
   );
 }

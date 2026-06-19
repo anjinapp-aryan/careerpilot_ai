@@ -2,11 +2,16 @@ spring:
   application:
     name: careerpilot-backend
   datasource:
-    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/careerpilot}
-    username: ${SPRING_DATASOURCE_USERNAME:careerpilot}
-    password: ${SPRING_DATASOURCE_PASSWORD:careerpilot}
+    # DATABASE_URL is a JDBC URL. Neon credentials can be embedded as query
+    # params (?user=...&password=...) so one var covers auth too; the
+    # SPRING_DATASOURCE_USERNAME/PASSWORD vars below remain as an optional
+    # override if you'd rather keep credentials out of the URL string.
+    url: ${DATABASE_URL:jdbc:postgresql://localhost:5432/careerpilot}
+    username: ${SPRING_DATASOURCE_USERNAME:}
+    password: ${SPRING_DATASOURCE_PASSWORD:}
     hikari:
-      maximum-pool-size: 20
+      maximum-pool-size: 10
+      minimum-idle: 2
   jpa:
     hibernate:
       ddl-auto: validate
@@ -20,10 +25,11 @@ spring:
     baseline-on-migrate: true
   data:
     redis:
-      host: ${SPRING_DATA_REDIS_HOST:localhost}
-      port: ${SPRING_DATA_REDIS_PORT:6379}
+      # Single connection-string form: redis://[:password@]host:port, or
+      # rediss://... for TLS (Upstash and most managed Redis require TLS).
+      url: ${REDIS_URL:redis://localhost:6379}
   kafka:
-    bootstrap-servers: ${SPRING_KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
@@ -55,9 +61,59 @@ management:
 
 ai:
   provider: ${AI_PROVIDER:gemini}
-  model: ${AI_MODEL:gemini-2.5-pro}
+  model: ${AI_MODEL:gemini-2.5-flash}   # flash is free-tier eligible; pro returns 429 limit:0 on free keys
   gemini:
     api-key: ${GEMINI_API_KEY:}
+  # ---- AI Gateway: single entry point for all LLM calls, with failover ----
+  gateway:
+    primary: ${PRIMARY_PROVIDER:gemini}
+    order: ${AI_PROVIDER_ORDER:gemini,deepseek,qwen}   # failover priority
+    default-temperature: 0.4
+    providers:
+      gemini:
+        display-name: Gemini
+        api-key: ${GEMINI_API_KEY:}
+        model: ${GEMINI_MODEL:gemini-2.5-flash}
+        base-url: ${GEMINI_BASE_URL:https://generativelanguage.googleapis.com/v1beta}
+        timeout-ms: 15000
+      deepseek:
+        display-name: DeepSeek
+        api-key: ${NVIDIA_API_KEY:}
+        model: ${NVIDIA_DEEPSEEK_MODEL:deepseek-v4-flash}
+        base-url: ${NVIDIA_BASE_URL:https://integrate.api.nvidia.com/v1}
+        timeout-ms: 20000
+      qwen:
+        display-name: Qwen
+        api-key: ${NVIDIA_API_KEY:}
+        model: ${NVIDIA_QWEN_MODEL:qwen/qwen3-next-80b-a3b-instruct}
+        base-url: ${NVIDIA_BASE_URL:https://integrate.api.nvidia.com/v1}
+        timeout-ms: 25000
+
+# ---- Resilience4j: retry + circuit breaker per provider ----
+resilience4j:
+  retry:
+    instances:
+      gemini: &retryDefaults
+        max-attempts: 2
+        wait-duration: 400ms
+        retry-exceptions:
+          - java.lang.Exception
+        ignore-exceptions:
+          - io.github.resilience4j.circuitbreaker.CallNotPermittedException
+      deepseek: *retryDefaults
+      qwen: *retryDefaults
+  circuitbreaker:
+    instances:
+      gemini: &cbDefaults
+        sliding-window-type: COUNT_BASED
+        sliding-window-size: 20
+        minimum-number-of-calls: 8
+        failure-rate-threshold: 60
+        wait-duration-in-open-state: 30s
+        permitted-number-of-calls-in-half-open-state: 3
+        automatic-transition-from-open-to-half-open-enabled: true
+      deepseek: *cbDefaults
+      qwen: *cbDefaults
 
 agent-service:
   base-url: ${AGENT_SERVICE_URL:http://localhost:8088}
@@ -72,14 +128,18 @@ security:
   rate-limit:
     auth-per-minute: 10
     api-per-minute: 120
+  # Comma-separated exact origins — no wildcards. Set to your Vercel URL(s),
+  # e.g. https://careerpilot-ai.vercel.app,https://careerpilot-ai-git-main.vercel.app
+  cors:
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:5173}
 
 storage:
   s3:
-    endpoint: ${S3_ENDPOINT:}
+    endpoint: ${MINIO_ENDPOINT:}
     region: ${S3_REGION:us-east-1}
-    bucket: ${S3_BUCKET:careerpilot}
-    access-key: ${S3_ACCESS_KEY:}
-    secret-key: ${S3_SECRET_KEY:}
+    bucket: ${MINIO_BUCKET:careerpilot}
+    access-key: ${MINIO_ACCESS_KEY:}
+    secret-key: ${MINIO_SECRET_KEY:}
     path-style: true
 
 kafka:

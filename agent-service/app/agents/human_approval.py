@@ -15,6 +15,6 @@ def human_approval_node(state: CareerState) -> dict:
     # caller resumes the thread with an updated state containing human_decision.
     raise NodeInterrupt(
         "Awaiting human approval. Review resume_score, ats_score, ranked_jobs, "
-        "interview_plan, career_roadmap, salary_intelligence — then resume with "
+        "interview_plan, career_roadmap, salary_insights — then resume with "
         "human_decision='approved' or 'rejected'."
     )

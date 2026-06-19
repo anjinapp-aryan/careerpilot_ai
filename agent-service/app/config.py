@@ -1,14 +1,40 @@
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    database_url: str = "postgresql://careerpilot:careerpilot@localhost:5432/careerpilot"
+    database_url: str = Field(
+        default="postgresql://careerpilot:careerpilot@localhost:5432/careerpilot",
+        validation_alias="DATABASE_URL_PY",
+    )
     gemini_api_key: str = ""
     ai_provider: str = "gemini"
-    ai_model: str = "gemini-2.5-pro"
+    ai_model: str = "gemini-2.5-flash"  # free-tier eligible; pro = 429 limit:0 on free keys
     log_level: str = "INFO"
+
+    # Comma-separated exact origins — no wildcards. Set to your Vercel URL(s).
+    cors_allowed_origins: str = "http://localhost:5173"
+
+    # ---------------------------------------------------------------------------
+    # Rate limiter — maps to GEMINI_* environment variables
+    # ---------------------------------------------------------------------------
+
+    # Free-tier Google AI Studio defaults:
+    #   RPM: 10 requests/minute for gemini-2.5-pro
+    #   TPM: 250,000 tokens/minute
+    gemini_max_rpm: int = 10
+    gemini_max_tpm: int = 250_000
+
+    # Minimum wall-clock gap between any two Gemini calls (seconds).
+    # Prevents burst spikes even when the token buckets have capacity.
+    gemini_min_request_interval: float = 2.0
+
+    # Retry strategy for 429 / 503 responses.
+    gemini_max_retries: int = 5
+    gemini_base_retry_delay: float = 2.0   # ceiling for first retry (seconds)
+    gemini_max_retry_delay: float = 60.0   # hard cap on any single backoff
 
 
 settings = Settings()

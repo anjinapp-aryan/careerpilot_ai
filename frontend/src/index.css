@@ -2,4 +2,159 @@
 @tailwind components;
 @tailwind utilities;
 
-html, body, #root { height: 100%; }
+/* ===========================================================================
+   Design tokens — HSL channels so Tailwind can apply opacity modifiers via
+   hsl(var(--token) / <alpha>). Light is the default; `.dark` flips the theme.
+   The sidebar palette is intentionally dark in BOTH themes (Linear/Stripe
+   style: dark rail + light content).
+   ========================================================================= */
+
+@layer base {
+  :root {
+    --background: 210 40% 98%;        /* #F8FAFC */
+    --foreground: 222 47% 11%;        /* #0F172A */
+
+    --card: 0 0% 100%;                /* #FFFFFF */
+    --card-foreground: 222 47% 11%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 222 47% 11%;
+
+    --primary: 243 75% 59%;           /* #4F46E5 */
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 239 84% 67%;         /* #6366F1 */
+    --secondary-foreground: 0 0% 100%;
+
+    --success: 142 71% 45%;           /* #22C55E */
+    --success-foreground: 0 0% 100%;
+
+    --warning: 38 92% 50%;            /* #F59E0B */
+    --warning-foreground: 222 47% 11%;
+
+    --danger: 0 84% 60%;              /* #EF4444 */
+    --danger-foreground: 0 0% 100%;
+
+    --muted: 210 40% 96%;             /* subtle surface */
+    --muted-foreground: 215 16% 47%;  /* #64748B */
+
+    --accent: 226 100% 97%;           /* indigo-tinted hover surface */
+    --accent-foreground: 243 75% 45%;
+
+    --border: 214 32% 91%;            /* #E2E8F0 */
+    --input: 214 32% 91%;
+    --ring: 243 75% 59%;
+
+    /* Sidebar (dark rail) */
+    --sidebar: 222 47% 11%;           /* #0F172A */
+    --sidebar-foreground: 210 40% 96%;
+    --sidebar-muted: 215 20% 65%;
+    --sidebar-border: 217 33% 20%;
+    --sidebar-accent: 217 33% 17%;
+
+    --radius: 0.75rem;                /* 12px */
+  }
+
+  .dark {
+    --background: 222 47% 7%;          /* #0B1120 */
+    --foreground: 210 40% 98%;
+
+    --card: 222 41% 11%;
+    --card-foreground: 210 40% 98%;
+
+    --popover: 222 41% 11%;
+    --popover-foreground: 210 40% 98%;
+
+    --primary: 243 80% 67%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 239 84% 70%;
+    --secondary-foreground: 0 0% 100%;
+
+    --success: 142 64% 48%;
+    --success-foreground: 0 0% 100%;
+
+    --warning: 38 92% 55%;
+    --warning-foreground: 222 47% 11%;
+
+    --danger: 0 84% 63%;
+    --danger-foreground: 0 0% 100%;
+
+    --muted: 217 33% 17%;
+    --muted-foreground: 215 20% 65%;
+
+    --accent: 217 33% 18%;
+    --accent-foreground: 210 40% 98%;
+
+    --border: 217 33% 20%;
+    --input: 217 33% 22%;
+    --ring: 243 80% 67%;
+
+    /* Sidebar stays dark; nudge surfaces to read on the darker app bg */
+    --sidebar: 222 47% 9%;
+    --sidebar-foreground: 210 40% 96%;
+    --sidebar-muted: 215 20% 60%;
+    --sidebar-border: 217 33% 18%;
+    --sidebar-accent: 217 33% 15%;
+  }
+
+  * {
+    border-color: hsl(var(--border));
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    background-color: hsl(var(--background));
+    color: hsl(var(--foreground));
+    font-feature-settings: 'cv11', 'ss01';
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* Accessible focus ring for keyboard users across the app */
+  :focus-visible {
+    outline: 2px solid hsl(var(--ring));
+    outline-offset: 2px;
+  }
+
+  /* Refined scrollbars */
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-thumb {
+    background-color: hsl(var(--muted-foreground) / 0.3);
+    border-radius: 9999px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: hsl(var(--muted-foreground) / 0.5);
+  }
+}
+
+@layer utilities {
+  /* Shimmer sweep used by skeleton loaders */
+  .shimmer {
+    background: linear-gradient(
+      90deg,
+      hsl(var(--muted)) 0%,
+      hsl(var(--muted-foreground) / 0.12) 50%,
+      hsl(var(--muted)) 100%
+    );
+    background-size: 200% 100%;
+    animation: shimmer 1.6s ease-in-out infinite;
+  }
+
+  .scrollbar-none {
+    scrollbar-width: none;
+  }
+  .scrollbar-none::-webkit-scrollbar {
+    display: none;
+  }
+}

@@ -14,7 +14,7 @@ SYSTEM = "You are a compensation analyst for the global tech market. Output stri
 SCHEMA = {
     "type": "object",
     "properties": {
-        "salary_intelligence": {
+        "salary_insights": {
             "type": "object",
             "properties": {
                 "currency": {"type": "string"},
@@ -28,7 +28,7 @@ SCHEMA = {
             "required": ["currency", "p25", "p50", "p75", "p90", "negotiation_strategy"],
         }
     },
-    "required": ["salary_intelligence"],
+    "required": ["salary_insights"],
 }
 
 
@@ -48,4 +48,4 @@ def salary_intelligence_node(state: CareerState) -> dict:
         log.exception("salary_intelligence failed")
         return {"errors": [f"salary_intelligence: {e}"]}
 
-    return {"salary_intelligence": result.get("salary_intelligence", {})}
+    return {"salary_insights": result.get("salary_insights", {})}

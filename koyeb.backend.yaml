@@ -1,0 +1,88 @@
+# Koyeb service definition for the Spring Boot backend.
+# Deploy with:
+#   koyeb service create backend --app careerpilot --git github.com/<you>/careerpilot_ai \
+#     --git-branch main --git-builder docker --git-docker-dockerfile backend/Dockerfile \
+#     --git-docker-context backend --ports 8080:http --routes /:8080 --instance-type free \
+#     --env-file koyeb.backend.env
+# Or import this file with: koyeb deploy --file koyeb.backend.yaml
+#
+# AGENT_SERVICE_URL must be the agent service's PUBLIC Koyeb URL
+# (e.g. https://agent-<your-org>.koyeb.app) — Koyeb free-tier services on
+# different apps/services don't share a private network, so this is a public
+# HTTPS call, not an internal DNS name like Render's `fromService`.
+name: backend
+type: WEB
+instance_type: free
+regions:
+  - was
+scaling:
+  min: 1
+  max: 1
+ports:
+  - port: 8080
+    protocol: http
+routes:
+  - path: /
+    port: 8080
+health_checks:
+  - http:
+      path: /actuator/health
+      port: 8080
+    grace_period: 45     # JVM cold start is slower than the Python service
+    interval: 30
+    restart_limit: 3
+    timeout: 5
+git:
+  build:
+    docker:
+      dockerfile: backend/Dockerfile
+      context: backend
+env:
+  - key: PORT
+    value: "8080"
+  - key: JWT_SECRET
+    type: SECRET           # generate with: openssl rand -hex 48
+  - key: GEMINI_API_KEY
+    type: SECRET
+  - key: DATABASE_URL
+    type: SECRET            # Neon DIRECT (no -pooler) JDBC URL
+  - key: SPRING_DATASOURCE_USERNAME
+    type: SECRET
+  - key: SPRING_DATASOURCE_PASSWORD
+    type: SECRET
+  - key: AGENT_SERVICE_URL
+    value: https://agent-<your-org>.koyeb.app   # replace after the agent service is deployed
+  - key: AI_PROVIDER
+    value: gemini
+  - key: AI_MODEL
+    value: gemini-2.5-flash
+  # ---- AI Gateway (Gemini → DeepSeek → Qwen failover) ----
+  - key: PRIMARY_PROVIDER
+    value: gemini
+  - key: GEMINI_MODEL
+    value: gemini-2.5-flash
+  - key: NVIDIA_API_KEY
+    type: SECRET            # from https://build.nvidia.com — blank = Gemini-only
+  - key: NVIDIA_DEEPSEEK_MODEL
+    value: deepseek-v4-flash
+  - key: NVIDIA_QWEN_MODEL
+    value: qwen/qwen3-next-80b-a3b-instruct
+  - key: CORS_ALLOWED_ORIGINS
+    value: https://your-app.vercel.app
+  # Redis — any managed provider that exposes a redis:// or rediss:// URL
+  # (Upstash recommended free tier).
+  - key: REDIS_URL
+    type: SECRET
+  # Kafka — not deployed for the free demo; producer logs warnings but the
+  # app keeps working. Point this at a real cluster once you have one.
+  - key: KAFKA_BOOTSTRAP_SERVERS
+    value: "localhost:9092"
+  # MinIO / S3-compatible storage — Cloudflare R2 free tier recommended.
+  - key: MINIO_ENDPOINT
+    type: SECRET
+  - key: MINIO_ACCESS_KEY
+    type: SECRET
+  - key: MINIO_SECRET_KEY
+    type: SECRET
+  - key: S3_REGION
+    value: auto

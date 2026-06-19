@@ -12,6 +12,8 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.web.authentication.WebAuthenticationDetailsSource;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.util.List;
@@ -19,6 +21,8 @@ import java.util.UUID;
 
 @Component
 public class JwtAuthFilter extends OncePerRequestFilter {
+
+    private static final Logger log = LoggerFactory.getLogger(JwtAuthFilter.class);
 
     private final JwtService jwtService;
 
@@ -47,7 +51,10 @@ public class JwtAuthFilter extends OncePerRequestFilter {
             auth.setDetails(new WebAuthenticationDetailsSource().buildDetails(req));
             SecurityContextHolder.getContext().setAuthentication(auth);
         } catch (JwtException | IllegalArgumentException ex) {
+            // Invalid/expired/malformed token: drop the auth context so the request is
+            // treated as unauthenticated → RestAuthenticationEntryPoint returns 401.
             SecurityContextHolder.clearContext();
+            log.debug("Rejected bearer token: {}", ex.getClass().getSimpleName());
         }
         chain.doFilter(req, res);
     }

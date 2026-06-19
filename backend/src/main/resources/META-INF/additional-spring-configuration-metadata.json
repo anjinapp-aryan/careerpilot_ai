@@ -1,0 +1,28 @@
+{
+  "properties": [
+    { "name": "ai.provider", "type": "java.lang.String", "description": "Selects which AIProvider implementation Spring instantiates (e.g. 'gemini')." },
+    { "name": "ai.model", "type": "java.lang.String", "description": "Model id used by the AIProvider (e.g. gemini-2.5-pro / gemini-2.5-flash)." },
+    { "name": "ai.gemini.api-key", "type": "java.lang.String", "description": "Google Gemini API key; required when ai.provider=gemini." },
+
+    { "name": "agent-service.base-url", "type": "java.lang.String", "description": "Base URL the backend uses to reach the Python agent service." },
+    { "name": "agent-service.connect-timeout-ms", "type": "java.lang.Integer", "description": "Connect timeout (ms) for the agent-service WebClient." },
+    { "name": "agent-service.read-timeout-ms", "type": "java.lang.Integer", "description": "Read/response timeout (ms) for the agent-service WebClient." },
+
+    { "name": "security.jwt.secret", "type": "java.lang.String", "description": "HMAC signing secret for JWT access tokens; must be >= 32 chars." },
+    { "name": "security.jwt.access-token-ttl-minutes", "type": "java.lang.Long", "description": "Access token time-to-live in minutes." },
+    { "name": "security.jwt.refresh-token-ttl-days", "type": "java.lang.Long", "description": "Refresh token time-to-live in days." },
+    { "name": "security.rate-limit.auth-per-minute", "type": "java.lang.Integer", "description": "Configured auth-endpoint rate limit per minute (not yet enforced)." },
+    { "name": "security.rate-limit.api-per-minute", "type": "java.lang.Integer", "description": "Configured API rate limit per minute (not yet enforced)." },
+    { "name": "security.cors.allowed-origins", "type": "java.lang.String", "description": "Comma-separated list of exact allowed CORS origins (no wildcards)." },
+
+    { "name": "storage.s3.endpoint", "type": "java.lang.String", "description": "S3/MinIO endpoint URL." },
+    { "name": "storage.s3.region", "type": "java.lang.String", "description": "S3 region." },
+    { "name": "storage.s3.bucket", "type": "java.lang.String", "description": "S3 bucket name for object storage." },
+    { "name": "storage.s3.access-key", "type": "java.lang.String", "description": "S3/MinIO access key." },
+    { "name": "storage.s3.secret-key", "type": "java.lang.String", "description": "S3/MinIO secret key." },
+    { "name": "storage.s3.path-style", "type": "java.lang.Boolean", "description": "Use path-style access (required by MinIO)." },
+
+    { "name": "kafka.topics.workflow-events", "type": "java.lang.String", "description": "Topic name for workflow state-change events." },
+    { "name": "kafka.topics.audit-events", "type": "java.lang.String", "description": "Topic name for audit events (declared but not yet produced/consumed)." }
+  ]
+}

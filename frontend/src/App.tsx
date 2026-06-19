@@ -7,7 +7,7 @@ import Resumes from '@/pages/Resumes';
 import Jobs from '@/pages/Jobs';
 import Applications from '@/pages/Applications';
 import Workflow from '@/pages/Workflow';
-import Layout from '@/components/Layout';
+import AppShell from '@/components/app-shell/AppShell';
 
 function Private({ children }: { children: JSX.Element }) {
   const token = useAuthStore((s) => s.token);
@@ -23,7 +23,7 @@ export default function App() {
         path="/"
         element={
           <Private>
-            <Layout />
+            <AppShell />
           </Private>
         }
       >

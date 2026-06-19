@@ -57,6 +57,9 @@ public class SecurityConfig {
                 .dispatcherTypeMatchers(DispatcherType.ASYNC, DispatcherType.ERROR, DispatcherType.FORWARD).permitAll()
                 .requestMatchers(
                     "/api/auth/**",
+                    "/api/ai/health",
+                    "/api/ai/stats",
+                    "/api/diagnostics/**",
                     "/actuator/health",
                     "/actuator/info",
                     "/v3/api-docs/**",

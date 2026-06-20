@@ -1,6 +1,7 @@
 package ai.careerpilot.api.dto;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -8,6 +9,11 @@ import java.util.UUID;
 public final class WorkflowDtos {
 
     private WorkflowDtos() {}
+
+    public record WorkflowAgent(
+            String name,
+            String status,
+            String completedAt) {}
 
     /** Response for workflow run operations (start, resume, get). */
     public record WorkflowRunResponse(
@@ -21,6 +27,7 @@ public final class WorkflowDtos {
             Integer atsScore,
             Integer interviewReadinessScore,
             Map<String, Object> state,
+            List<WorkflowAgent> agents,
             String errorMessage,
             Instant createdAt,
             Instant updatedAt) {}

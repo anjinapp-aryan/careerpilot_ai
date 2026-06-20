@@ -2,6 +2,7 @@ package ai.careerpilot.service;
 
 import ai.careerpilot.agent.AgentServiceClient;
 import ai.careerpilot.api.dto.AgentServiceDtos.AgentRunResponse;
+import ai.careerpilot.api.dto.WorkflowDtos;
 import ai.careerpilot.api.dto.WorkflowDtos.WorkflowRunResponse;
 import ai.careerpilot.domain.Job;
 import ai.careerpilot.domain.Resume;
@@ -161,6 +162,49 @@ public class WorkflowService {
 
     // ---- Response mapping ----
 
+    private List<WorkflowDtos.WorkflowAgent> extractAgentTimeline(Map<String, Object> state) {
+        List<WorkflowDtos.WorkflowAgent> agents = new ArrayList<>();
+
+        String[] agentNames = {
+            "Resume Intelligence",
+            "Job Discovery",
+            "ATS Optimization",
+            "Interview Preparation",
+            "Career Strategy",
+            "Salary Intelligence",
+            "Human Approval",
+            "Application Tracking"
+        };
+
+        String[] stateKeys = {
+            "resume_score",
+            "job_match_score",
+            "ats_score",
+            "interview_readiness_score",
+            "career_roadmap",
+            "salary_insights",
+            "awaiting_human_approval",
+            "tracked_application"
+        };
+
+        for (int i = 0; i < agentNames.length; i++) {
+            String agentName = agentNames[i];
+            String stateKey = stateKeys[i];
+            String status = "PENDING";
+
+            if ("awaiting_human_approval".equals(stateKey)) {
+                boolean awaiting = (Boolean) state.getOrDefault("awaiting_human_approval", false);
+                status = awaiting ? "WAITING_FOR_APPROVAL" : "COMPLETED";
+            } else if (state.containsKey(stateKey) && state.get(stateKey) != null) {
+                status = "COMPLETED";
+            }
+
+            agents.add(new WorkflowDtos.WorkflowAgent(agentName, status, null));
+        }
+
+        return agents;
+    }
+
     public WorkflowRunResponse toResponse(WorkflowRun run) {
         log.info("toResponse_enter: thread={}", run.getThreadId());
         Map<String, Object> stateMap = new HashMap<>();
@@ -177,6 +221,7 @@ public class WorkflowService {
                     run.getThreadId(), e.getClass().getSimpleName(), e.getMessage(), e);
         }
         try {
+            List<WorkflowDtos.WorkflowAgent> agents = extractAgentTimeline(stateMap);
             WorkflowRunResponse response = new WorkflowRunResponse(
                     run.getId(),
                     run.getThreadId(),
@@ -188,10 +233,11 @@ public class WorkflowService {
                     run.getAtsScore(),
                     run.getInterviewReadinessScore(),
                     stateMap,
+                    agents,
                     run.getErrorMessage(),
                     run.getCreatedAt(),
                     run.getUpdatedAt());
-            log.info("response_created: thread={}, response_state_keys={}", run.getThreadId(), stateMap.keySet());
+            log.info("response_created: thread={}, response_state_keys={}, agents_count={}", run.getThreadId(), stateMap.keySet(), agents.size());
             return response;
         } catch (Exception e) {
             log.error("Failed to create response for {}: error_type={}, error={}",

@@ -175,14 +175,69 @@ def start_run(req: StartRunRequest) -> RunResponse:
         },
     )
     try:
+        log.info(
+            "workflow_invoke_begin",
+            extra={
+                "event": "workflow_invoke_begin",
+                "thread_id": thread_id,
+            },
+        )
         final_state = graph.invoke(initial, config=_config(thread_id))
+        log.info(
+            "workflow_invoke_complete",
+            extra={
+                "event": "workflow_invoke_complete",
+                "thread_id": thread_id,
+                "state_keys": list(final_state.keys()),
+                "has_errors": "errors" in final_state and bool(final_state.get("errors")),
+            },
+        )
     except Exception as e:  # noqa: BLE001
+        log.error(
+            "workflow_invoke_exception",
+            extra={
+                "event": "workflow_invoke_exception",
+                "thread_id": thread_id,
+                "exception_type": type(e).__name__,
+                "exception_msg": str(e),
+            },
+            exc_info=True,
+        )
         snapshot = graph.get_state(_config(thread_id))
         if snapshot and snapshot.next:
+            log.info(
+                "workflow_interrupted_return",
+                extra={
+                    "event": "workflow_interrupted_return",
+                    "thread_id": thread_id,
+                    "state_keys": list(snapshot.values.keys()),
+                },
+            )
             return RunResponse(thread_id=thread_id, status="interrupted", state=snapshot.values)
         log.exception("workflow_run_failed", extra={"event": "workflow_run_failed", "thread_id": thread_id})
         raise HTTPException(status_code=500, detail=str(e))
-    return RunResponse(thread_id=thread_id, status=_classify(final_state), state=final_state)
+
+    status = _classify(final_state)
+    log.info(
+        "workflow_status_classified",
+        extra={
+            "event": "workflow_status_classified",
+            "thread_id": thread_id,
+            "status": status,
+        },
+    )
+
+    response = RunResponse(thread_id=thread_id, status=status, state=final_state)
+    log.info(
+        "response_created",
+        extra={
+            "event": "response_created",
+            "thread_id": thread_id,
+            "response_status": response.status,
+            "response_state_keys": list(response.state.keys()),
+        },
+    )
+    return response
 
 
 @app.post("/runs/resume", response_model=RunResponse)

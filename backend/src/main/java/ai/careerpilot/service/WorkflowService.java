@@ -120,16 +120,20 @@ public class WorkflowService {
     }
 
     private WorkflowRun mergeState(WorkflowRun run, String status, Map<String, Object> state) {
+        log.info("mergeState_enter: thread={}, state_keys={}", run.getThreadId(), state.keySet());
         run.setStatus(status);
         run.setResumeScore(intOrNull(state, "resume_score"));
         run.setJobMatchScore(intOrNull(state, "job_match_score"));
         run.setAtsScore(intOrNull(state, "ats_score"));
         run.setInterviewReadinessScore(intOrNull(state, "interview_readiness_score"));
         try {
-            run.setState(mapper.writeValueAsString(state));
+            String stateJson = mapper.writeValueAsString(state);
+            log.info("state_serialized: thread={}, json_length={}", run.getThreadId(), stateJson.length());
+            run.setState(stateJson);
             log.debug("Workflow State Persisted: thread={}, status={}", run.getThreadId(), status);
         } catch (Exception e) {
-            log.error("Failed to serialize workflow state: {}", e.getMessage());
+            log.error("Failed to serialize workflow state: thread={}, error_type={}, error={}",
+                    run.getThreadId(), e.getClass().getSimpleName(), e.getMessage(), e);
             run.setState("{}");
         }
         WorkflowRun saved = runs.save(run);
@@ -158,30 +162,42 @@ public class WorkflowService {
     // ---- Response mapping ----
 
     public WorkflowRunResponse toResponse(WorkflowRun run) {
+        log.info("toResponse_enter: thread={}", run.getThreadId());
         Map<String, Object> stateMap = new HashMap<>();
         try {
             if (run.getState() != null && !run.getState().isEmpty()) {
+                log.debug("state_json_length: thread={}, length={}", run.getThreadId(), run.getState().length());
                 @SuppressWarnings("unchecked")
                 Map<String, Object> parsed = mapper.readValue(run.getState(), Map.class);
+                log.info("state_deserialized: thread={}, state_keys={}", run.getThreadId(), parsed.keySet());
                 stateMap = parsed;
             }
         } catch (Exception e) {
-            log.warn("Failed to parse workflow state for {}: {}", run.getThreadId(), e.getMessage());
+            log.error("Failed to parse workflow state for {}: error_type={}, error={}",
+                    run.getThreadId(), e.getClass().getSimpleName(), e.getMessage(), e);
         }
-        return new WorkflowRunResponse(
-                run.getId(),
-                run.getThreadId(),
-                run.getStatus(),
-                run.getTargetRole(),
-                run.getTargetSeniority(),
-                run.getResumeScore(),
-                run.getJobMatchScore(),
-                run.getAtsScore(),
-                run.getInterviewReadinessScore(),
-                stateMap,
-                run.getErrorMessage(),
-                run.getCreatedAt(),
-                run.getUpdatedAt());
+        try {
+            WorkflowRunResponse response = new WorkflowRunResponse(
+                    run.getId(),
+                    run.getThreadId(),
+                    run.getStatus(),
+                    run.getTargetRole(),
+                    run.getTargetSeniority(),
+                    run.getResumeScore(),
+                    run.getJobMatchScore(),
+                    run.getAtsScore(),
+                    run.getInterviewReadinessScore(),
+                    stateMap,
+                    run.getErrorMessage(),
+                    run.getCreatedAt(),
+                    run.getUpdatedAt());
+            log.info("response_created: thread={}, response_state_keys={}", run.getThreadId(), stateMap.keySet());
+            return response;
+        } catch (Exception e) {
+            log.error("Failed to create response for {}: error_type={}, error={}",
+                    run.getThreadId(), e.getClass().getSimpleName(), e.getMessage(), e);
+            throw e;
+        }
     }
 
     public List<WorkflowRunResponse> toResponseList(List<WorkflowRun> runs) {

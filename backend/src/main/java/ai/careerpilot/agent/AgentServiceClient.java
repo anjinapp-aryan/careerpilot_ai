@@ -34,18 +34,29 @@ public class AgentServiceClient {
     public AgentRunResponse startRun(Map<String, Object> payload) {
         try {
             log.debug("Agent startRun request: user_id={}", payload.get("user_id"));
+            log.info("agent_request_begin: endpoint=/runs");
             AgentRunResponse resp = client.post().uri("/runs").bodyValue(payload)
                     .retrieve().bodyToMono(AgentRunResponse.class).timeout(readTimeout).block();
-            log.info("Agent startRun success: thread_id={}, status={}",
+            log.info("agent_response_deserialized: thread_id={}, status={}, state_keys={}",
                     resp != null ? resp.thread_id() : "null",
-                    resp != null ? resp.status() : "null");
+                    resp != null ? resp.status() : "null",
+                    resp != null ? resp.state().keySet() : "null");
+            if (resp != null) {
+                Map<String, Object> state = resp.state();
+                for (String key : state.keySet()) {
+                    Object value = state.get(key);
+                    log.debug("state_field: key={}, value_type={}", key,
+                        value != null ? value.getClass().getSimpleName() : "null");
+                }
+            }
             return resp;
         } catch (WebClientResponseException e) {
             log.error("Agent startRun HTTP error: status={}, body={}",
                     e.getStatusCode(), e.getResponseBodyAsString(), e);
             throw new AgentServiceException("Agent service HTTP error: " + e.getStatusCode(), e);
         } catch (Exception e) {
-            log.error("Agent startRun failed", e);
+            log.error("Agent startRun failed: error_type={}, error_msg={}",
+                    e.getClass().getSimpleName(), e.getMessage(), e);
             throw new AgentServiceException("Agent service unavailable", e);
         }
     }

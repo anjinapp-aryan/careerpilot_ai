@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import logging
 
-from ..ai_provider import get_ai_provider
+from ..workflow_ai_gateway import get_workflow_ai_gateway
 from ..state import CareerState
 
 log = logging.getLogger(__name__)
@@ -43,9 +43,72 @@ def salary_intelligence_node(state: CareerState) -> dict:
         f"LOCATIONS: {json.dumps(state.get('target_locations', []))}"
     )
     try:
-        result = get_ai_provider().generate_structured_response(prompt, SCHEMA, system=SYSTEM)
+        log.info(
+            "agent_stage_entry",
+            extra={
+                "event": "agent_stage_entry",
+                "agent": "salary_intelligence",
+                "profile_keys": list(profile.keys()),
+            },
+        )
+        gateway = get_workflow_ai_gateway()
+        log.info(
+            "agent_gateway_obtained",
+            extra={
+                "event": "agent_gateway_obtained",
+                "agent": "salary_intelligence",
+            },
+        )
+        result = gateway.generate_structured_response(
+            prompt, SCHEMA, system=SYSTEM, stage="salary_intelligence"
+        )
+        log.info(
+            "agent_provider_response_received",
+            extra={
+                "event": "agent_provider_response_received",
+                "agent": "salary_intelligence",
+                "result_type": type(result).__name__,
+                "result_keys": list(result.keys()) if isinstance(result, dict) else "not_dict",
+            },
+        )
+        salary_insights = result.get("salary_insights", {})
+        log.info(
+            "agent_dto_created",
+            extra={
+                "event": "agent_dto_created",
+                "agent": "salary_intelligence",
+                "insights_type": type(salary_insights).__name__,
+                "insights_keys": list(salary_insights.keys()) if isinstance(salary_insights, dict) else "not_dict",
+            },
+        )
+        response = {"salary_insights": salary_insights}
+        log.info(
+            "agent_response_serialized",
+            extra={
+                "event": "agent_response_serialized",
+                "agent": "salary_intelligence",
+                "response_keys": list(response.keys()),
+            },
+        )
+        return response
     except Exception as e:  # noqa: BLE001
-        log.exception("salary_intelligence failed")
-        return {"errors": [f"salary_intelligence: {e}"]}
-
-    return {"salary_insights": result.get("salary_insights", {})}
+        log.error(
+            "agent_stage_failed",
+            extra={
+                "event": "agent_stage_failed",
+                "agent": "salary_intelligence",
+                "exception_type": type(e).__name__,
+                "exception_msg": str(e),
+            },
+            exc_info=True,
+        )
+        error_response = {"errors": [f"salary_intelligence: {e}"], "salary_insights": {}}
+        log.info(
+            "agent_error_response_created",
+            extra={
+                "event": "agent_error_response_created",
+                "agent": "salary_intelligence",
+                "error_count": len(error_response.get("errors", [])),
+            },
+        )
+        return error_response

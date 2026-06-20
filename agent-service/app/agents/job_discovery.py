@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import logging
 
-from ..ai_provider import get_ai_provider
+from ..workflow_ai_gateway import get_workflow_ai_gateway
 from ..state import CareerState
 
 log = logging.getLogger(__name__)
@@ -41,6 +41,7 @@ def job_discovery_node(state: CareerState) -> dict:
     skills = state.get("extracted_skills") or []
     jobs = state.get("job_descriptions") or []
     if not jobs:
+        log.warning("job_discovery: no jobs provided")
         return {"ranked_jobs": [], "job_match_score": 0}
 
     prompt = (
@@ -55,12 +56,14 @@ def job_discovery_node(state: CareerState) -> dict:
         f"JOBS:\n{json.dumps(jobs)}"
     )
     try:
-        result = get_ai_provider().generate_structured_response(prompt, SCHEMA, system=SYSTEM)
+        log.info("job_discovery: stage started")
+        gateway = get_workflow_ai_gateway()
+        result = gateway.generate_structured_response(prompt, SCHEMA, system=SYSTEM, stage="job_discovery")
+        log.info("job_discovery: stage completed successfully")
+        return {
+            "ranked_jobs": result.get("ranked_jobs", []),
+            "job_match_score": int(result.get("job_match_score", 0)),
+        }
     except Exception as e:  # noqa: BLE001
-        log.exception("job_discovery failed")
-        return {"errors": [f"job_discovery: {e}"]}
-
-    return {
-        "ranked_jobs": result.get("ranked_jobs", []),
-        "job_match_score": int(result.get("job_match_score", 0)),
-    }
+        log.error("job_discovery: stage failed", extra={"error": str(e)}, exc_info=True)
+        return {"errors": [f"job_discovery: {e}"], "ranked_jobs": [], "job_match_score": 0}

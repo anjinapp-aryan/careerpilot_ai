@@ -1,10 +1,13 @@
 package ai.careerpilot.agent;
 
-import com.fasterxml.jackson.databind.JsonNode;
+import ai.careerpilot.api.dto.AgentServiceDtos.AgentRunResponse;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
 
 import java.time.Duration;
 import java.util.Map;
@@ -12,6 +15,8 @@ import java.util.Map;
 /** Thin HTTP client to the Python LangGraph agent service. */
 @Component
 public class AgentServiceClient {
+
+    private static final Logger log = LoggerFactory.getLogger(AgentServiceClient.class);
 
     private final WebClient client;
     private final Duration readTimeout;
@@ -26,19 +31,68 @@ public class AgentServiceClient {
         this.readTimeout = Duration.ofMillis(readTimeoutMs);
     }
 
-    public JsonNode startRun(Map<String, Object> payload) {
-        return client.post().uri("/runs").bodyValue(payload)
-                .retrieve().bodyToMono(JsonNode.class).timeout(readTimeout).block();
+    public AgentRunResponse startRun(Map<String, Object> payload) {
+        try {
+            log.debug("Agent startRun request: user_id={}", payload.get("user_id"));
+            AgentRunResponse resp = client.post().uri("/runs").bodyValue(payload)
+                    .retrieve().bodyToMono(AgentRunResponse.class).timeout(readTimeout).block();
+            log.info("Agent startRun success: thread_id={}, status={}",
+                    resp != null ? resp.thread_id() : "null",
+                    resp != null ? resp.status() : "null");
+            return resp;
+        } catch (WebClientResponseException e) {
+            log.error("Agent startRun HTTP error: status={}, body={}",
+                    e.getStatusCode(), e.getResponseBodyAsString(), e);
+            throw new AgentServiceException("Agent service HTTP error: " + e.getStatusCode(), e);
+        } catch (Exception e) {
+            log.error("Agent startRun failed", e);
+            throw new AgentServiceException("Agent service unavailable", e);
+        }
     }
 
-    public JsonNode resumeRun(String threadId, String decision, String feedback) {
-        return client.post().uri("/runs/resume")
-                .bodyValue(Map.of("thread_id", threadId, "human_decision", decision, "human_feedback", feedback))
-                .retrieve().bodyToMono(JsonNode.class).timeout(readTimeout).block();
+    public AgentRunResponse resumeRun(String threadId, String decision, String feedback) {
+        try {
+            log.debug("Agent resumeRun: thread_id={}, decision={}", threadId, decision);
+            AgentRunResponse resp = client.post().uri("/runs/resume")
+                    .bodyValue(Map.of("thread_id", threadId, "human_decision", decision, "human_feedback", feedback))
+                    .retrieve().bodyToMono(AgentRunResponse.class).timeout(readTimeout).block();
+            log.info("Agent resumeRun success: thread_id={}, status={}",
+                    resp != null ? resp.thread_id() : "null",
+                    resp != null ? resp.status() : "null");
+            return resp;
+        } catch (WebClientResponseException e) {
+            log.error("Agent resumeRun HTTP error: status={}, body={}",
+                    e.getStatusCode(), e.getResponseBodyAsString(), e);
+            throw new AgentServiceException("Agent service HTTP error: " + e.getStatusCode(), e);
+        } catch (Exception e) {
+            log.error("Agent resumeRun failed", e);
+            throw new AgentServiceException("Agent service unavailable", e);
+        }
     }
 
-    public JsonNode getRun(String threadId) {
-        return client.get().uri("/runs/{id}", threadId)
-                .retrieve().bodyToMono(JsonNode.class).timeout(readTimeout).block();
+    public AgentRunResponse getRun(String threadId) {
+        try {
+            log.debug("Agent getRun: thread_id={}", threadId);
+            AgentRunResponse resp = client.get().uri("/runs/{id}", threadId)
+                    .retrieve().bodyToMono(AgentRunResponse.class).timeout(readTimeout).block();
+            log.debug("Agent getRun success: thread_id={}, status={}",
+                    resp != null ? resp.thread_id() : "null",
+                    resp != null ? resp.status() : "null");
+            return resp;
+        } catch (WebClientResponseException e) {
+            log.error("Agent getRun HTTP error: status={}, body={}",
+                    e.getStatusCode(), e.getResponseBodyAsString(), e);
+            throw new AgentServiceException("Agent service HTTP error: " + e.getStatusCode(), e);
+        } catch (Exception e) {
+            log.error("Agent getRun failed", e);
+            throw new AgentServiceException("Agent service unavailable", e);
+        }
+    }
+
+    /** Runtime exception for agent service failures. */
+    public static class AgentServiceException extends RuntimeException {
+        public AgentServiceException(String message, Throwable cause) {
+            super(message, cause);
+        }
     }
 }

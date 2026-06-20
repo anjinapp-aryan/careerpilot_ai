@@ -56,14 +56,25 @@ State survives restarts via `PostgresSaver` (langgraph-checkpoint-postgres). `sa
 ### Two AI seams, no longer symmetric — read both before touching either
 Each service has its own provider abstraction, and they have diverged. Do **not** assume they mirror each other.
 
-**Java side — a multi-provider AI Gateway.** [AiGatewayService.java](backend/src/main/java/ai/careerpilot/ai/AiGatewayService.java) is the single entry point for all AI in the backend; business services depend on it, never on a concrete provider. It routes each call through a configured provider order (`ai.gateway.order`, default `gemini,deepseek,qwen`) with **automatic failover**, plus per-provider Resilience4j **retry + circuit breaker** and usage metrics ([AiMetrics.java](backend/src/main/java/ai/careerpilot/ai/AiMetrics.java)). Every provider implements [LlmProvider.java](backend/src/main/java/ai/careerpilot/ai/LlmProvider.java) (shared logic in `AbstractLlmProvider`); the impls live under `ai/provider/` — `GeminiProvider`, `NvidiaDeepSeekProvider`, `NvidiaQwenProvider` (the two NVIDIA ones extend `AbstractOpenAiChatProvider` since NVIDIA's API is OpenAI-compatible). A provider only joins the chain when `isConfigured()` is true, so DeepSeek/Qwen are skipped unless `NVIDIA_API_KEY` is set. **Adding a provider = one new `LlmProvider` impl + listing its key in `ai.gateway.order`** — no business-logic changes. (This replaces the old single `AIProvider`/`GeminiProvider` bean that had no injection site — that description is obsolete.)
+**Java side — a multi-provider AI Gateway with health tracking and transparent failover.** [AiGatewayService.java](backend/src/main/java/ai/careerpilot/ai/AiGatewayService.java) is the single entry point for all AI in the backend; business services depend on it, never on a concrete provider. It routes each call through a configured provider order (default `deepseek,qwen,gemini`) with **automatic transparent failover**: 
+- **Blocking calls** (`chat()`, `generateFeedback()`, etc.) fail over before returning if the primary provider fails.
+- **Streaming calls** (`streamChat()`) fail over only *before the first token* — once tokens emit, failover is impossible (client already receiving from that provider).
+- **Quota detection**: HTTP 429 errors trigger immediate failover without exhausting retries ([QuotaExceededException.java](backend/src/main/java/ai/careerpilot/ai/QuotaExceededException.java)).
+- **Health tracking**: [ProviderHealthTracker.java](backend/src/main/java/ai/careerpilot/ai/ProviderHealthTracker.java) caches provider health (HEALTHY/DEGRADED/QUOTA_EXCEEDED/UNKNOWN) with 5-minute TTL to avoid repeated calls to failed providers.
+- **Per-provider resilience**: Resilience4j **retry + circuit breaker** + usage metrics ([AiMetrics.java](backend/src/main/java/ai/careerpilot/ai/AiMetrics.java)).
+
+Every provider implements [LlmProvider.java](backend/src/main/java/ai/careerpilot/ai/LlmProvider.java) (shared logic in `AbstractLlmProvider`); impls live under `ai/provider/` — `GeminiProvider`, `NvidiaDeepSeekProvider`, `NvidiaQwenProvider` (the two NVIDIA ones extend `AbstractOpenAiChatProvider` since NVIDIA's API is OpenAI-compatible). A provider only joins the chain when `isConfigured()` is true, so DeepSeek/Qwen are skipped unless `NVIDIA_API_KEY` is set. 
+
+**Streaming provider callback**: When calling `streamChat(messages, system, providerCallback)`, pass a `Consumer<String>` to learn which provider actually served the response (useful for frontend attribution). The callback fires in the `doOnComplete()` handler, *after* the stream succeeds. This replaced ThreadLocal tracking, which didn't survive Reactor's async thread boundaries.
+
+**Adding a provider** = one new `LlmProvider` impl + listing its key in `ai.gateway.order` — no business-logic changes.
 
 **Python side — a single rate-limited Gemini provider.** [agent-service/app/ai_provider.py](agent-service/app/ai_provider.py) keeps the four-method contract (`generate_response`, `generate_structured_response`, `generate_json`, `estimate_cost`), but agents must obtain it via `get_ai_provider()`, which returns a `RateLimitedAIProvider` decorator wrapping `GeminiProvider`. The decorator delegates to a process-wide singleton `GeminiRateLimiter` ([rate_limiter.py](agent-service/app/rate_limiter.py)) that enforces RPM + TPM token buckets, minimum request spacing, and full-jitter retry on 429/503 — all 8 agents share one limiter. Counters are exposed at `GET /metrics`. **Never instantiate `GeminiProvider` directly in an agent** (it's intentionally retry-free) and never touch `google.generativeai` directly — go through `get_ai_provider()`.
 
 The Python `GeminiProvider` uses `responseSchema` for structured output — every agent passes a JSON Schema and the provider calls `genai.GenerativeModel(...).generate_content(..., generation_config={"response_mime_type": "application/json", "response_schema": SCHEMA})`. Don't switch agents to free-text parsing; the schema is what keeps outputs typed.
 
 ### The Copilot is a separate, streaming AI surface (not the LangGraph workflow)
-Distinct from the backend→agent-service workflow path: the backend hosts its own conversational copilot under `/api/copilot` ([CopilotController.java](backend/src/main/java/ai/careerpilot/api/CopilotController.java)), which **streams tokens over SSE** (`POST /api/copilot/stream`, `text/event-stream` via `SseEmitter`) plus `GET /conversations` and `GET /conversations/{id}/messages`. [CopilotService.java](backend/src/main/java/ai/careerpilot/service/CopilotService.java) calls `AiGatewayService.streamChat(...)` (which fails over only *before* the first token — once tokens are emitted it can't transparently switch providers). [AgentOrchestrator.java](backend/src/main/java/ai/careerpilot/service/AgentOrchestrator.java) builds the per-page/per-action system prompt + context block, and [ConversationMemory.java](backend/src/main/java/ai/careerpilot/service/ConversationMemory.java) persists turns via `CopilotConversationRepository`/`CopilotMessageRepository` (tables from `V2__copilot.sql`). The frontend consumes this through `lib/copilotStream.ts` + `components/copilot/CopilotPanel.tsx`. `GET /api/ai/health` and `/api/ai/stats` ([AiController.java](backend/src/main/java/ai/careerpilot/api/AiController.java)) expose gateway provider health and call/fallback metrics.
+Distinct from the backend→agent-service workflow path: the backend hosts its own conversational copilot under `/api/copilot` ([CopilotController.java](backend/src/main/java/ai/careerpilot/api/CopilotController.java)), which **streams tokens over SSE** (`POST /api/copilot/stream`, `text/event-stream` via `SseEmitter`) plus `GET /conversations` and `GET /conversations/{id}/messages`. [CopilotService.java](backend/src/main/java/ai/careerpilot/service/CopilotService.java) calls `AiGatewayService.streamChat(messages, system, providerCallback)` to capture which provider served the response; the callback executes after streaming completes and stores the provider name in an `AtomicReference` that the SSE done event sends to the frontend. [AgentOrchestrator.java](backend/src/main/java/ai/careerpilot/service/AgentOrchestrator.java) builds the per-page/per-action system prompt + context block, and [ConversationMemory.java](backend/src/main/java/ai/careerpilot/service/ConversationMemory.java) persists turns via `CopilotConversationRepository`/`CopilotMessageRepository` (tables from `V2__copilot.sql`). The frontend consumes this through `lib/copilotStream.ts` + `components/copilot/CopilotPanel.tsx`. `GET /api/diagnostics/ai` and `GET /api/diagnostics/workflow` ([DiagnosticsController.java](backend/src/main/java/ai/careerpilot/api/DiagnosticsController.java)) expose gateway provider health and call/fallback metrics plus workflow engine status.
 
 ### Backend → agent-service boundary
 [WorkflowService.java](backend/src/main/java/ai/careerpilot/service/WorkflowService.java) is the only caller of the agent service. It owns:
@@ -71,6 +82,9 @@ Distinct from the backend→agent-service workflow path: the backend hosts its o
 - calling `AgentServiceClient` (a `WebClient` wrapper, [agent/AgentServiceClient.java](backend/src/main/java/ai/careerpilot/agent/AgentServiceClient.java))
 - persisting/upserting a `WorkflowRun` row keyed by the LangGraph `thread_id` on every transition
 - publishing a Kafka event via `WorkflowEventProducer` on every state change
+- **converting entity responses to DTOs** via `toResponse(WorkflowRun)` for proper JSON serialization
+
+**DTO pattern for API responses**: Controller methods must return `WorkflowRunResponse` (defined in [WorkflowDtos.java](backend/src/main/java/ai/careerpilot/api/dto/WorkflowDtos.java)), not the raw `WorkflowRun` entity. The DTO uses `Map<String, Object>` for state instead of `JsonNode`, which avoids Jackson type definition errors. The service layer parses the entity's JSON state string into a Map before constructing the DTO. This pattern should be replicated for any entity with complex JSON fields.
 
 When you add a new workflow surface (e.g., re-run, branch), funnel it through this service — do not expose the agent service to the frontend.
 
@@ -94,7 +108,12 @@ pgvector extension is enabled and `vector(768)` columns exist on `resumes.embedd
 | `GEMINI_API_KEY` | Required at agent-service startup; `GeminiProvider.__init__` raises if empty |
 | `JWT_SECRET` | Required ≥32 chars; `JwtService.init()` refuses to start otherwise |
 | `AI_MODEL` | Defaults to `gemini-2.5-pro`; change to `gemini-2.5-flash` for cheaper/faster runs |
-| `AI_PROVIDER` | Selects which `AIProvider` impl Spring instantiates (`@ConditionalOnProperty` on `GeminiProvider`) |
+| `AI_PROVIDER_ORDER` | Comma-separated list of provider names for failover chain; default `deepseek,qwen,gemini` |
+| `PRIMARY_PROVIDER` | Display name for primary provider (e.g., `deepseek`) — used in health endpoints and logs |
+| `NVIDIA_API_KEY` | NVIDIA NIM API key; required if DeepSeek/Qwen in chain. Set to empty string to skip NVIDIA providers |
+| `NVIDIA_BASE_URL` | NVIDIA NIM base URL; typically `https://integrate.api.nvidia.com/v1` |
+| `NVIDIA_DEEPSEEK_MODEL` | DeepSeek model name; e.g., `nvidia/deepseek-r1` |
+| `NVIDIA_QWEN_MODEL` | Qwen model name; e.g., `nvidia/qwen2.5-72b-instruct` |
 | `AGENT_SERVICE_URL` | Backend → agent-service base URL |
 | `DATABASE_URL` (JDBC) and `DATABASE_URL_PY` (libpq) | Same DB, two URL forms — keep them in sync |
 
@@ -104,14 +123,23 @@ Knowing what is *not* wired prevents wasted debugging:
 - `refresh_tokens` table — no `/api/auth/refresh` endpoint exists
 - `audit_logs` table — no code writes to it
 - `usage_records` table — no code writes to it; cost tracking is not aggregated
-- `embedding` vector columns — no embedding generation anywhere
-- Java `GeminiProvider` — bean exists, no injection site
+- `embedding` vector columns — no embedding generation anywhere (pgvector extension is installed, but no HNSW/IVFFlat indexes)
 - Redis — `spring-boot-starter-data-redis` on the classpath, no `@Cacheable` / `RedisTemplate` usage
 - `careerpilot.audit.events` topic — declared in config, neither produced nor consumed
 - `security.rate-limit.*` values — read by no limiter (no Bucket4j / RedisRateLimiter)
 - `@KafkaListener` — zero consumers exist; producer events go nowhere
+- `refresh_tokens` table — exists but no refresh endpoint wired
 
 When in doubt, grep for the symbol — if it has no callers, it is scaffolding.
+
+## Diagnostics and Monitoring
+
+[DiagnosticsController.java](backend/src/main/java/ai/careerpilot/api/DiagnosticsController.java) exposes two public endpoints (no auth required) for troubleshooting:
+
+- **`GET /api/diagnostics/ai`** — Gateway diagnostics: API keys loaded, configured models, base URLs, provider health (UP/DOWN/NOT_CONFIGURED), provider order, call stats (total calls, fallbacks, failures per provider), default temperature.
+- **`GET /api/diagnostics/workflow`** — Workflow engine diagnostics: workflowEngine/jsonSerialization/agentService status, plus provider chain health. Used to validate that all three services and the provider chain are operational after deployment.
+
+These endpoints are **not guarded by auth** (anyone can call them) to enable uptime monitoring without needing credentials.
 
 ## Conventions
 

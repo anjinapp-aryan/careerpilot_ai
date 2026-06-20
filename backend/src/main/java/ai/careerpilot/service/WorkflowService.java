@@ -1,6 +1,7 @@
 package ai.careerpilot.service;
 
 import ai.careerpilot.agent.AgentServiceClient;
+import ai.careerpilot.api.dto.AgentServiceDtos.AgentRunResponse;
 import ai.careerpilot.api.dto.WorkflowDtos.WorkflowRunResponse;
 import ai.careerpilot.domain.Job;
 import ai.careerpilot.domain.Resume;
@@ -9,7 +10,6 @@ import ai.careerpilot.kafka.WorkflowEventProducer;
 import ai.careerpilot.repo.JobRepository;
 import ai.careerpilot.repo.ResumeRepository;
 import ai.careerpilot.repo.WorkflowRunRepository;
-import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -79,8 +79,8 @@ public class WorkflowService {
         body.put("job_descriptions", jobPayload);
 
         log.info("Workflow Started: calling agent service with {} jobs", jobPayload.size());
-        JsonNode resp = agent.startRun(body);
-        log.info("Workflow Agent Response: status={}", resp.path("status").asText());
+        AgentRunResponse resp = agent.startRun(body);
+        log.info("Workflow Agent Response: thread_id={}, status={}", resp.thread_id(), resp.status());
         return persistFromResponse(userId, orgId, req, resp);
     }
 
@@ -88,7 +88,7 @@ public class WorkflowService {
     public WorkflowRun resume(UUID userId, String threadId, String decision, String feedback) {
         WorkflowRun run = runs.findByThreadId(threadId).orElseThrow();
         if (!run.getUserId().equals(userId)) throw new SecurityException("forbidden");
-        JsonNode resp = agent.resumeRun(threadId, decision, feedback);
+        AgentRunResponse resp = agent.resumeRun(threadId, decision, feedback);
         return mergeResponse(run, resp);
     }
 
@@ -102,10 +102,10 @@ public class WorkflowService {
         return runs.findTop20ByUserIdOrderByCreatedAtDesc(userId);
     }
 
-    private WorkflowRun persistFromResponse(UUID userId, UUID orgId, StartWorkflowRequest req, JsonNode resp) {
-        String threadId = resp.path("thread_id").asText();
-        String status = mapStatus(resp.path("status").asText());
-        JsonNode state = resp.path("state");
+    private WorkflowRun persistFromResponse(UUID userId, UUID orgId, StartWorkflowRequest req, AgentRunResponse resp) {
+        String threadId = resp.thread_id();
+        String status = mapStatus(resp.status());
+        Map<String, Object> state = resp.state();
 
         WorkflowRun run = runs.findByThreadId(threadId).orElseGet(() -> WorkflowRun.builder()
                 .userId(userId).orgId(orgId).threadId(threadId)
@@ -115,11 +115,11 @@ public class WorkflowService {
         return mergeState(run, status, state);
     }
 
-    private WorkflowRun mergeResponse(WorkflowRun run, JsonNode resp) {
-        return mergeState(run, mapStatus(resp.path("status").asText()), resp.path("state"));
+    private WorkflowRun mergeResponse(WorkflowRun run, AgentRunResponse resp) {
+        return mergeState(run, mapStatus(resp.status()), resp.state());
     }
 
-    private WorkflowRun mergeState(WorkflowRun run, String status, JsonNode state) {
+    private WorkflowRun mergeState(WorkflowRun run, String status, Map<String, Object> state) {
         run.setStatus(status);
         run.setResumeScore(intOrNull(state, "resume_score"));
         run.setJobMatchScore(intOrNull(state, "job_match_score"));
@@ -139,9 +139,11 @@ public class WorkflowService {
         return saved;
     }
 
-    private Integer intOrNull(JsonNode node, String field) {
-        JsonNode v = node.path(field);
-        return v.isInt() ? v.asInt() : null;
+    private Integer intOrNull(Map<String, Object> state, String field) {
+        Object v = state.get(field);
+        if (v instanceof Integer) return (Integer) v;
+        if (v instanceof Number) return ((Number) v).intValue();
+        return null;
     }
 
     private String mapStatus(String s) {

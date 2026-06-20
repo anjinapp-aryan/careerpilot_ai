@@ -173,6 +173,17 @@ class DeepSeekProvider(WorkflowAIProvider):
         try:
             with httpx.Client(timeout=timeout_seconds) as client:
                 resp = client.post(f"{self._base_url}/chat/completions", json=payload, headers=headers)
+                if resp.status_code != 200:
+                    log.error(
+                        "deepseek_http_error",
+                        extra={
+                            "event": "deepseek_http_error",
+                            "status_code": resp.status_code,
+                            "model": self._model,
+                            "endpoint": f"{self._base_url}/chat/completions",
+                            "response_body": resp.text[:500],
+                        },
+                    )
                 resp.raise_for_status()
                 data = resp.json()
                 content = data.get("choices", [{}])[0].get("message", {}).get("content", "{}")
@@ -191,7 +202,7 @@ class DeepSeekProvider(WorkflowAIProvider):
         except Exception as e:
             log.error(
                 "deepseek_request_failed",
-                extra={"event": "deepseek_request_failed", "error_type": type(e).__name__, "error": str(e)},
+                extra={"event": "deepseek_request_failed", "error_type": type(e).__name__, "error": str(e), "model": self._model},
             )
             raise
 
@@ -248,6 +259,17 @@ class QwenProvider(WorkflowAIProvider):
         try:
             with httpx.Client(timeout=timeout_seconds) as client:
                 resp = client.post(f"{self._base_url}/chat/completions", json=payload, headers=headers)
+                if resp.status_code != 200:
+                    log.error(
+                        "qwen_http_error",
+                        extra={
+                            "event": "qwen_http_error",
+                            "status_code": resp.status_code,
+                            "model": self._model,
+                            "endpoint": f"{self._base_url}/chat/completions",
+                            "response_body": resp.text[:500],
+                        },
+                    )
                 resp.raise_for_status()
                 data = resp.json()
                 content = data.get("choices", [{}])[0].get("message", {}).get("content", "{}")
@@ -266,7 +288,7 @@ class QwenProvider(WorkflowAIProvider):
         except Exception as e:
             log.error(
                 "qwen_request_failed",
-                extra={"event": "qwen_request_failed", "error_type": type(e).__name__, "error": str(e)},
+                extra={"event": "qwen_request_failed", "error_type": type(e).__name__, "error": str(e), "model": self._model},
             )
             raise
 

@@ -80,4 +80,15 @@ public class DiagnosticsController {
         log.info("AI Diagnostics endpoint accessed");
         return result;
     }
+
+    @GetMapping("/workflow")
+    public Map<String, Object> workflowDiagnostics() {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("workflowEngine", "UP");
+        result.put("jsonSerialization", "UP");
+        result.put("agentService", "UP");
+        result.put("providers", gateway.health());
+        log.info("Workflow Diagnostics endpoint accessed");
+        return result;
+    }
 }

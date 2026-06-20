@@ -47,17 +47,23 @@ public class CopilotController {
         SseEmitter emitter = new SseEmitter(STREAM_TIMEOUT_MS);
         CopilotService.StreamResult result = copilot.streamTurn(user, req);
 
-        send(emitter, "meta", Map.of("conversationId", result.conversationId().toString()));
+        send(emitter, "meta", Map.of(
+                "conversationId", result.conversationId().toString(),
+                "sources", result.sources()));
 
         result.tokens().subscribe(
                 token -> send(emitter, "delta", Map.of("text", token)),
                 err -> {
                     log.warn("Copilot SSE error: {}", err.toString());
-                    send(emitter, "error", Map.of("message", "The assistant failed to respond."));
+                    send(emitter, "error", Map.of(
+                            "message", "I'm temporarily unable to respond right now. Please try again in a moment."));
                     emitter.complete();
                 },
                 () -> {
-                    send(emitter, "done", Map.of("conversationId", result.conversationId().toString()));
+                    send(emitter, "done", Map.of(
+                            "conversationId", result.conversationId().toString(),
+                            "sources", result.sources(),
+                            "provider", result.providerRef().get()));
                     emitter.complete();
                 });
 

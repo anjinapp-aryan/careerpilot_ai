@@ -1,6 +1,7 @@
 package ai.careerpilot.service;
 
 import ai.careerpilot.agent.AgentServiceClient;
+import ai.careerpilot.api.dto.WorkflowDtos.WorkflowRunResponse;
 import ai.careerpilot.domain.Job;
 import ai.careerpilot.domain.Resume;
 import ai.careerpilot.domain.WorkflowRun;
@@ -10,6 +11,8 @@ import ai.careerpilot.repo.ResumeRepository;
 import ai.careerpilot.repo.WorkflowRunRepository;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -21,6 +24,8 @@ import java.util.UUID;
 
 @Service
 public class WorkflowService {
+
+    private static final Logger log = LoggerFactory.getLogger(WorkflowService.class);
 
     private final AgentServiceClient agent;
     private final ResumeRepository resumes;
@@ -47,6 +52,8 @@ public class WorkflowService {
 
     @Transactional
     public WorkflowRun start(UUID userId, UUID orgId, StartWorkflowRequest req) {
+        log.info("Workflow Created: user={}, target_role={}, jobs={}", userId, req.targetRole(), req.jobIds().size());
+
         Resume resume = resumes.findById(req.resumeId()).orElseThrow();
         if (!resume.getUserId().equals(userId)) throw new SecurityException("forbidden");
 
@@ -71,7 +78,9 @@ public class WorkflowService {
         body.put("target_locations", req.targetLocations());
         body.put("job_descriptions", jobPayload);
 
+        log.info("Workflow Started: calling agent service with {} jobs", jobPayload.size());
         JsonNode resp = agent.startRun(body);
+        log.info("Workflow Agent Response: status={}", resp.path("status").asText());
         return persistFromResponse(userId, orgId, req, resp);
     }
 
@@ -118,10 +127,13 @@ public class WorkflowService {
         run.setInterviewReadinessScore(intOrNull(state, "interview_readiness_score"));
         try {
             run.setState(mapper.writeValueAsString(state));
+            log.debug("Workflow State Persisted: thread={}, status={}", run.getThreadId(), status);
         } catch (Exception e) {
+            log.error("Failed to serialize workflow state: {}", e.getMessage());
             run.setState("{}");
         }
         WorkflowRun saved = runs.save(run);
+        log.info("Workflow Updated: thread={}, status={}", saved.getThreadId(), saved.getStatus());
         events.publish(saved.getThreadId(),
                 Map.of("threadId", saved.getThreadId(), "status", saved.getStatus(), "userId", saved.getUserId().toString()));
         return saved;
@@ -139,5 +151,36 @@ public class WorkflowService {
             case "error" -> "ERROR";
             default -> "RUNNING";
         };
+    }
+
+    // ---- Response mapping ----
+
+    public WorkflowRunResponse toResponse(WorkflowRun run) {
+        Map<String, Object> stateMap = new HashMap<>();
+        try {
+            if (run.getState() != null && !run.getState().isEmpty()) {
+                stateMap = mapper.readValue(run.getState(), Map.class);
+            }
+        } catch (Exception e) {
+            log.warn("Failed to parse workflow state for {}: {}", run.getThreadId(), e.getMessage());
+        }
+        return new WorkflowRunResponse(
+                run.getId(),
+                run.getThreadId(),
+                run.getStatus(),
+                run.getTargetRole(),
+                run.getTargetSeniority(),
+                run.getResumeScore(),
+                run.getJobMatchScore(),
+                run.getAtsScore(),
+                run.getInterviewReadinessScore(),
+                stateMap,
+                run.getErrorMessage(),
+                run.getCreatedAt(),
+                run.getUpdatedAt());
+    }
+
+    public List<WorkflowRunResponse> toResponseList(List<WorkflowRun> runs) {
+        return runs.stream().map(this::toResponse).toList();
     }
 }

@@ -74,6 +74,10 @@ public class GeminiProvider extends AbstractLlmProvider {
                         .queryParam("key", cfg.getApiKey()).build(cfg.getModel()))
                 .bodyValue(body)
                 .retrieve()
+                .onStatus(status -> status.value() == 429, resp -> {
+                    log.error("Gemini 429 Quota Exceeded — failover required");
+                    return resp.createException();
+                })
                 .bodyToFlux(String.class)
                 .timeout(timeout())
                 .flatMap(this::parseJsonResponse)

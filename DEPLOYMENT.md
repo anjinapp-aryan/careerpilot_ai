@@ -14,7 +14,7 @@ checkpointing, pgvector).
                              ▼
             ┌──────────────────────────────────────┐
             │ https://backend-<org>.koyeb.app      │   (Koyeb Free instance)
-            │   Spring Boot 3 · Java 21              │
+            │   Spring Boot 4 · Java 25              │
             └──┬──────────────────────┬──────────────┘
                │                      │ HTTPS (public URL — Koyeb free tier
                ▼                      │ has no shared private network across

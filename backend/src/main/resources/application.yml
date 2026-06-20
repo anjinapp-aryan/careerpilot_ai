@@ -66,8 +66,8 @@ ai:
     api-key: ${GEMINI_API_KEY:}
   # ---- AI Gateway: single entry point for all LLM calls, with failover ----
   gateway:
-    primary: ${PRIMARY_PROVIDER:gemini}
-    order: ${AI_PROVIDER_ORDER:gemini,deepseek,qwen}   # failover priority
+    primary: ${PRIMARY_PROVIDER:deepseek}
+    order: ${AI_PROVIDER_ORDER:deepseek,gemini,qwen}   # failover priority: DeepSeek → Gemini → Qwen
     default-temperature: 0.4
     providers:
       gemini:

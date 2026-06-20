@@ -161,7 +161,9 @@ public class WorkflowService {
         Map<String, Object> stateMap = new HashMap<>();
         try {
             if (run.getState() != null && !run.getState().isEmpty()) {
-                stateMap = mapper.readValue(run.getState(), Map.class);
+                @SuppressWarnings("unchecked")
+                Map<String, Object> parsed = mapper.readValue(run.getState(), Map.class);
+                stateMap = parsed;
             }
         } catch (Exception e) {
             log.warn("Failed to parse workflow state for {}: {}", run.getThreadId(), e.getMessage());

@@ -43,12 +43,13 @@ spring:
     multipart:
       max-file-size: 10MB
       max-request-size: 12MB
+  web:
+    error:
+      include-message: always
 
 server:
   port: ${PORT:8080}
   forward-headers-strategy: framework
-  error:
-    include-message: always
 
 management:
   endpoints:

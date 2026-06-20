@@ -3,8 +3,6 @@ package ai.careerpilot.service;
 import ai.careerpilot.domain.*;
 import ai.careerpilot.repo.*;
 import ai.careerpilot.security.AuthenticatedUser;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -19,8 +17,6 @@ import java.util.stream.Collectors;
  */
 @Service
 public class CareerContextRetriever {
-
-    private static final Logger log = LoggerFactory.getLogger(CareerContextRetriever.class);
 
     private final ResumeRepository resumes;
     private final JobRepository jobs;

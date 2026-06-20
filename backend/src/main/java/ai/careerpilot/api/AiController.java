@@ -1,7 +1,6 @@
 package ai.careerpilot.api;
 
 import ai.careerpilot.ai.AiGatewayService;
-import ai.careerpilot.ai.ProviderHealthTracker;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -19,11 +18,9 @@ import java.util.Map;
 public class AiController {
 
     private final AiGatewayService gateway;
-    private final ProviderHealthTracker healthTracker;
 
-    public AiController(AiGatewayService gateway, ProviderHealthTracker healthTracker) {
+    public AiController(AiGatewayService gateway) {
         this.gateway = gateway;
-        this.healthTracker = healthTracker;
     }
 
     @GetMapping("/health")

@@ -33,6 +33,27 @@ T = TypeVar("T")
 
 
 # ---------------------------------------------------------------------------
+# Stage → actual-provider attribution
+# ---------------------------------------------------------------------------
+# The gateway fails over transparently, so the provider that actually served a
+# stage is only known after the call returns. Record it here so graph node
+# instrumentation can attribute the right provider in the execution timeline.
+_stage_providers: dict[str, str] = {}
+_stage_providers_lock = threading.Lock()
+
+
+def _record_stage_provider(stage: str, provider_name: str) -> None:
+    with _stage_providers_lock:
+        _stage_providers[stage] = provider_name
+
+
+def get_stage_provider(stage: str) -> str | None:
+    """Return the provider that last successfully served `stage`, or None."""
+    with _stage_providers_lock:
+        return _stage_providers.get(stage)
+
+
+# ---------------------------------------------------------------------------
 # Provider health tracking (circuit breaker)
 # ---------------------------------------------------------------------------
 
@@ -503,6 +524,7 @@ class WorkflowAiGateway:
                 )
 
                 self._health.mark_healthy(provider.name)
+                _record_stage_provider(stage, provider.name)
                 log.info(
                     "provider_health_marked_healthy",
                     extra={

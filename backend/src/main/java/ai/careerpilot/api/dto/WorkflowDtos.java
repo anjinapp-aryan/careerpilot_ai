@@ -13,7 +13,9 @@ public final class WorkflowDtos {
     public record WorkflowAgent(
             String name,
             String status,
-            String completedAt) {}
+            String completedAt,
+            String provider,
+            Long durationMs) {}
 
     /** Response for workflow run operations (start, resume, get). */
     public record WorkflowRunResponse(

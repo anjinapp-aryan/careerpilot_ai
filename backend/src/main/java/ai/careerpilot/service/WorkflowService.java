@@ -155,6 +155,7 @@ public class WorkflowService {
         return switch (s) {
             case "interrupted" -> "INTERRUPTED";
             case "completed" -> "COMPLETED";
+            case "rejected" -> "REJECTED";
             case "error" -> "ERROR";
             default -> "RUNNING";
         };
@@ -162,47 +163,192 @@ public class WorkflowService {
 
     // ---- Response mapping ----
 
+    // Display order of pipeline stages. The 7 agent stages are driven by the
+    // agent_execution telemetry the agent-service appends per node; human_approval
+    // is derived from awaiting_human_approval (it is intentionally not instrumented).
+    private static final String[][] PIPELINE_STAGES = {
+        {"resume_intelligence", "Resume Intelligence"},
+        {"job_discovery", "Job Discovery"},
+        {"ats_optimization", "ATS Optimization"},
+        {"interview_prep", "Interview Preparation"},
+        {"career_strategy", "Career Strategy"},
+        {"salary_intelligence", "Salary Intelligence"},
+        {"human_approval", "Human Approval"},
+        {"application_tracking", "Application Tracking"}
+    };
+
+    /**
+     * Build the execution timeline — the SINGLE source of workflow truth — from the
+     * agent-service's {@code agent_execution} telemetry (status/provider/duration/
+     * completed_at per stage). Stages without a telemetry entry are PENDING.
+     *
+     * <p>The approval gate is the part that used to lie. {@code human_approval} is
+     * derived from the {@code human_decision}/{@code awaiting_human_approval} flags,
+     * but ONLY once the pipeline has actually <em>reached</em> the gate — i.e. all six
+     * upstream agent stages COMPLETED. Without that guard a stale {@code human_decision}
+     * (e.g. an Approve on a run that had already failed at resume_intelligence) marked
+     * Human Approval COMPLETED while the upstream stages were still PENDING — the
+     * "impossible state". A failed upstream stage also forbids the gate from advancing
+     * and forces everything downstream to PENDING.
+     */
     private List<WorkflowDtos.WorkflowAgent> extractAgentTimeline(Map<String, Object> state) {
+        Map<String, Map<String, Object>> byStage = indexExecutionByStage(state);
+        boolean awaiting = Boolean.TRUE.equals(state.get("awaiting_human_approval"));
+        Object decision = state.get("human_decision");
+        String decisionStr = decision instanceof String s ? s.trim().toLowerCase() : "";
+
         List<WorkflowDtos.WorkflowAgent> agents = new ArrayList<>();
+        // Did every agent stage BEFORE the approval gate actually complete? Only then
+        // may the gate reflect a decision/await. A gap or a failure upstream means the
+        // gate was never reached, so it (and everything after it) stays PENDING.
+        boolean reachedApproval = true;
+        boolean upstreamFailed = false;
 
-        String[] agentNames = {
-            "Resume Intelligence",
-            "Job Discovery",
-            "ATS Optimization",
-            "Interview Preparation",
-            "Career Strategy",
-            "Salary Intelligence",
-            "Human Approval",
-            "Application Tracking"
-        };
+        for (String[] stage : PIPELINE_STAGES) {
+            String stageKey = stage[0];
+            String displayName = stage[1];
 
-        String[] stateKeys = {
-            "resume_score",
-            "job_match_score",
-            "ats_score",
-            "interview_readiness_score",
-            "career_roadmap",
-            "salary_insights",
-            "awaiting_human_approval",
-            "tracked_application"
-        };
-
-        for (int i = 0; i < agentNames.length; i++) {
-            String agentName = agentNames[i];
-            String stateKey = stateKeys[i];
-            String status = "PENDING";
-
-            if ("awaiting_human_approval".equals(stateKey)) {
-                boolean awaiting = (Boolean) state.getOrDefault("awaiting_human_approval", false);
-                status = awaiting ? "WAITING_FOR_APPROVAL" : "COMPLETED";
-            } else if (state.containsKey(stateKey) && state.get(stateKey) != null) {
-                status = "COMPLETED";
+            if ("human_approval".equals(stageKey)) {
+                String status;
+                if (upstreamFailed || !reachedApproval) {
+                    status = "PENDING";                       // gate never reached
+                } else if (awaiting) {
+                    status = "WAITING_FOR_APPROVAL";
+                } else if ("rejected".equals(decisionStr)) {
+                    status = "REJECTED";
+                } else if (!decisionStr.isBlank()) {
+                    status = "COMPLETED";
+                } else {
+                    status = "PENDING";
+                }
+                agents.add(new WorkflowDtos.WorkflowAgent(displayName, status, null, null, null));
+                continue;
             }
 
-            agents.add(new WorkflowDtos.WorkflowAgent(agentName, status, null));
-        }
+            Map<String, Object> entry = byStage.get(stageKey);
+            String status;
+            if (entry != null) {
+                status = statusOf(entry);                     // telemetry: COMPLETED or FAILED
+            } else if (stageProducedOutput(state, stageKey)) {
+                // Legacy heal: runs created before execution telemetry existed have no
+                // agent_execution entries but DO carry each stage's output in state.
+                // A non-empty output proves the stage ran — so a legacy COMPLETED run
+                // renders a fully-COMPLETED timeline instead of an all-PENDING one.
+                status = "COMPLETED";
+            } else {
+                status = "PENDING";                           // genuinely has not run
+            }
 
+            if ("application_tracking".equals(stageKey)) {     // post-gate stage
+                agents.add(entry != null ? toAgent(displayName, status, entry)
+                        : new WorkflowDtos.WorkflowAgent(displayName, status, null, null, null));
+                continue;
+            }
+
+            // Pre-gate stage: it must be COMPLETED for the approval gate to be reachable.
+            if ("FAILED".equals(status)) {
+                upstreamFailed = true;
+                reachedApproval = false;
+            } else if (!"COMPLETED".equals(status)) {
+                reachedApproval = false;
+            }
+            agents.add(entry != null ? toAgent(displayName, status, entry)
+                    : new WorkflowDtos.WorkflowAgent(displayName, status, null, null, null));
+        }
         return agents;
+    }
+
+    /** Status recorded on an execution telemetry entry, defaulting to COMPLETED. */
+    private String statusOf(Map<String, Object> entry) {
+        String status = asString(entry.get("status"));
+        return (status == null || status.isBlank()) ? "COMPLETED" : status;
+    }
+
+    /**
+     * True when {@code state} carries a non-empty output for {@code stageKey} — proof the
+     * stage ran on a legacy run that predates execution telemetry. Keys are chosen so the
+     * error/empty path (e.g. resume_intelligence returns {@code candidate_profile={}}) does
+     * NOT register as completed.
+     */
+    private static boolean stageProducedOutput(Map<String, Object> state, String stageKey) {
+        return switch (stageKey) {
+            case "resume_intelligence" -> nonEmpty(state.get("candidate_profile")) || nonEmpty(state.get("extracted_skills"));
+            case "job_discovery" -> nonEmpty(state.get("ranked_jobs"));
+            case "ats_optimization" -> nonEmpty(state.get("ats_optimization_plan")) || nonEmpty(state.get("missing_keywords"));
+            case "interview_prep" -> nonEmpty(state.get("interview_plan"));
+            case "career_strategy" -> nonEmpty(state.get("career_roadmap"));
+            case "salary_intelligence" -> nonEmpty(state.get("salary_insights"));
+            case "application_tracking" -> nonEmpty(state.get("tracked_application"));
+            default -> false;
+        };
+    }
+
+    private static boolean nonEmpty(Object v) {
+        if (v instanceof Map<?, ?> m) return !m.isEmpty();
+        if (v instanceof List<?> l) return !l.isEmpty();
+        if (v instanceof String s) return !s.isBlank();
+        return v != null;
+    }
+
+    private WorkflowDtos.WorkflowAgent toAgent(String displayName, String status, Map<String, Object> entry) {
+        return new WorkflowDtos.WorkflowAgent(
+                displayName,
+                status,
+                asString(entry.get("completed_at")),
+                asString(entry.get("provider")),
+                asLong(entry.get("duration_ms")));
+    }
+
+    /**
+     * Derive the run-level status as a <em>pure function of the agent timeline</em>
+     * (plus the cross-cutting {@code errors} marker). This is what makes the top
+     * pipeline badge and the execution timeline impossible to disagree: both read the
+     * same {@code agents[]}. It also encodes the legal state machine — a failed run can
+     * never report COMPLETED, and a failed/errored run never offers approval.
+     */
+    private String deriveRunStatus(List<WorkflowDtos.WorkflowAgent> agents, Map<String, Object> state, String persisted) {
+        boolean anyFailed = agents.stream().anyMatch(a -> "FAILED".equals(a.status()));
+        boolean hasErrors = state.get("errors") instanceof List<?> l && !l.isEmpty();
+        if (anyFailed || hasErrors) return "FAILED";          // RUNNING → FAILED; forbids FAILED → COMPLETED
+        if (agents.stream().anyMatch(a -> "WAITING_FOR_APPROVAL".equals(a.status()))) return "INTERRUPTED";
+        if (agents.stream().anyMatch(a -> "REJECTED".equals(a.status()))) return "REJECTED";
+        if (agents.stream().allMatch(a -> "COMPLETED".equals(a.status()))) return "COMPLETED";
+        // Indeterminate (legacy/partial telemetry, some stages still PENDING): trust the
+        // persisted terminal status. INTERRUPTED only ever comes from a real
+        // WAITING_FOR_APPROVAL stage above, so a persisted "INTERRUPTED" that reached here
+        // has no live gate and is treated as FAILED (not resurrected as approvable).
+        return switch (persisted == null ? "" : persisted) {
+            case "COMPLETED" -> "COMPLETED";
+            case "REJECTED" -> "REJECTED";
+            case "ERROR", "FAILED", "INTERRUPTED" -> "FAILED";
+            default -> "RUNNING";
+        };
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Map<String, Object>> indexExecutionByStage(Map<String, Object> state) {
+        Map<String, Map<String, Object>> byStage = new HashMap<>();
+        Object raw = state.get("agent_execution");
+        if (!(raw instanceof List<?> list)) return byStage;
+        for (Object item : list) {
+            if (item instanceof Map<?, ?> m) {
+                Object stage = m.get("stage");
+                if (stage instanceof String s) {
+                    // Last write wins — a stage re-run overwrites the earlier entry.
+                    byStage.put(s, (Map<String, Object>) m);
+                }
+            }
+        }
+        return byStage;
+    }
+
+    private String asString(Object v) {
+        return v == null ? null : v.toString();
+    }
+
+    private Long asLong(Object v) {
+        if (v instanceof Number n) return n.longValue();
+        return null;
     }
 
     public WorkflowRunResponse toResponse(WorkflowRun run) {
@@ -222,10 +368,15 @@ public class WorkflowService {
         }
         try {
             List<WorkflowDtos.WorkflowAgent> agents = extractAgentTimeline(stateMap);
+            // Single source of truth: the response status is DERIVED from the same
+            // agents[] the UI renders, not the independently-persisted run.status.
+            // This guarantees the top pipeline badge and the timeline never diverge,
+            // and heals any already-persisted "impossible state" rows on read.
+            String derivedStatus = deriveRunStatus(agents, stateMap, run.getStatus());
             WorkflowRunResponse response = new WorkflowRunResponse(
                     run.getId(),
                     run.getThreadId(),
-                    run.getStatus(),
+                    derivedStatus,
                     run.getTargetRole(),
                     run.getTargetSeniority(),
                     run.getResumeScore(),

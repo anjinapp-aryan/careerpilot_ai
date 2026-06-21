@@ -80,7 +80,9 @@ ai:
       deepseek:
         display-name: DeepSeek
         api-key: ${NVIDIA_API_KEY:}
-        model: ${NVIDIA_DEEPSEEK_MODEL:deepseek-v4-flash}
+        # NVIDIA NIM IDs are vendor-namespaced; the bare "deepseek-v4-flash"
+        # 404s. Keep the "deepseek-ai/" prefix in the default.
+        model: ${NVIDIA_DEEPSEEK_MODEL:deepseek-ai/deepseek-v4-flash}
         base-url: ${NVIDIA_BASE_URL:https://integrate.api.nvidia.com/v1}
         timeout-ms: 20000
       qwen:
@@ -147,6 +149,12 @@ kafka:
   topics:
     workflow-events: careerpilot.workflow.events
     audit-events: careerpilot.audit.events
+
+careerpilot:
+  kafka:
+    # When false (or Kafka unreachable), workflow event publishing is skipped
+    # silently so a missing/broken broker never breaks the workflow path.
+    enabled: ${KAFKA_ENABLED:true}
 
 logging:
   level:

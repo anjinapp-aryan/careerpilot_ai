@@ -42,8 +42,11 @@ class Settings(BaseSettings):
 
     nvidia_api_key: str = ""
     nvidia_base_url: str = "https://integrate.api.nvidia.com/v1"
-    nvidia_deepseek_model: str = "nvidia/deepseek-v4-flash"
-    nvidia_qwen_model: str = "nvidia/qwen3-next-80b-a3b-instruct"
+    # NVIDIA NIM model IDs are namespaced by vendor. The wrong namespace
+    # (e.g. "nvidia/deepseek-...") yields a 404 from /chat/completions, so these
+    # defaults must match the catalog exactly. Overridable via NVIDIA_*_MODEL env.
+    nvidia_deepseek_model: str = "deepseek-ai/deepseek-v4-flash"
+    nvidia_qwen_model: str = "qwen/qwen3-next-80b-a3b-instruct"
 
 
 settings = Settings()

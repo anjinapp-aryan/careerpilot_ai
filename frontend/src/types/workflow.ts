@@ -100,12 +100,17 @@ export type AgentStatus =
   | 'ACTIVE'
   | 'PENDING'
   | 'WAITING_FOR_APPROVAL'
-  | 'FAILED';
+  | 'FAILED'
+  | 'REJECTED';
 
 export interface WorkflowAgent {
   name: string;
   status: AgentStatus;
   completedAt?: string;
+  /** Provider that actually served this stage (e.g. "deepseek", "gemini"). */
+  provider?: string | null;
+  /** Wall-clock duration of the stage in milliseconds. */
+  durationMs?: number | null;
 }
 
 export interface WorkflowStatusDetail {

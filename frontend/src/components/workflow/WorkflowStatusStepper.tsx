@@ -57,6 +57,12 @@ const STATUS_CONFIG: Record<
     iconClass: 'text-danger',
     ringClass: 'ring-danger/20',
   },
+  REJECTED: {
+    bgClass: 'bg-danger/10',
+    borderClass: 'border-danger/40',
+    iconClass: 'text-danger',
+    ringClass: 'ring-danger/20',
+  },
 };
 
 const AGENT_ICONS: Record<string, React.ElementType> = {
@@ -72,6 +78,12 @@ const AGENT_ICONS: Record<string, React.ElementType> = {
 
 function getAgentIcon(name: string): React.ElementType {
   return AGENT_ICONS[name] ?? ClipboardList;
+}
+
+/** Render a millisecond duration as a compact human label (e.g. "1.4s", "820ms"). */
+function formatDuration(ms: number): string {
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  return `${(ms / 1000).toFixed(1)}s`;
 }
 
 // ---------------------------------------------------------------------------
@@ -138,7 +150,7 @@ function StepIcon({ agent, index }: { agent: WorkflowAgent; index: number }) {
 
   let Glyph: React.ElementType = AgentIcon;
   if (agent.status === 'COMPLETED') Glyph = CheckCircle2;
-  else if (agent.status === 'FAILED') Glyph = XCircle;
+  else if (agent.status === 'FAILED' || agent.status === 'REJECTED') Glyph = XCircle;
   else if (agent.status === 'WAITING_FOR_APPROVAL') Glyph = AlertTriangle;
   else if (agent.status === 'PENDING') Glyph = AgentIcon ?? Circle;
 
@@ -254,8 +266,16 @@ function VerticalStepper({ agents }: { agents: WorkflowAgent[] }) {
                 <StatusBadge status={agent.status} />
               </div>
 
-              {timestamp && (
-                <p className="mt-0.5 text-xs tabular-nums text-muted-foreground">{timestamp}</p>
+              {(timestamp || agent.provider || agent.durationMs != null) && (
+                <p className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs tabular-nums text-muted-foreground">
+                  {timestamp && <span>{timestamp}</span>}
+                  {agent.provider && (
+                    <span className="rounded bg-muted px-1.5 py-0.5 font-medium uppercase tracking-wide text-foreground/70">
+                      {agent.provider}
+                    </span>
+                  )}
+                  {agent.durationMs != null && <span>{formatDuration(agent.durationMs)}</span>}
+                </p>
               )}
 
               <AnimatePresence>

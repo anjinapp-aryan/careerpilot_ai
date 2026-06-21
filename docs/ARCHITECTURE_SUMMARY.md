@@ -17,9 +17,9 @@
 
 ### Agent Service (Python FastAPI + LangGraph 0.2)
 - **Role**: Multi-agent workflow orchestration
-- **Topology**: Linear StateGraph with 8 nodes: resume_intelligence → job_discovery → ats_optimization → interview_prep → career_strategy → salary_intelligence → human_approval → application_tracking
+- **Topology**: StateGraph with 8 nodes: resume_intelligence → job_discovery → ats_optimization → interview_prep → career_strategy → salary_intelligence → human_approval → application_tracking. One conditional edge: `human_approval` routes to `application_tracking` on approval or `END` on rejection — every other edge is linear.
 - **State Management**: PostgresSaver checkpoints (survives restarts)
-- **Human Loop**: NodeInterrupt in human_approval pauses; /runs/resume resumes
+- **Human Loop**: NodeInterrupt in human_approval pauses; `/runs/resume` resumes, but first checks the run is still parked at `human_approval` (409 otherwise) to prevent a stale resume call from corrupting an already-terminal run
 - **Port**: 8088 (`/docs` for Swagger)
 
 ### Frontend (React 18 + Vite + TypeScript)
@@ -67,7 +67,7 @@
 1. **Register & Auth** → Backend creates User + OAuth optional → JWT issued
 2. **Copilot Chat** → Frontend SSE stream → Backend → AiGatewayService → Provider (with failover)
 3. **Workflow Run** → Frontend calls /api/workflows/run → Backend assembles input → Calls agent-service → Persists WorkflowRun → Publishes Kafka event
-4. **Workflow Resume** → Frontend calls /api/workflows/{threadId}/resume → Backend calls agent-service → Updates state
+4. **Workflow Resume** → Frontend calls /api/workflows/{threadId}/resume → Backend re-validates the run is still awaiting approval (`deriveDisplayStatus`), then calls agent-service (which re-validates independently) → stamps approve/reject audit fields into state → Updates state. Either layer returns 409 if the run isn't currently parked at `human_approval`.
 
 ## Configuration
 
@@ -84,8 +84,9 @@
 ## Phase-1 Scope
 
 ✅ End-to-end skeleton (register → login → dashboard → create job → workflow)
-✅ Multi-agent LangGraph orchestration with human approval
-✅ Streaming copilot with provider failover
+✅ Multi-agent LangGraph orchestration with human approval, including conditional rejection routing and a dual-layer guard against resuming a non-awaiting run
+✅ Streaming copilot with provider failover, skill-routed to 10 specialized prompt handlers, reporting the same derived workflow status the UI shows
+✅ Approval/rejection audit trail (who/when/feedback) stored in workflow state JSON
 ✅ JWT + multi-tenant isolation
 ✅ Provider health tracking & transparent failover
 

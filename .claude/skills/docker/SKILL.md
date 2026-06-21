@@ -1,465 +1,197 @@
-# Docker & Services Skill
+# Docker & Compose Services Skill
 
 ## Purpose
-Manage local Docker services: start/stop containers, view logs, reset data, debug services.
+Start, stop, inspect, and debug a multi-container stack with Docker Compose. Generic to any
+compose-based project — exact service names, ports, and which services exist live in that
+repo's own `docker-compose.yml` and docs, not here.
 
 ---
 
 ## Workflows
 
-### Workflow: Start All Services (First Time)
+### Workflow: First-Time Setup
 
 ```bash
-# Copy and configure environment
-cp .env.example .env
-
-# Edit .env with required values:
-# JWT_SECRET=<min 32 random chars>
-# GEMINI_API_KEY=<your key>
-# DATABASE_URL=postgresql://user:pass@neon.tech/db (DIRECT endpoint, NO -pooler)
-# DATABASE_URL_PY=<matching libpq form>
+cp .env.example .env   # if the project uses one
+# Fill in required values per the project's own docs
 ```
 
-**Use text editor to set values**:
-```bash
-# After editing .env, verify critical values are set:
-grep -E "JWT_SECRET|GEMINI_API_KEY|DATABASE_URL" .env | grep -v "^#"
-# Should show 3 lines with non-empty values
-```
+After editing, sanity-check that the critical vars are actually non-empty before starting
+anything — a silently-empty required var is the single most common first-run failure.
 
-**Start services**:
+---
+
+### Workflow: Start the Stack
+
 ```bash
 docker compose --env-file .env up -d
-
-# Watch startup (Ctrl+C to exit)
-docker compose logs -f
+docker compose logs -f      # watch startup, Ctrl+C to stop following
 ```
 
-**Wait for services to be ready** (watch logs for):
-- ✅ Zookeeper: "binding to port 2181"
-- ✅ Kafka: "started"
-- ✅ PostgreSQL: "ready to accept connections"
-- ✅ Redis: "Ready to accept connections"
-- ✅ MinIO: "MinIO Object Storage Server"
+Wait for each service's own "ready" signal in its logs (a DB saying "ready to accept
+connections", a broker saying "started", etc.) before assuming the stack is up.
 
 ---
 
-### Workflow: Check Service Status
+### Workflow: Check Status
 
 ```bash
-# Show all containers and their status
 docker compose ps
+```
 
-# Should show: postgres, zookeeper, kafka, redis, minio, all RUNNING
+All services should show a running/healthy state. Anything in a restart loop or "Exited" needs
+investigation before relying on the stack.
 
-# Verify each service responds
-docker compose exec db psql -U postgres -c "SELECT 1" | grep "1"     # DB
-docker compose exec redis redis-cli PING                              # Redis
-docker compose exec kafka kafka-topics --bootstrap-server localhost:9092 --list  # Kafka
-curl http://localhost:9001/minio/health                               # MinIO
+---
+
+### Workflow: View Logs
+
+```bash
+docker compose logs -f <service>          # follow one service
+docker compose logs --tail=50 <service>   # last N lines, no follow
+docker compose logs | grep -i error       # search across all services
 ```
 
 ---
 
-### Workflow: View Logs for Service
+### Workflow: Stop / Restart
 
 ```bash
-# Real-time logs for specific service
-docker compose logs -f backend          # Follow backend logs (Ctrl+C to exit)
-docker compose logs -f agent-service    # Follow agent service logs
-docker compose logs -f db               # Follow database logs
-
-# Last N lines without following
-docker compose logs --tail=50 backend
-
-# All logs at once (one-time output)
-docker compose logs
-
-# Search logs
-docker compose logs backend | grep -i "error"
-docker compose logs backend | grep -i "workflow"
+docker compose down                  # stop, keep volumes (data preserved)
+docker compose restart <service>     # restart one service
 ```
 
 ---
 
-### Workflow: Stop All Services
+### Workflow: Full Reset (Destructive)
 
 ```bash
-# Stop all containers (data preserved)
-docker compose down
-
-# Verify stopped
-docker compose ps
-# Should show empty or "Exited" status
-```
-
----
-
-### Workflow: Restart Single Service
-
-```bash
-# Restart backend only
-docker compose restart backend
-
-# Restart database
-docker compose restart db
-
-# Restart agent-service
-docker compose restart agent-service
-
-# Watch logs to verify
-docker compose logs -f <service>
-```
-
----
-
-### Workflow: Clean & Reset Everything
-
-```bash
-# Stop containers AND delete volumes (destroys all data)
-docker compose down -v
-
-# Verify volumes deleted
-docker volume ls | grep careerpilot
-# Should return empty
-
-# Start fresh
+docker compose down -v               # stop AND delete volumes — data is gone
+docker volume ls | grep <project>    # confirm volumes actually removed
 docker compose --env-file .env up -d
 ```
 
+Only do this in a disposable dev environment, and only when you actually intend to lose data.
+
 ---
 
-### Workflow: Rebuild Service After Code Changes
+### Workflow: Rebuild a Service After Code Changes
 
 ```bash
-# Rebuild backend (Java changes)
-docker compose build --no-cache backend
-docker compose up -d backend
-
-# Rebuild agent-service (Python changes)
-docker compose build --no-cache agent-service
-docker compose up -d agent-service
-
-# Rebuild frontend (Node changes)
-docker compose build --no-cache frontend
-docker compose up -d frontend
-
-# Or rebuild all
-docker compose build --no-cache
-docker compose up -d
+docker compose build --no-cache <service>
+docker compose up -d <service>
 ```
 
 ---
 
-### Workflow: Execute Command Inside Container
+### Workflow: Run a Command Inside a Container
 
 ```bash
-# Run psql inside database container
-docker compose exec db psql -U postgres -d careerpilot -c "SELECT COUNT(*) FROM users;"
-
-# Connect to Python shell in agent-service
-docker compose exec agent-service python3
-
-# Check environment variables in backend
-docker compose exec backend env | grep GEMINI
-
-# View files inside container
-docker compose exec backend ls /app/config
+docker compose exec <service> <command>
+docker compose exec <service> env | grep <VAR_PREFIX>   # confirm config landed in the container
 ```
 
 ---
 
-### Workflow: View Resource Usage
+### Workflow: Resource Usage & Cleanup
 
 ```bash
-# See memory/CPU for each container
-docker stats
-
-# Format: Container | CPU % | Memory Usage | Limit | Memory % | Net I/O | Block I/O
-```
-
----
-
-### Workflow: Clean Up Disk Space
-
-```bash
-# Remove unused images
-docker image prune -a
-
-# Remove unused volumes
-docker volume prune
-
-# Remove unused networks
-docker network prune
-
-# Full cleanup
-docker system prune -a
-
-# See disk usage
-docker system df
+docker stats                  # live CPU/memory per container
+docker system df              # disk usage summary
+docker system prune -a        # remove unused images/containers/networks
+docker volume prune           # remove unused volumes (careful — irreversible)
 ```
 
 ---
 
 ## Checklists
 
-### ✅ Pre-Docker Checklist
+### ✅ Pre-Start
 
-- [ ] Docker daemon running: `docker ps` succeeds
-- [ ] docker-compose installed: `docker compose --version` shows v2+
-- [ ] .env file exists and populated: `ls .env && grep "^[A-Z]" .env | wc -l` > 5
-- [ ] DATABASE_URL set correctly: `grep DATABASE_URL .env | grep -v pooler`
-- [ ] Ports available:
-  - [ ] 5432 (PostgreSQL): `lsof -i :5432` returns empty
-  - [ ] 6379 (Redis): `lsof -i :6379` returns empty
-  - [ ] 9092 (Kafka): `lsof -i :9092` returns empty
-  - [ ] 9001 (MinIO): `lsof -i :9001` returns empty
-  - [ ] 8080 (Backend): `lsof -i :8080` returns empty
-  - [ ] 8088 (Agent Service): `lsof -i :8088` returns empty
-  - [ ] 5173 (Frontend): `lsof -i :5173` returns empty
+- [ ] Docker daemon running (`docker ps` succeeds)
+- [ ] `docker compose version` shows v2+
+- [ ] Env file present and populated with all required vars
+- [ ] All ports the stack needs are free on the host
 
-### ✅ Post-Startup Verification
+### ✅ Post-Startup
 
-- [ ] All containers running: `docker compose ps` shows all RUNNING
-- [ ] PostgreSQL responsive: `docker compose exec db psql -U postgres -c "SELECT 1"`
-- [ ] Redis responsive: `docker compose exec redis redis-cli PING` returns PONG
-- [ ] Kafka broker ready: Check logs for "started" message
-- [ ] MinIO accessible: `curl http://localhost:9001/minio/health` returns 200
-- [ ] No critical errors: `docker compose logs | grep -i "error\|failed\|exception" | wc -l` < 3
+- [ ] `docker compose ps` shows every service running/healthy
+- [ ] Each stateful service (DB, cache, broker, object store) responds when probed directly
+- [ ] No more than a couple of error-level lines in the aggregate logs at this point
 
-### ✅ Before Running Full Stack
+### ✅ Before Relying on the Full Stack
 
-- [ ] Backend & Agent-Service images built: `docker images | grep careerpilot`
-- [ ] No dangling images: `docker images --filter "dangling=true"` returns empty
-- [ ] Disk space available: `docker system df | grep "Local Volumes"`
-- [ ] Network configured: `docker network ls | grep careerpilot`
+- [ ] All project images actually built (`docker images | grep <project>`)
+- [ ] No dangling images left over from prior builds
+- [ ] Sufficient free disk space (`docker system df`)
 
 ---
 
 ## Troubleshooting
 
-### ❌ Issue: "docker compose: command not found"
+### ❌ "docker compose: command not found"
 
-**Cause**: docker-compose not installed or using old version
+Means Docker Compose v1 (the standalone `docker-compose` binary) or no compose plugin at all.
+Install/upgrade Docker Desktop or the `docker-compose-plugin` package to get v2 (`docker
+compose`, no hyphen).
 
-**Fix**:
+### ❌ Port Already Allocated
+
 ```bash
-# Check version
-docker compose --version
-# Should show v2.x or higher
-
-# On Linux, may need to install as plugin
-docker compose version  # If this works, you have v2
-
-# On Windows/Mac, install Docker Desktop (includes compose v2)
-# https://www.docker.com/products/docker-desktop
+docker ps                       # see if a leftover container holds it
+lsof -i :<port>                 # see if a host process holds it (Linux/Mac)
 ```
+Stop whichever owns it, then retry.
 
----
+### ❌ Container Exits Immediately
 
-### ❌ Issue: Port Already in Use (EADDRINUSE)
-
-**Error message**: `Bind for 0.0.0.0:5432 failed: port is already allocated`
-
-**Fix**:
 ```bash
-# Find process on port
-lsof -i :5432
-
-# Kill it
-kill -9 <PID>
-
-# Or stop conflicting docker container
-docker ps | grep 5432
-docker stop <container-id>
-
-# Then retry
-docker compose up -d
-```
-
----
-
-### ❌ Issue: Container Exits Immediately
-
-**Status**: Shows "Exited (1)" instead of "Up"
-
-**Debug**:
-```bash
-# Check logs for error
 docker compose logs <service>
-
-# May show config error, missing env var, or connection failure
 ```
+Almost always one of: a missing/empty required env var, a port conflict, a missing
+volume/mount the entrypoint expects, or a dependency (DB/broker) not ready yet — add a
+`depends_on` health condition or a startup retry instead of a fixed `sleep`.
 
-**Common causes**:
-1. Missing environment variable → Add to .env
-2. Port conflict → Kill process on that port
-3. Missing volume → Check docker-compose.yml
-4. Database not ready → Wait and retry: `sleep 10 && docker compose up -d`
+### ❌ A Service Can't Reach Another Service
 
----
+Inside the compose network, services reach each other by **service name**, not `localhost` —
+`http://backend:8080`, not `http://localhost:8080`, when calling from inside another
+container.
 
-### ❌ Issue: PostgreSQL Connection Refused
+### ❌ Out of Disk Space
 
-**Error**: `psql: error: connection to server at "localhost" ... refused`
-
-**Likely cause**: DATABASE_URL uses wrong format or PostgreSQL not responding
-
-**Fix**:
 ```bash
-# Verify DATABASE_URL is in Neon DIRECT format (no -pooler)
-grep DATABASE_URL .env | grep -v "^#"
-
-# If local Postgres in Docker:
-docker compose logs db | tail -20  # Look for "ready to accept"
-
-# Wait longer and retry
-sleep 30
-docker compose exec db psql -U postgres -c "SELECT 1"
-```
-
----
-
-### ❌ Issue: Kafka Broker Not Ready
-
-**Error in logs**: `UnknownHostException: kafka`, `Connection refused`
-
-**Fix**:
-```bash
-# Check Kafka running
-docker compose ps | grep kafka
-
-# View Kafka logs
-docker compose logs kafka | tail -30
-
-# Restart Kafka
-docker compose restart zookeeper kafka
-
-# Wait and verify
-sleep 10
-docker compose exec kafka kafka-topics --bootstrap-server localhost:9092 --list
-```
-
----
-
-### ❌ Issue: Redis Connection Timeout
-
-**Error**: `Connection refused: (111, 'Connection refused')`
-
-**Fix**:
-```bash
-# Check Redis container
-docker compose ps | grep redis
-
-# Restart it
-docker compose restart redis
-
-# Verify
-docker compose exec redis redis-cli PING
-```
-
----
-
-### ❌ Issue: Out of Disk Space
-
-**Error**: `no space left on device`
-
-**Fix**:
-```bash
-# Check disk usage
 docker system df
-
-# Remove old images/containers/volumes
 docker system prune -a
-
-# If still needed, remove specific items
-docker volume rm <volume-id>
-docker image rm <image-id>
-
-# May need to clean up outside Docker
-# Check disk: df -h
 ```
+If the host disk itself (not just Docker's data) is full, that needs cleaning up separately.
 
----
+### ❌ Container Killed with OOMKilled
 
-### ❌ Issue: Container Logs Show "OOMKilled"
+Check `docker stats` for actual usage, then raise the memory limit Docker Desktop is allowed,
+or set an explicit `mem_limit` per service in `docker-compose.yml` if one service is the
+runaway.
 
-**Cause**: Container ran out of memory
+### ❌ Build Fails Partway Through
 
-**Fix**:
 ```bash
-# Check resource usage
-docker stats
-
-# Increase Docker memory limit
-# Settings → Resources → Memory Slider
-# Recommend: 4GB minimum, 8GB for smooth operation
-
-# Or limit specific service in docker-compose.yml:
-# services:
-#   backend:
-#     mem_limit: 2g
+docker compose build --no-cache <service> 2>&1 | tail -50
 ```
-
----
-
-### ❌ Issue: MinIO Console Won't Load
-
-**Error**: http://localhost:9001 shows error or blank page
-
-**Fix**:
-```bash
-# Check MinIO running
-docker compose ps | grep minio
-
-# Check logs
-docker compose logs minio | tail -20
-
-# Verify it's responding
-curl http://localhost:9001/minio/health
-
-# Restart
-docker compose restart minio
-
-# Default credentials: minioadmin / minioadmin
-```
-
----
-
-### ❌ Issue: "Unable to reach agent-service"
-
-**Error from backend logs**: `Unable to reach agent service`
-
-**Fix**:
-```bash
-# Check agent-service running
-docker compose ps | grep agent-service
-
-# Verify it's responding
-curl http://localhost:8088/health
-
-# Check backend has correct URL
-docker compose exec backend env | grep AGENT_SERVICE_URL
-# Should be: AGENT_SERVICE_URL=http://agent-service:8088
-
-# If using localhost instead of agent-service:
-# Edit .env or docker-compose.yml
-# backend can't reach localhost:8088, must use service name
-```
+Read the actual failing step — language-toolchain errors (Maven/npm/pip) show up here, not in
+`docker compose up` output.
 
 ---
 
 ## Tips & Best Practices
 
-1. **Always set env-file**: `docker compose --env-file .env up -d` (not optional)
-2. **Watch logs during startup**: `docker compose logs -f` to see initialization
-3. **Reset on major changes**: `docker compose down -v && docker compose up -d`
-4. **Backup data before down -v**: Volumes are deleted, data is lost
-5. **Use service names internally**: From backend, reach agent-service at `http://agent-service:8088`, not `localhost`
-6. **Monitor disk**: Large databases grow fast, check `docker system df` weekly
-7. **Rebuild after code changes**: Always rebuild images: `docker compose build --no-cache <service>`
-
----
-
-**Status**: 🟢 Ready  
-**Last Updated**: 2026-06-20
+1. Always pass `--env-file` explicitly when starting — compose auto-loads `.env` for variable
+   substitution in the YAML, but services still need vars injected via the `environment:`
+   block, so don't assume one implies the other.
+2. Watch logs during the first startup after any change — silent failures show up there before
+   anywhere else.
+3. `down -v` deletes volumes — never run it against anything with data you care about without
+   a backup.
+4. Rebuild explicitly after dependency/code changes (`--no-cache` if you suspect stale layers)
+   — compose doesn't automatically know your source changed.
+5. Service-to-service traffic uses service names; only host-to-container traffic uses
+   `localhost` + the published port.

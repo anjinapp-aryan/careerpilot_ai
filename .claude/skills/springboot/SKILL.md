@@ -1,58 +1,43 @@
 # Spring Boot Backend Skill
 
 ## Purpose
-Manage Spring Boot 4 / Java 25 backend development: run locally, debug, test, build JAR, fix common issues.
+Run, test, debug, and build a Spring Boot service from the command line. Generic to any
+Spring Boot project — repository-specific commands (exact env vars, ports, service names)
+live in that repo's CLAUDE.md / project memory, not here.
 
 ---
 
 ## Workflows
 
-### Workflow: Run Backend Locally (Development Mode)
+### Workflow: Run Locally (Development Mode)
 
 ```bash
-cd backend
+cd <service-dir>
 
-# First time or after pom.xml changes
+# First time, or after dependency changes
 mvn clean compile
 
 # Run application
 mvn spring-boot:run
 ```
 
-**Prerequisites**:
-- Docker services running: `docker compose ps`
-- PostgreSQL accessible: `psql $DATABASE_URL -c "SELECT 1"`
-- Kafka, Redis, MinIO up and responding
-- `.env` file with: `JWT_SECRET` (≥32 chars), `GEMINI_API_KEY`
+**Prerequisites**: any external dependencies the app needs (database, message broker, cache,
+object storage) must be reachable, and required env vars / `application.yml` properties set —
+check the project's own docs for the specific list.
 
-**Expected startup output**:
-```
-[main] INFO ... Started CareerPilotBackendApplication in X.XXX seconds
-[main] INFO ... Server started on port 8080
-```
+**Expected startup signal**: a log line like `Started <Application> in X.XXX seconds`.
 
-**Verify running**:
-```bash
-curl http://localhost:8080/api/diagnostics/ai
-# Returns 200 OK with provider health
-```
+**Verify running**: hit any unauthenticated health/info endpoint the app exposes (Actuator's
+`/actuator/health` if enabled, or a custom diagnostics endpoint).
 
 ---
 
-### Workflow: Run Single Test
+### Workflow: Run a Single Test
 
 ```bash
-cd backend
-
-# Run specific test
 mvn -Dtest=ClassName#methodName test
-
-# Examples
-mvn -Dtest=AuthServiceTest#testRegisterUser test
-mvn -Dtest=WorkflowServiceTest test  # All tests in class
-
-# Show output
-mvn test -X  # Debug mode (verbose)
+mvn -Dtest=ClassName test          # all tests in one class
+mvn test -X                         # verbose/debug output
 ```
 
 ---
@@ -60,78 +45,46 @@ mvn test -X  # Debug mode (verbose)
 ### Workflow: Run All Tests
 
 ```bash
-cd backend
 mvn clean test
-```
-
-**Skip tests** (if needed):
-```bash
-mvn -DskipTests clean compile
+mvn -DskipTests clean compile       # skip tests when you just need to compile
 ```
 
 ---
 
-### Workflow: Build Production JAR
+### Workflow: Build a Deployable JAR
 
 ```bash
-cd backend
-
-# Clean and build
 mvn clean package -DskipTests
-
-# Output: backend/target/careerpilot-backend-0.1.0.jar
+# Output: target/<artifact>-<version>.jar
 ```
 
 ---
 
-### Workflow: Debug Mode (Attach IDE Debugger)
+### Workflow: Attach a Remote Debugger
 
 ```bash
-cd backend
-
-# Start with debug port 5005
 mvn -Dspring-boot.run.jvmArguments="-Xdebug -Xrunjdwp:transport=dt_socket,server=y,suspend=n,address=5005" spring-boot:run
 ```
 
-**In IDE**:
-- IntelliJ: Run → Edit Configurations → Add Remote → Host: localhost, Port: 5005
-- VS Code: Install "Debugger for Java", create launch.json with:
-```json
-{
-  "type": "java",
-  "name": "Attach to Backend",
-  "request": "attach",
-  "hostName": "localhost",
-  "port": 5005
-}
-```
+IntelliJ: Run → Edit Configurations → Add Remote JVM Debug → host `localhost`, port `5005`.
+VS Code: install "Debugger for Java", create a `launch.json` entry with `"request": "attach"`,
+`"hostName": "localhost"`, `"port": 5005`.
 
 ---
 
-### Workflow: Check Dependencies
+### Workflow: Inspect Dependencies
 
 ```bash
-cd backend
-
-# Show dependency tree
 mvn dependency:tree
-
-# Find conflicts
-mvn dependency:tree -DoutputFile=dependencies.txt
-grep "version conflicts" dependencies.txt
+mvn dependency:tree -Dverbose | grep -i "conflict"
 ```
 
 ---
 
-### Workflow: Clean & Rebuild (Full Reset)
+### Workflow: Clean & Rebuild
 
 ```bash
-cd backend
-
-# Remove all build artifacts
 rm -rf target
-
-# Full clean build
 mvn clean compile
 ```
 
@@ -139,233 +92,98 @@ mvn clean compile
 
 ## Checklists
 
-### ✅ Pre-Run Checklist
+### ✅ Pre-Run
 
-- [ ] Docker services running: `docker compose ps` (all RUNNING)
-- [ ] PostgreSQL accessible: `psql $DATABASE_URL -c "SELECT 1"` returns 1
-- [ ] Kafka broker health: `docker compose logs kafka | grep "started"`
-- [ ] Redis responsive: `docker compose exec redis redis-cli PING` returns PONG
-- [ ] MinIO up: `curl http://localhost:9001/minio/health` returns 200
-- [ ] Maven 3.9+ installed: `mvn -v` shows 3.9 or higher
-- [ ] Java 25 installed: `java -version` shows 25.x
-- [ ] `.env` file exists: `ls .env`
-- [ ] `JWT_SECRET` set and ≥32 chars: `wc -c <(grep JWT_SECRET .env | cut -d= -f2)`
-- [ ] `GEMINI_API_KEY` set: `grep GEMINI_API_KEY .env | grep -v "^#"`
-- [ ] `DATABASE_URL` uses DIRECT endpoint (no -pooler): `grep DATABASE_URL .env | grep -v pooler`
-- [ ] Port 8080 free: `lsof -i :8080` returns empty
+- [ ] External dependencies (DB, broker, cache, etc.) reachable
+- [ ] Required env vars / config properties set and non-empty
+- [ ] Maven 3.9+: `mvn -v`
+- [ ] Correct JDK on PATH: `java -version` matches the project's required version
+- [ ] Target port free: nothing else already bound to the app's configured port
 
 ### ✅ Post-Startup Verification
 
-- [ ] App started: Last logs show "Started CareerPilotBackendApplication"
-- [ ] Health check responds: `curl http://localhost:8080/api/diagnostics/ai` returns 200 OK
-- [ ] No database errors: Logs don't show "Connection refused" or "Connection timeout"
-- [ ] No migration errors: Logs don't show "Flyway migration failed"
-- [ ] Kafka topics ready: Logs show "Cluster metadata update completed"
-- [ ] Last 50 logs clean: `docker compose logs backend | tail -50 | grep -i "error" | wc -l` = 0
+- [ ] Startup log shows the app actually started (no exception stack trace at the end)
+- [ ] Health/diagnostics endpoint responds 200
+- [ ] No "connection refused"/timeout errors for any dependency in the first 50 log lines
+- [ ] No migration-tool errors (Flyway/Liquibase) if the project uses one
 
-### ✅ Before Committing Code
+### ✅ Before Committing
 
-- [ ] Code compiles: `mvn clean compile` succeeds
-- [ ] Tests pass: `mvn test` shows all green
-- [ ] No new warnings: `mvn clean compile 2>&1 | grep -i "warning" | wc -l` = 0
-- [ ] Import statements clean: No unused imports
-- [ ] Code follows conventions: Package hierarchy is `ai.careerpilot.*`
-- [ ] DTOs used for REST: No entities returned from controllers
-- [ ] Error handling in place: No blank catch blocks
+- [ ] `mvn clean compile` succeeds with no new warnings
+- [ ] `mvn test` green
+- [ ] No unused imports / dead code in changed files
+- [ ] Controllers return response DTOs, not JPA entities or raw `JsonNode` — Jackson cannot
+      reliably serialize entity/JsonNode graphs and this is one of the most common Spring
+      Boot REST bugs
+- [ ] No blank/swallowed `catch` blocks
 
 ---
 
 ## Troubleshooting
 
-### ❌ Issue: Port 8080 Already in Use
+### ❌ Port Already in Use
 
-**Error message**: `Address already in use`
+`Address already in use` → find and kill the process holding the port, or change
+`server.port` in `application.yml`.
 
-**Fix**:
+### ❌ Database Connection Refused / Auth Failed
+
+1. Confirm the connection string/host is reachable from this machine (not just from inside a
+   container network).
+2. Test the connection directly with the DB's own CLI client before blaming the app.
+3. If using a pooled/proxy endpoint (e.g. a serverless DB's pooler), some tools (Flyway,
+   prepared-statement-heavy drivers) break under transaction-mode pooling — try the direct
+   endpoint.
+
+### ❌ Migration Tool Error (Flyway/Liquibase)
+
+Usually means the schema already has objects the migration tool doesn't know about (no
+migration-history table yet). Most migration tools have a "baseline on first run" option —
+check if it's enabled. As a last resort in a throwaway dev environment, drop and recreate the
+schema, never in anything with real data.
+
+### ❌ Message Broker / Cache Connection Failed
+
+Confirm the broker/cache container or service is actually running and that the app's
+configured host:port matches how it's reachable from where the app is running (a container
+talking to another container needs the service name, not `localhost`).
+
+### ❌ OutOfMemoryError
+
 ```bash
-# Find process on port 8080
-lsof -i :8080
-
-# Kill it
-kill -9 <PID>
-
-# Or change port in application.yml
-# server.port: 9090
-```
-
----
-
-### ❌ Issue: PostgreSQL Connection Failed
-
-**Error message**: `Connection refused`, `FATAL: password authentication failed`
-
-**Checks**:
-1. Verify DATABASE_URL uses DIRECT endpoint: `echo $DATABASE_URL | grep -v pooler`
-2. Test connection: `psql $DATABASE_URL -c "SELECT 1"`
-3. Check Neon status: Log into Neon dashboard, verify project is active
-
-**Fixes**:
-```bash
-# If using local Postgres, verify running
-docker compose exec db psql -U postgres -c "SELECT 1"
-
-# Recreate connection
-docker compose down && docker compose up -d db
-# Wait 10 seconds for startup
-sleep 10
-
-# Then start backend
-mvn spring-boot:run
-```
-
----
-
-### ❌ Issue: Flyway Migration Error
-
-**Error message**: `Flyway migration failed`, `Migration V1__init.sql failed`
-
-**Likely cause**: Schema already exists but missing migration history
-
-**Fix**:
-```bash
-# Check current schema state
-psql $DATABASE_URL -c "\dt"
-
-# Flyway will baseline on first run (flyway.baseline-on-migrate: true is set)
-# Just restart
-mvn spring-boot:run
-
-# If still failing, reset database
-psql $DATABASE_URL -c "DROP SCHEMA IF EXISTS public CASCADE;"
-psql $DATABASE_URL -c "CREATE SCHEMA public;"
-# Then restart backend
-```
-
----
-
-### ❌ Issue: Kafka Connection Failed
-
-**Error message**: `Cannot connect to Kafka broker`, `UnknownHostException`
-
-**Fix**:
-```bash
-# Check Kafka running
-docker compose ps | grep kafka
-
-# If not running
-docker compose up -d kafka zookeeper
-
-# Check topic creation
-docker compose exec kafka kafka-topics --bootstrap-server localhost:9092 --list
-
-# Verify from backend perspective
-# Check application.yml for spring.kafka.bootstrap-servers: kafka:9092
-```
-
----
-
-### ❌ Issue: OutOfMemory Error
-
-**Error message**: `Exception in thread "main" java.lang.OutOfMemoryError`
-
-**Fix**:
-```bash
-# Increase Maven heap
 export MAVEN_OPTS="-Xmx2g"
-
-# Or for spring-boot:run
-mvn -DargLine="-Xmx2g" spring-boot:run
 ```
+or pass `-Xmx` via the run command's JVM args.
 
----
+### ❌ "Cannot Find Symbol" After Adding a New Class/DTO
 
-### ❌ Issue: Compilation Error: Cannot Find Symbol
-
-**Error message**: `[ERROR] cannot find symbol - class AgentRunResponse`
-
-**Likely cause**: New DTO file not compiled
-
-**Fix**:
 ```bash
-cd backend
-
-# Clean and recompile
 rm -rf target
 mvn clean compile
-
-# If still failing, verify file exists
-ls src/main/java/ai/careerpilot/api/dto/AgentServiceDtos.java
-
-# Check git status
-git status | grep dto
 ```
+Usually a stale incremental-compile artifact, not a real code error — verify the file is
+actually saved and tracked (`git status`) before debugging further.
 
----
+### ❌ Jackson "Type Definition Error" on a JSON Field
 
-### ❌ Issue: "Type definition error: JsonNode"
+Almost always means a controller is returning a JPA entity or a raw `JsonNode`/`ObjectNode`
+field directly. Fix: return a response record/DTO, parsing any JSON-typed entity columns into
+a `Map`/POJO before constructing the DTO.
 
-**Error message**: In API response: `Type definition error: [simple type, class com.fasterxml.jackson.databind.JsonNode]`
+### ❌ Application Hangs at Startup With No New Logs
 
-**Cause**: Returning JsonNode instead of DTO from REST endpoint
-
-**Fix**: See P0_WORKFLOW_FIX.md for details
-- Ensure all controllers return DTOs (e.g., `WorkflowRunResponse`, not `JsonNode`)
-- Check `AgentServiceClient` is using `AgentRunResponse` not `JsonNode`
-- Rebuild: `mvn clean compile`
-
----
-
-### ❌ Issue: Application Hangs at Startup
-
-**Symptoms**: Startup freezes, no new logs for 2+ minutes
-
-**Likely causes**:
-1. Waiting for database connection
-2. Waiting for Kafka broker
-3. Waiting for external service response
-
-**Debug**:
-```bash
-# Run with debug output
-mvn -X spring-boot:run 2>&1 | tee debug.log
-
-# Find last log entry
-tail -20 debug.log
-
-# Common culprits
-docker compose logs db        # Database
-docker compose logs kafka      # Kafka
-docker compose logs redis      # Redis
-```
-
----
-
-### ❌ Issue: High Memory Usage / Slow Compilation
-
-**Fix**:
-```bash
-# Skip tests
-mvn -DskipTests compile
-
-# Use offline mode (if dependencies cached)
-mvn -o -DskipTests compile
-
-# Increase Maven heap
-export MAVEN_OPTS="-Xmx2g -XX:+UseG1GC"
-```
+Run with `mvn -X spring-boot:run` for verbose output and check whatever the last log line was
+waiting on — almost always a slow or unreachable dependency (DB, broker, external API call
+during a `@PostConstruct`/`ApplicationRunner`).
 
 ---
 
 ## Tips & Best Practices
 
-1. **Always use `mvn clean compile`** when changing dependencies or base classes
-2. **Keep tests running in background**: `watch -n 5 'mvn test'`
-3. **Check logs early**: First sign of trouble is in logs, not exceptions
-4. **Database state matters**: Clean DB between major schema changes: `docker compose down -v`
-5. **PORT conflicts**: Multiple instances of backend will fail. Kill old ones: `pkill -f "spring-boot:run"`
-6. **Rebuild Docker image**: After pom.xml changes, rebuild: `docker compose build --no-cache backend`
-
----
-
-**Status**: 🟢 Ready  
-**Last Updated**: 2026-06-20
+1. Run `mvn clean compile` after any dependency or base-class change — incremental compiles
+   can hide breakage.
+2. Logs are the first signal of trouble — read them before reading the stack trace.
+3. Kill stray `spring-boot:run` processes before starting a new one (`pkill -f spring-boot:run`
+   on Unix, or find/kill the PID on Windows) — duplicate instances fight over the same port.
+4. Prefer fixing the root cause over `-DskipTests`; only skip tests for builds where tests
+   genuinely aren't relevant (e.g. a throwaway compile check).

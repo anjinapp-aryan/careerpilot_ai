@@ -73,6 +73,71 @@
 - Phase 1 scope: linear happy path only
 - Future: add add_conditional_edges from human_approval if needed
 
+**Superseded by**: "Human Approval Gate: Conditional Routing After Decision" (below, 2026-06-21).
+A rejected run running `application_tracking` anyway was a real defect, not just a Phase-1
+simplification — the original rationale (avoid branching complexity) no longer outweighs
+correctness. The rest of the graph is still a single linear chain; only the one edge changed.
+
+---
+
+## Human Approval Gate: Conditional Routing After Decision
+
+**Decision** (2026-06-21): Added `add_conditional_edges` from `human_approval`, routing to
+`application_tracking` on approval or to `END` on rejection (`_route_after_approval`).
+
+**Rationale**:
+- A rejected run was previously still running `application_tracking` — silently continuing
+  past a gate the user explicitly stopped at. This was a defect, not a deferred feature.
+- The fix is scoped to exactly one edge — the rest of the graph remains linear, preserving the
+  "Phase 1: simple sequential chain" intent everywhere else.
+
+**Why Not Broader Branching**:
+- Still Phase 1 scope: this is the one place a binary human decision needs to fork the graph.
+  No other node has a similar decision point yet.
+
+---
+
+## Workflow Resume: Dual-Layer State Guard Before Mutating
+
+**Decision** (2026-06-21): Both the agent-service (`/runs/resume`) and the backend
+(`WorkflowService.resume()`) independently re-check that a run is still parked at
+`human_approval` before acting on an approve/reject decision, each returning HTTP 409 if not.
+
+**Rationale**:
+- A second, stale resume call (e.g. double-click, or approve-after-reject) was silently
+  corrupting a run's terminal state — the only way to prevent it is to validate current state
+  immediately before the mutation, at every layer that can independently receive the call.
+- Checking only in the backend isn't sufficient (the agent-service endpoint could be called
+  directly); checking only in the agent-service isn't sufficient either (the backend persists
+  its own `WorkflowRun.status`, which must also stay consistent).
+- Reuses `deriveDisplayStatus(WorkflowRun)` as the single source of truth for "is this run
+  awaiting approval," rather than introducing a second status computation.
+
+**Why Not Database-Level Locking**:
+- Phase 1 scope: the race is between a user's repeated clicks, not concurrent writers across
+  processes. A derived-status guard plus a frontend `isPending` lock is the smallest fix that
+  closes the actual observed defect; row-level locking would be solving a concurrency problem
+  this system doesn't yet have.
+
+---
+
+## Audit Trail: JSON State Field, Not a Schema Migration
+
+**Decision** (2026-06-21): Approval/rejection audit fields (`approved_by`, `approved_at`,
+`rejected_by`, `rejected_at`, `human_feedback`) are stamped into the existing `workflow_runs.state`
+JSONB blob, not added as new columns via a Flyway migration.
+
+**Rationale**:
+- These fields are read-mostly, always read alongside the rest of a run's state, and don't need
+  to be queried/indexed independently — extending the existing blob is strictly smaller than a
+  schema migration for the same outcome.
+- Keeps the change scoped to `WorkflowService` + the DTO; no new Flyway version, no Hibernate
+  entity changes.
+
+**Alternative Rejected**: New `approved_by`/`rejected_by`/etc. columns on `workflow_runs` (a
+Flyway `V3__*.sql` migration). Rejected because nothing in this phase needs to filter/sort runs
+by approver — if that need appears later, promote these from JSON keys to real columns then.
+
 ---
 
 ## Multi-Tenancy: Manual userId Checks

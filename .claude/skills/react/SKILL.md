@@ -1,451 +1,186 @@
 # React Frontend Skill
 
 ## Purpose
-Manage React 18 + Vite + TypeScript frontend: run dev server, build, test, type-check, debug.
+Run, build, type-check, and debug a React + TypeScript frontend (Vite or similar). Generic to
+any React project — exact ports, env var names, and API base URLs belong in that repo's own
+docs, not here.
 
 ---
 
 ## Workflows
 
-### Workflow: Start Development Server
+### Workflow: Start the Dev Server
 
 ```bash
-cd frontend
-
-# First time: install dependencies
-npm install
-
-# Start dev server
+npm install   # first time, or after dependency changes
 npm run dev
 ```
 
-**Expected output**:
-```
-✓ built in Xs
-➜  Local:   http://localhost:5173/
-➜  press h to show help
-```
+**Verify**: open the printed local URL in a browser; check the DevTools console (F12) is free
+of errors.
 
-**Verify running**:
-- Open http://localhost:5173 in browser
-- Should see login page (if not authenticated)
-- No console errors (F12 → Console tab)
-
-**Prerequisites**:
-- Node.js 18+ installed: `node -v`
-- npm 9+ installed: `npm -v`
-- Backend running on http://localhost:8080
-- No port 5173 conflicts
+**Prerequisites**: Node 18+, npm 9+ (`node -v`, `npm -v`); any backend API the app calls must
+be reachable.
 
 ---
 
 ### Workflow: Build for Production
 
 ```bash
-cd frontend
-
-# Install dependencies (if needed)
-npm install
-
-# Build optimized bundle
-npm run build
-
-# Expected output: dist/ folder with optimized JS/CSS
-ls -lah dist/
-
-# Test production build locally
-npm run preview
-
-# Open http://localhost:4173 to view
+npm run build          # outputs an optimized bundle (commonly dist/ or build/)
+npm run preview         # serve the production build locally, if the toolchain supports it
 ```
 
 ---
 
-### Workflow: Type-Check TypeScript
+### Workflow: Type-Check
 
 ```bash
-cd frontend
-
-# Check for TypeScript errors (no emit)
 npx tsc --noEmit
-
-# Show detailed errors
-npx tsc --noEmit --pretty false | head -20
-
-# Check specific file
-npx tsc src/lib/api.ts --noEmit
+npx tsc --noEmit --pretty false | head -20    # plain output for grepping
 ```
 
 ---
 
-### Workflow: Format Code (Prettier)
+### Workflow: Format / Lint
 
 ```bash
-cd frontend
-
-# Format all files
-npx prettier --write .
-
-# Format specific file
-npx prettier --write src/components/Dashboard.tsx
-
-# Check formatting without writing
 npx prettier --check .
+npx prettier --write .
+npm run lint            # only if the project has a lint script configured
 ```
 
 ---
 
-### Workflow: Debug in Browser
+### Workflow: Debug in the Browser
 
-```bash
-cd frontend
+1. Open DevTools (F12) → Sources tab → set breakpoints under the source tree.
+2. Interact with the UI to hit the breakpoint, then step through.
 
-# Dev server already running (npm run dev)
-
-# In browser
-1. Press F12 to open DevTools
-2. Go to Sources tab
-3. Set breakpoints in source files (src/)
-4. Interact with UI to trigger breakpoints
-5. Step through code using debugger
-```
-
-**VS Code debugging**:
-1. Install extension: "Debugger for Chrome"
-2. Create `.vscode/launch.json`:
-```json
-{
-  "version": "0.2.0",
-  "configurations": [
-    {
-      "type": "chrome",
-      "request": "attach",
-      "name": "Attach to Chrome",
-      "port": 9222,
-      "pathMapping": {
-        "/": "${workspaceRoot}",
-        "/src": "${workspaceRoot}/src"
-      }
-    }
-  ]
-}
-```
-
-3. Start Chrome with remote debugging: `google-chrome --remote-debugging-port=9222`
-4. Open http://localhost:5173
-5. In VS Code: Run → Start Debugging
+**VS Code**: install a JS/TS debugger extension, launch Chrome/Edge with
+`--remote-debugging-port=9222`, then attach via a `launch.json` entry with
+`"request": "attach"` and matching `pathMapping`.
 
 ---
 
-### Workflow: Check Dependencies
+### Workflow: Inspect / Audit Dependencies
 
 ```bash
-cd frontend
-
-# List installed packages
 npm list
-
-# Check for updates
 npm outdated
-
-# Security audit
 npm audit
-
-# Fix vulnerabilities
 npm audit fix
 ```
 
 ---
 
-### Workflow: Clean Build (Full Reset)
+### Workflow: Clean Reinstall
 
 ```bash
-cd frontend
-
-# Remove node_modules and lock file
 rm -rf node_modules package-lock.json
-
-# Reinstall
 npm install
-
-# Rebuild
 npm run build
-```
-
----
-
-### Workflow: Test Specific Component
-
-```bash
-cd frontend
-
-# Find component
-find src -name "*Dashboard*"
-
-# Type-check it
-npx tsc src/pages/Dashboard.tsx --noEmit
-
-# Build and preview to test
-npm run build
-npm run preview
 ```
 
 ---
 
 ## Checklists
 
-### ✅ Pre-Dev Checklist
+### ✅ Pre-Dev
 
-- [ ] Node.js 18+: `node -v` shows 18.x or higher
-- [ ] npm 9+: `npm -v` shows 9.x or higher
-- [ ] Backend running: `curl http://localhost:8080/api/diagnostics/ai` returns 200
-- [ ] .env.local exists: `ls .env.local`
-- [ ] `VITE_API_BASE_URL` set in .env.local: `grep VITE_API_BASE_URL .env.local`
-- [ ] Port 5173 free: `lsof -i :5173` returns empty
-- [ ] node_modules present: `ls node_modules | wc -l` > 100
+- [ ] Node 18+, npm 9+
+- [ ] Backend (if any) reachable and responding
+- [ ] Local env file present with required `VITE_*`/`REACT_APP_*` vars set
+- [ ] Dev server port free
+- [ ] `node_modules` actually installed (not just `package-lock.json`)
 
-### ✅ Post-Server-Start Verification
+### ✅ Post-Start Verification
 
-- [ ] Dev server started: logs show "Local: http://localhost:5173/"
-- [ ] Page loads: No white screen, see UI elements
-- [ ] No console errors: F12 → Console tab is clean
-- [ ] API calls working: Network tab shows 200 responses from /api/ endpoints
-- [ ] Styles loaded: Page doesn't look broken/unstyled
+- [ ] Dev server reports a local URL with no startup errors
+- [ ] Page renders (no blank/white screen)
+- [ ] Console is clean of errors
+- [ ] Network tab shows successful (2xx) API calls, if the app calls an API
 
-### ✅ Before Committing Code
+### ✅ Before Committing
 
-- [ ] TypeScript passes: `npx tsc --noEmit` succeeds
-- [ ] Builds successfully: `npm run build` completes without errors
-- [ ] No ESLint errors: If using linter: `npm run lint` passes
-- [ ] Component tested: Manually tested in browser
-- [ ] No unused imports: Check for red squiggles in editor
-- [ ] Code formatted: Run `npx prettier --write .`
-- [ ] API calls use lib/api.ts: No hardcoded HTTP URLs
-- [ ] No console.log() in production code: Search for `console.log`
+- [ ] `npx tsc --noEmit` passes
+- [ ] `npm run build` completes without errors
+- [ ] Lint passes, if configured
+- [ ] No `console.log` left in changed files
+- [ ] No unused imports
+- [ ] API calls go through the project's shared HTTP client, not ad-hoc `fetch()`/hardcoded URLs
 
-### ✅ Before Creating PR
+### ✅ Before Opening a PR
 
-- [ ] Production build works: `npm run build && npm run preview`
-- [ ] Type checking passes: `npx tsc --noEmit`
-- [ ] No dead code
-- [ ] Error boundaries in place for new features
-- [ ] Responsive design tested (mobile, tablet, desktop)
+- [ ] Production build verified (`npm run build` + preview, if available)
+- [ ] Type-checking passes
+- [ ] Manually exercised in a browser, including the edge cases the change affects
+- [ ] Responsive at common breakpoints if the change touches layout
 
 ---
 
 ## Troubleshooting
 
-### ❌ Issue: Port 5173 Already in Use
+### ❌ Port Already in Use
 
-**Error message**: `listen EADDRINUSE: address already in use :::5173`
+`EADDRINUSE` → find/kill the process on that port, or pass an alternate port flag to the dev
+server command.
 
-**Fix**:
+### ❌ API Calls Failing (CORS / 401 / Network)
+
+1. Confirm the backend is actually reachable (curl/ping it directly).
+2. Check the Network tab: actual request URL, status code, response body.
+3. CORS errors mean the *backend's* CORS config needs the frontend's origin allowed — this
+   isn't fixable from the frontend.
+4. 401s usually mean a missing/expired auth token — check where the app stores it (commonly
+   localStorage or a state store) and whether it's actually being attached to requests.
+
+### ❌ TypeScript Errors
+
 ```bash
-# Find process
-lsof -i :5173
-
-# Kill it
-kill -9 <PID>
-
-# Or use different port
-npm run dev -- --port 3000
+npx tsc --noEmit --pretty false <path/to/file>
 ```
+Common causes: missing `@types/*` package, an unhandled `null`/`undefined`, importing the
+wrong type from a module with multiple exports of similar names.
 
----
+### ❌ `npm install` Fails (ERESOLVE / Peer Conflicts)
 
-### ❌ Issue: API Calls Failing (CORS, 401, Network)
-
-**Error in browser console**: `Access to XMLHttpRequest blocked by CORS policy`
-
-**Checks**:
-1. Backend running: `curl http://localhost:8080/api/diagnostics/ai`
-2. Check Network tab in DevTools:
-   - What is the actual request URL?
-   - What is the response status code?
-   - What is the response body?
-
-**Fixes**:
 ```bash
-# If backend not responding
-cd backend && mvn spring-boot:run
-
-# If CORS error: Check backend CORS config
-grep -r "CrossOrigin\|allowedOrigins" backend/src
-
-# If 401 Unauthorized: Check JWT token
-# F12 → Application → Local Storage → auth store
-# Should have accessToken field
-```
-
----
-
-### ❌ Issue: TypeScript Compilation Errors
-
-**Error message**: `Type 'X' is not assignable to type 'Y'`
-
-**Fix**:
-```bash
-# Show full error with context
-npx tsc --noEmit --pretty false src/components/MyComponent.tsx
-
-# Common causes:
-# 1. Missing type definitions
-# 2. Null/undefined not handled
-# 3. Wrong type imported
-
-# Check node_modules/@types for missing types
-ls node_modules/@types/ | grep -i "react"
-
-# Install missing types
-npm install --save-dev @types/node-fetch
-```
-
----
-
-### ❌ Issue: npm install Fails
-
-**Error message**: `npm ERR! code ERESOLVE`, dependency conflicts
-
-**Fix**:
-```bash
-# Remove lock file and reinstall
 rm package-lock.json
 npm install
-
-# If still failing, use legacy resolution
+# or, if a transitive peer-dep conflict is unavoidable right now:
 npm install --legacy-peer-deps
-
-# Check what's conflicting
-npm ls
-
-# Update package.json to resolve
-npm update
 ```
 
----
+### ❌ Dev Server Slow / Not Hot-Reloading
 
-### ❌ Issue: Development Server Hangs / Slow
+Restart it first (`Ctrl+C`, then re-run). If still slow, check `node_modules` size and do a
+clean reinstall — a corrupted or huge dependency tree is the most common cause.
 
-**Symptoms**: Changes not hot-reloading, very slow refresh
+### ❌ Styles Not Loading / Page Looks Broken
 
-**Fix**:
-```bash
-# Kill and restart
-Ctrl+C
-npm run dev
+Restart the dev server, confirm the CSS import paths in the affected components are correct,
+and rebuild to rule out a stale dev-server cache.
 
-# If still slow, check for large node_modules
-du -sh node_modules
+### ❌ "Cannot Find Module" on a Local Import
 
-# Remove and reinstall
-rm -rf node_modules package-lock.json
-npm install
-npm run dev
-```
+Verify the file actually exists at that path, and that the import omits the file extension for
+TS/TSX files (`./components/Foo`, not `./components/Foo.tsx`).
 
----
+### ❌ Bundle Size Warning
 
-### ❌ Issue: CSS Not Loading / Styles Broken
-
-**Symptoms**: Page unstyled, missing colors/layout
-
-**Causes**: Vite dev server issue or CSS import problem
-
-**Fix**:
-```bash
-# Restart dev server
-Ctrl+C
-npm run dev
-
-# Check CSS files exist
-find src -name "*.css" | head -10
-
-# In component, verify import path
-grep -r "import.*\.css" src/ | head -5
-
-# Rebuild
-npm run build
-npm run preview
-```
-
----
-
-### ❌ Issue: "Cannot find module" Import Error
-
-**Error message**: `Cannot find module './components/Dashboard' or its corresponding type declarations`
-
-**Fix**:
-```bash
-# Verify file exists
-ls src/components/Dashboard.tsx
-
-# Check import statement - file extension
-# React components: should NOT have .tsx extension in import
-# ❌ import { Dashboard } from './components/Dashboard.tsx'
-# ✅ import { Dashboard } from './components/Dashboard'
-
-# Restart dev server if you changed files
-npm run dev
-
-# Clear VS Code cache
-# Command Palette → "Developer: Reload Window"
-```
-
----
-
-### ❌ Issue: JWT Token Expired (401 Unauthorized)
-
-**Symptoms**: API calls return 401, login doesn't work
-
-**Fix**:
-```bash
-# Clear stored auth
-# F12 → Application → Local Storage → Clear all
-
-# Login again
-# Should get new JWT token
-
-# Check token expiry
-# If consistently expiring fast, check backend JWT_SECRET configuration
-curl http://localhost:8080/api/diagnostics/ai
-```
-
----
-
-### ❌ Issue: Build Output Too Large
-
-**Error message**: Warning about bundle size being > 1MB
-
-**Fix**:
-```bash
-# Analyze bundle
-npm install --save-dev vite-plugin-visualizer
-
-# Add to vite.config.ts
-import { visualizer } from "vite-plugin-visualizer";
-
-export default {
-  plugins: [visualizer()],
-}
-
-# Rebuild and open dist/stats.html to see what's large
-npm run build
-```
+Use a bundle-analyzer plugin for the build tool in use (e.g. `rollup-plugin-visualizer` for
+Vite/Rollup) to see what's actually large before trying to optimize blindly.
 
 ---
 
 ## Tips & Best Practices
 
-1. **Hot module reloading (HMR)**: Changes auto-reload in browser, NO manual refresh needed
-2. **Type safety**: Always run `npx tsc --noEmit` before committing
-3. **API base URL**: Use `lib/api.ts` axios instance, never `fetch()` or hardcoded URLs
-4. **State management**: Check `lib/auth.ts` for zustand store patterns
-5. **Responsive design**: Test at 320px, 768px, 1920px widths
-6. **Accessibility**: Use semantic HTML, test with keyboard navigation
-7. **Error handling**: Wrap new components in ErrorBoundary if they fetch data
-8. **Performance**: Lazy-load pages with `React.lazy()`, profile with DevTools
-
----
-
-**Status**: 🟢 Ready  
-**Last Updated**: 2026-06-20
+1. Hot reload means changes should appear without a manual refresh — if they don't, suspect a
+   stale dev server, not your code.
+2. Run the type-checker before every commit; TypeScript errors caught early are far cheaper
+   than ones caught in review.
+3. Route all HTTP calls through one shared client (interceptors for auth/error handling belong
+   there, not scattered across components).
+4. Lazy-load route-level components for large apps; profile with DevTools before optimizing.
+5. Test keyboard navigation and basic accessibility on anything interactive.

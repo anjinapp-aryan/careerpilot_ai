@@ -1,147 +1,110 @@
 # Current Task Status
 
-**Last updated**: 2026-06-20  
-**Status**: Phase 1 complete with critical fixes deployed  
-**Branch**: appmod/java-upgrade-20260619103446  
+**Last updated**: 2026-06-21
+**Status**: Phase 1 complete; human-approval workflow hardened and restarted on live stack
+**Branch**: appmod/java-upgrade-20260619103446
 
-## Latest Session Summary (2026-06-20)
+## Latest Session Summary (2026-06-21)
 
-### Major Accomplishment: CRITICAL WORKFLOW BUG FIX
+### Major Accomplishment: Human Approval Gate Hardening
 
-**Problem**: "Type definition error: [simple type, class com.fasterxml.jackson.databind.JsonNode]" when calling workflow endpoints.
-
-**Root Cause**: Jackson unable to serialize JsonNode fields in entity responses.
+**Problem**: A reject→approve (or any second, stale) resume call could silently corrupt an
+already-terminal workflow run — e.g. turning a REJECTED run into COMPLETED — because nothing
+re-validated that the run was still actually awaiting approval before acting on the decision.
+A rejected run also still ran `application_tracking` afterward, since the LangGraph graph had
+no conditional edge out of `human_approval`.
 
 **Solution Implemented**:
-1. Created `WorkflowDtos.java` with `WorkflowRunResponse` record (state as `Map<String, Object>`)
-2. Added `toResponse(WorkflowRun)` method in WorkflowService to convert entity → DTO
-3. Updated all WorkflowController methods to return DTO instead of entity
-4. Pattern verified: Entity state stored as JSON string → parsed to Map on DTO conversion
+1. Added `add_conditional_edges` from `human_approval` in `graph.py` — approval routes to
+   `application_tracking`, rejection routes to `END`.
+2. Added a dual-layer 409 guard: agent-service checks `"human_approval" not in
+   graph.get_state(cfg).next`; backend's `WorkflowService.resume()` checks
+   `deriveDisplayStatus(run) != "INTERRUPTED"`. Either layer independently rejects a stale
+   resume call.
+3. Added a frontend `useMutation.isPending` guard in `Workflow.tsx` to prevent the
+   double-click that most often triggered the race in the first place.
+4. Mapped the new 409 through `AgentServiceClient` → `IllegalStateException` →
+   `GlobalExceptionHandler` so the API contract stays consistent (409, not 500).
 
-**Impact**: Workflow endpoints now serialize correctly without type errors ✅
+**Impact**: Approve/reject is now idempotent against repeated/stale calls; rejected runs
+correctly stop before Application Tracking. ✅
 
-### Minor Fix: Provider Callback Threading
+### Audit Trail (Approved/Rejected By, At, Feedback)
 
-**Problem**: Provider name always "Unknown" in SSE done event.
+Added without a schema migration — stamped into the existing `workflow_runs.state` JSON blob
+in `mergeResponse()`, exposed via 5 new `WorkflowRunResponse` fields, rendered in the frontend's
+expanded run timeline (rejection shown danger-styled, approval success-styled).
 
-**Root Cause**: ThreadLocal values don't survive Reactor async thread boundaries.
+### Single Source of Truth for Workflow Status
 
-**Solution**: Changed from ThreadLocal to method parameter pattern:
-- `streamChat(messages, system, providerCallback)` — pass Consumer<String> as method param
-- Callback executes in doOnComplete() with correct provider name
-- No ThreadLocal needed
+Added `WorkflowService.deriveDisplayStatus(WorkflowRun)` (public) and wired it into
+`CareerContextRetriever.getWorkflowContext()` so the Copilot's workflow-explanation skill
+reports the same derived status the Workflow page shows — plus gave that skill explicit
+per-status prompt branches (INTERRUPTED/REJECTED/FAILED/COMPLETED/RUNNING) instead of one
+generic instruction.
 
-**Result**: Provider names now correctly appear in copilot responses ✅
+### Infrastructure: Full Stack Rebuilt & Restarted
 
-### Infrastructure: Provider Failover Chain
+`docker compose --env-file .env up -d --build` — rebuilt backend, agent-service, and frontend
+images with the above changes; all containers (including previously-stopped zookeeper/minio/kafka)
+came up healthy on first health-check poll (`backend=200 agent=200 frontend=200`).
 
-**Status**: Implemented and tested ✅
-- **Order**: DeepSeek (primary) → Qwen → Gemini (fallback)
-- **Configuration**: docker-compose.yml passes NVIDIA_API_KEY, BASE_URL, models
-- **Health Tracking**: ProviderHealthTracker caches health state (5-min TTL)
-- **Quota Handling**: HTTP 429 triggers immediate failover without retries
-
-**Verification**:
-- `/api/diagnostics/ai` shows all providers UP
-- Provider selection logs visible
-- Fallover triggers on quota exhaustion
+Hit one infra snag: BuildKit couldn't resolve `docker-credential-desktop` (daemon-side, not
+fixable via shell `PATH`). Worked around it by temporarily removing `"credsStore": "desktop"`
+from `~/.docker/config.json` (safe since `"auths": {}` was empty) and restoring it immediately
+after the build succeeded — see PROJECT_MEMORY.md "Deployment Notes" for the reusable fix.
 
 ## Completed Tasks (This Session)
 
 | Task | Status | Files Modified |
 |------|--------|-----------------|
-| Root cause analysis | ✅ | (analysis only) |
-| Verify serialization point | ✅ | WorkflowController |
-| Fix JSONB mapping | ✅ | WorkflowRun (verified, no changes needed) |
-| Fix DTOs | ✅ | WorkflowDtos.java (NEW) |
-| Fix controllers | ✅ | WorkflowController.java |
-| Provider failover chain | ✅ | AiGatewayService, ProviderHealthTracker (NEW), QuotaExceededException (NEW) |
-| Comprehensive logging | ✅ | WorkflowService.java |
-| Diagnostics endpoint | ✅ | DiagnosticsController.java |
-| End-to-end validation | 🔄 | In progress (tested register → login, workflow endpoints responding) |
+| Root-cause analysis of reject→approve corruption | ✅ | (analysis only) |
+| Conditional edge after `human_approval` | ✅ | `agent-service/app/graph.py` |
+| Dual-layer 409 guard (agent-service + backend) | ✅ | `main.py`, `WorkflowService.java`, `AgentServiceClient.java`, `GlobalExceptionHandler.java` |
+| Frontend double-submit guard | ✅ | `Workflow.tsx` |
+| Audit trail (JSON state, no migration) | ✅ | `WorkflowService.java`, `WorkflowDtos.java`, `WorkflowController.java` |
+| Copilot derived-status integration | ✅ | `CareerContextRetriever.java`, `WorkflowExplanationHandler.java` |
+| UI polish (current-stage fallback, duration, audit block, at-a-glance metadata) | ✅ | `Workflow.tsx`, `workflow.ts` |
+| Build verification (backend/frontend/agent compile clean) | ✅ | — |
+| Full stack rebuild + restart + health check | ✅ | docker compose |
+| Memory docs maintenance workflow + sync | ✅ | `docs/MEMORY_WORKFLOW.md` (new), this round of updates |
 
 ## Verified Working
 
-✅ Backend compiles without errors  
-✅ All Spring Boot services start  
-✅ Agent service starts (Gemini rate limiter online)  
-✅ Frontend builds and serves  
-✅ `/api/diagnostics/ai` returns provider health (deepseek UP, qwen UP, gemini UP)  
-✅ `/api/diagnostics/workflow` returns workflow engine status (UP)  
-✅ `GET /api/workflows` returns empty list (no JsonNode serialization errors)  
-✅ User registration endpoint working (returns JWT)  
-✅ Login endpoint working  
-✅ Copilot streaming with provider fallback working  
+✅ Backend, agent-service, frontend all compile/build clean
+✅ Full docker-compose stack rebuilt and healthy (`backend=200 agent=200 frontend=200`)
+✅ Resuming a non-awaiting run returns 409 at both layers (by design, not a bug)
+✅ Copilot workflow-explanation skill reports the same status the Workflow page shows
 
-## Known Issues
+## Known Issues (carried forward)
 
 | Issue | Severity | Workaround | Status |
 |-------|----------|-----------|--------|
+| True mid-flight "RUNNING at stage N" visibility | Medium | Agent execution is synchronous; stage-by-stage live progress would need async/streaming execution — explicitly out of scope (architecture redesign) | Deferred, flagged to user |
 | Kafka consumers not wired | Low | Events published, not consumed (scaffolding) | Not planned for phase 1 |
 | Refresh tokens not implemented | Medium | No token refresh endpoint | Defer to phase 2 |
 | Resume upload not implemented | Medium | No S3 storage pipeline | Defer to phase 2 |
-| Workflow branching not supported | Medium | Linear nodes only, no conditional edges | Add in phase 2 if needed |
 | Redis caching not used | Low | No @Cacheable decorators | Enable when needed for performance |
 
 ## Next Priorities (Phase 2)
 
-1. **Workflow UI** — Dashboard to visualize workflow progress (currently backend-only)
-   - Show node progression in real-time
-   - Display human approval form
-   - Resume workflow after approval
-
-2. **Resume & Job Management UI** — Frontend forms for CRUD
-   - Upload resume (PDF parsing)
-   - Create job listings
-   - Match resumes to jobs
-
-3. **Notification System** — Wire up Kafka consumers
-   - Email notifications on workflow completion
-   - Webhook support for integrations
-   - Audit log persistence
-
-4. **Embeddings & Semantic Search** — Use pgvector
-   - Generate embeddings for resumes/jobs
-   - Implement similarity search
-   - Improve job matching accuracy
-
-5. **Performance Optimizations**
-   - Redis caching for frequently accessed data
-   - Database indexing on common queries
-   - Frontend code splitting + lazy loading
-
-## Code Quality Metrics
-
-| Metric | Status |
-|--------|--------|
-| **Compilation** | ✅ No errors |
-| **Type Safety** | ✅ Full TypeScript + Java generics |
-| **JsonNode Errors** | ✅ Fixed (DTO pattern) |
-| **ThreadLocal Issues** | ✅ Fixed (method params) |
-| **Multi-tenancy Checks** | ✅ All service methods check userId |
-| **Test Coverage** | 🔴 None (no test suites written) |
-| **Docker Build** | ✅ Builds without BuildKit |
-| **API Documentation** | ✅ Swagger auto-generated |
-
-## Testing Checklist
-
-**Before next major feature**:
-- [ ] Run mvn test (when tests added)
-- [ ] Run pytest on agent-service (currently: test_rate_limiter.py only)
-- [ ] Verify /api/diagnostics/ai shows all providers UP
-- [ ] Verify /api/diagnostics/workflow shows engine UP
-- [ ] Register → Login → Dashboard flow end-to-end
-- [ ] Copilot chat with provider attribution working
-- [ ] Workflow start → completion cycle
-- [ ] Provider failover on primary provider failure
+1. **Validate the new guard on the live stack** — exercise approve-once, reject-once, and
+   reject-then-approve (expect 409) flows against the rebuilt containers. Offered, not yet run.
+2. **Resume & Job Management UI** — upload resume (PDF parsing), create job listings, match
+   resumes to jobs.
+3. **Notification System** — wire up Kafka consumers (email on completion, webhooks, audit log
+   persistence).
+4. **Embeddings & Semantic Search** — generate embeddings via pgvector, similarity search.
+5. **Performance** — Redis caching, DB indexing, frontend code splitting.
+6. **Test suite** — `mvn test` (backend has none yet), expand agent-service pytest beyond the
+   rate limiter.
 
 ## Deployment Readiness
 
-**Current State**: Phase 1 complete, but NOT deployed to production
+**Current State**: Phase 1 complete (including approval-gate hardening), NOT deployed to production.
 
 **Blockers for deployment**:
 - [ ] Test suite required (mvn test, pytest)
-- [ ] DEPLOYMENT.md documentation (cloud target, scaling strategy, monitoring)
 - [ ] Secrets management (rotate JWT_SECRET, secure GEMINI_API_KEY)
 - [ ] Database backup strategy (Neon snapshot config)
 - [ ] CDN for frontend assets (Vercel, Cloudflare Pages, etc.)
@@ -149,49 +112,31 @@
 - [ ] Rate limiting on API endpoints
 - [ ] DDoS protection (Cloudflare or similar)
 
-**For Phase 2 deployment planning**:
-- See CLAUDE.md "Configuration that affects behavior" for cloud-specific env vars
-- Neon remains database (serverless, scales well)
-- Frontend: Vercel or Cloudflare Pages (recommended)
-- Backend: Koyeb, Fly.io, or AWS ECS (stateless, scales well)
-- Agent service: Same platform as backend (stateless, long-running requests OK)
-- Redis: Upstash (managed Redis with TLS)
-- Kafka: Remove or replace with event-driven platform (e.g., AWS EventBridge)
-- S3: Cloudflare R2 (S3-compatible, cheaper than AWS)
-
-## Git History
-
-**Recent commits**:
-- 5529cccb: latest bug fixes
-- 35d4063f: Make health and diagnostics endpoints public (no auth required)
-- b6a9c406: Fix all AI functionality - Copilot Chat, Job Match, Job Loading
-- e044943e: Add env files to gitignore
-- b476d9f3: Initial commit
-
-**Current branch**: appmod/java-upgrade-20260619103446 (Java 25 upgrade branch, active development)
+**For Phase 2 deployment planning**: see CLAUDE.md "Configuration that affects behavior" and
+ARCHITECTURE_SUMMARY.md's Configuration table for cloud-specific env vars.
 
 ## Session Notes
 
 ### What Worked
-- DTO pattern cleanly solves JsonNode serialization
-- Provider callback via method param (not ThreadLocal) works well with Reactor
-- Health tracking prevents retry storms on failed providers
-- Logging at info + debug levels provides good observability
+- Re-validating state server-side at every layer that can independently receive a mutating call
+  is the right fix for idempotency races — cheaper and more robust than client-only guards.
+- Stamping audit fields into an existing JSON blob avoided a schema migration for data that's
+  read-mostly and co-located with state the entity already owns.
+- Exposing one derived-status method and reusing it everywhere (UI response + Copilot context)
+  is what keeps two independent surfaces from disagreeing about the same fact.
 
 ### What to Avoid
-- ThreadLocal with async Reactor code
-- Direct provider instantiation (use AiGatewayService)
-- Returning entities from controllers (use DTOs)
-- Forgetting userId.equals() check in service methods
-- Modifying applied Flyway migrations (create V3, V4, etc.)
+- Don't trust a single call site to validate state before a mutation — validate at every layer
+  that could independently receive the request.
+- Don't add new columns/migrations for audit data that doesn't need to be queried/indexed —
+  extend the existing JSON blob first; promote to real columns only when a real query need shows up.
+- Don't compute "current status" twice in two services — derive once, expose the method, reuse.
 
 ### Tips for Next Session
-1. Start with `/api/diagnostics/ai` to verify provider health
-2. Check logs for "Workflow Created", "Workflow Started", "Workflow Updated"
-3. Use grep patterns from PROMPT_LIBRARY.md to find similar code
-4. Remember: single seams for external deps (AiGatewayService, WorkflowService)
-5. Always return DTO from controller, not entity
+1. Start with `/api/diagnostics/ai` and `/api/diagnostics/workflow` to verify provider/engine health.
+2. If a resume call returns 409, check `deriveDisplayStatus(run)` — it's the guard working, not a bug.
+3. See `docs/MEMORY_WORKFLOW.md` before making further architectural changes — it defines when/how to update these four memory files.
 
 ---
 
-**Next session**: Continue with Phase 2 UI implementation and test suite creation
+**Next session**: Run the approve/reject/reject-then-approve validation pass against the live stack, then continue with Phase 2 priorities above.

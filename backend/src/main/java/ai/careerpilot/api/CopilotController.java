@@ -45,19 +45,40 @@ public class CopilotController {
     @PostMapping(value = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter stream(AuthenticatedUser user, @RequestBody CopilotStreamRequest req) {
         SseEmitter emitter = new SseEmitter(STREAM_TIMEOUT_MS);
-        CopilotService.StreamResult result = copilot.streamTurn(user, req);
 
-        send(emitter, "meta", Map.of("conversationId", result.conversationId().toString()));
+        // streamTurn() runs synchronously (memory resolve, context assembly, prompt
+        // build) BEFORE any token streams. A throw here would escape as an HTTP 500 and
+        // surface to the user as a generic assistant crash. Catch it and emit a graceful
+        // SSE error instead — the assistant must never hard-crash the panel.
+        CopilotService.StreamResult result;
+        try {
+            result = copilot.streamTurn(user, req);
+        } catch (Exception e) {
+            log.error("Copilot turn setup failed for page={}, action={}", req.page(), req.action(), e);
+            send(emitter, "error", Map.of(
+                    "message", "I couldn't gather the context for this request. Please try again, "
+                            + "or start a new chat if the problem persists."));
+            emitter.complete();
+            return emitter;
+        }
+
+        send(emitter, "meta", Map.of(
+                "conversationId", result.conversationId().toString(),
+                "sources", result.sources()));
 
         result.tokens().subscribe(
                 token -> send(emitter, "delta", Map.of("text", token)),
                 err -> {
                     log.warn("Copilot SSE error: {}", err.toString());
-                    send(emitter, "error", Map.of("message", "The assistant failed to respond."));
+                    send(emitter, "error", Map.of(
+                            "message", "I'm temporarily unable to respond right now. Please try again in a moment."));
                     emitter.complete();
                 },
                 () -> {
-                    send(emitter, "done", Map.of("conversationId", result.conversationId().toString()));
+                    send(emitter, "done", Map.of(
+                            "conversationId", result.conversationId().toString(),
+                            "sources", result.sources(),
+                            "provider", result.providerRef().get()));
                     emitter.complete();
                 });
 

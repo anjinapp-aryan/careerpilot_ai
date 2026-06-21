@@ -46,6 +46,12 @@ const CONFIG: Record<
     classes: 'bg-danger/10 text-danger ring-1 ring-inset ring-danger/25',
     iconClasses: 'text-danger',
   },
+  REJECTED: {
+    label: 'Rejected',
+    icon: XCircle,
+    classes: 'bg-danger/10 text-danger ring-1 ring-inset ring-danger/25',
+    iconClasses: 'text-danger',
+  },
 };
 
 export function StatusBadge({ status, className = '' }: StatusBadgeProps) {

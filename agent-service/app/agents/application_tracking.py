@@ -5,7 +5,7 @@ import json
 import logging
 from datetime import datetime, timedelta, timezone
 
-from ..ai_provider import get_ai_provider
+from ..workflow_ai_gateway import get_workflow_ai_gateway
 from ..state import CareerState
 
 log = logging.getLogger(__name__)
@@ -43,6 +43,7 @@ SCHEMA = {
 def application_tracking_node(state: CareerState) -> dict:
     ranked = state.get("ranked_jobs") or []
     if not ranked:
+        log.warning("application_tracking: no ranked jobs available")
         return {"tracked_application": {}}
 
     now = datetime.now(timezone.utc)
@@ -57,9 +58,11 @@ def application_tracking_node(state: CareerState) -> dict:
         f"NOW: {now.isoformat()}"
     )
     try:
-        result = get_ai_provider().generate_structured_response(prompt, SCHEMA, system=SYSTEM)
+        log.info("application_tracking: stage started")
+        gateway = get_workflow_ai_gateway()
+        result = gateway.generate_structured_response(prompt, SCHEMA, system=SYSTEM, stage="application_tracking")
+        log.info("application_tracking: stage completed successfully")
+        return {"tracked_application": result.get("tracked_application", {})}
     except Exception as e:  # noqa: BLE001
-        log.exception("application_tracking failed")
-        return {"errors": [f"application_tracking: {e}"]}
-
-    return {"tracked_application": result.get("tracked_application", {})}
+        log.error("application_tracking: stage failed", extra={"error": str(e)}, exc_info=True)
+        return {"errors": [f"application_tracking: {e}"], "tracked_application": {}}

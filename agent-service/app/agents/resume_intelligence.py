@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 
-from ..ai_provider import get_ai_provider
+from ..workflow_ai_gateway import get_workflow_ai_gateway
 from ..state import CareerState
 
 log = logging.getLogger(__name__)
@@ -39,6 +39,7 @@ SCHEMA = {
 def resume_intelligence_node(state: CareerState) -> dict:
     resume = state.get("resume_text", "")
     if not resume.strip():
+        log.warning("resume_intelligence: resume_text is empty")
         return {"errors": ["resume_text is empty"], "resume_score": 0, "extracted_skills": [], "candidate_profile": {}}
 
     prompt = (
@@ -48,13 +49,15 @@ def resume_intelligence_node(state: CareerState) -> dict:
         f"RESUME:\n{resume}"
     )
     try:
-        result = get_ai_provider().generate_structured_response(prompt, SCHEMA, system=SYSTEM)
+        log.info("resume_intelligence: stage started")
+        gateway = get_workflow_ai_gateway()
+        result = gateway.generate_structured_response(prompt, SCHEMA, system=SYSTEM, stage="resume_intelligence")
+        log.info("resume_intelligence: stage completed successfully")
+        return {
+            "candidate_profile": result.get("candidate_profile", {}),
+            "extracted_skills": result.get("extracted_skills", []),
+            "resume_score": int(result.get("resume_score", 0)),
+        }
     except Exception as e:  # noqa: BLE001
-        log.exception("resume_intelligence failed")
-        return {"errors": [f"resume_intelligence: {e}"]}
-
-    return {
-        "candidate_profile": result.get("candidate_profile", {}),
-        "extracted_skills": result.get("extracted_skills", []),
-        "resume_score": int(result.get("resume_score", 0)),
-    }
+        log.error("resume_intelligence: stage failed", extra={"error": str(e)}, exc_info=True)
+        return {"errors": [f"resume_intelligence: {e}"], "resume_score": 0, "extracted_skills": [], "candidate_profile": {}}

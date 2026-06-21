@@ -4,8 +4,9 @@ import ai.careerpilot.ai.AbstractLlmProvider;
 import ai.careerpilot.ai.AiGatewayProperties;
 import ai.careerpilot.ai.ChatMessage;
 import com.fasterxml.jackson.databind.JsonNode;
-import org.springframework.core.ParameterizedTypeReference;
-import org.springframework.http.codec.ServerSentEvent;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Flux;
@@ -23,13 +24,12 @@ import java.util.Map;
 @Component
 public class GeminiProvider extends AbstractLlmProvider {
 
+    private static final Logger log = LoggerFactory.getLogger(GeminiProvider.class);
     public static final String KEY = "gemini";
 
     private final AiGatewayProperties.Provider cfg;
     private final WebClient client;
-
-    private static final ParameterizedTypeReference<ServerSentEvent<JsonNode>> SSE_TYPE =
-            new ParameterizedTypeReference<>() {};
+    private final ObjectMapper mapper = new ObjectMapper();
 
     public GeminiProvider(AiGatewayProperties props) {
         this.cfg = props.provider(KEY);
@@ -74,11 +74,28 @@ public class GeminiProvider extends AbstractLlmProvider {
                         .queryParam("key", cfg.getApiKey()).build(cfg.getModel()))
                 .bodyValue(body)
                 .retrieve()
-                .bodyToFlux(SSE_TYPE)
+                .onStatus(status -> status.value() == 429, resp -> {
+                    log.error("Gemini 429 Quota Exceeded — failover required");
+                    return resp.createException();
+                })
+                .bodyToFlux(String.class)
                 .timeout(timeout())
-                .mapNotNull(ServerSentEvent::data)
-                .map(this::extractText)
+                .flatMap(this::parseJsonResponse)
+                .mapNotNull(this::extractText)
                 .filter(text -> !text.isEmpty());
+    }
+
+    private Flux<JsonNode> parseJsonResponse(String jsonStr) {
+        if (jsonStr == null || jsonStr.isEmpty() || jsonStr.startsWith(":")) {
+            return Flux.empty();
+        }
+        try {
+            JsonNode node = mapper.readTree(jsonStr);
+            return Flux.just(node);
+        } catch (Exception e) {
+            log.warn("Failed to parse Gemini response chunk", e);
+            return Flux.empty();
+        }
     }
 
     // ---- helpers ----

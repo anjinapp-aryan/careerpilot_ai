@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import logging
 
-from ..ai_provider import get_ai_provider
+from ..workflow_ai_gateway import get_workflow_ai_gateway
 from ..state import CareerState
 
 log = logging.getLogger(__name__)
@@ -30,6 +30,7 @@ def ats_optimization_node(state: CareerState) -> dict:
     ranked = state.get("ranked_jobs") or []
     jobs = state.get("job_descriptions") or []
     if not resume or not jobs:
+        log.warning("ats_optimization: missing resume or jobs")
         return {"ats_score": 0, "missing_keywords": [], "ats_optimization_plan": []}
 
     # Use the top-ranked job as the optimization target.
@@ -44,13 +45,15 @@ def ats_optimization_node(state: CareerState) -> dict:
         f"TARGET_JOB:\n{json.dumps(target)}"
     )
     try:
-        result = get_ai_provider().generate_structured_response(prompt, SCHEMA, system=SYSTEM)
+        log.info("ats_optimization: stage started")
+        gateway = get_workflow_ai_gateway()
+        result = gateway.generate_structured_response(prompt, SCHEMA, system=SYSTEM, stage="ats_optimization")
+        log.info("ats_optimization: stage completed successfully")
+        return {
+            "ats_score": int(result.get("ats_score", 0)),
+            "missing_keywords": result.get("missing_keywords", []),
+            "ats_optimization_plan": result.get("ats_optimization_plan", []),
+        }
     except Exception as e:  # noqa: BLE001
-        log.exception("ats_optimization failed")
-        return {"errors": [f"ats_optimization: {e}"]}
-
-    return {
-        "ats_score": int(result.get("ats_score", 0)),
-        "missing_keywords": result.get("missing_keywords", []),
-        "ats_optimization_plan": result.get("ats_optimization_plan", []),
-    }
+        log.error("ats_optimization: stage failed", extra={"error": str(e)}, exc_info=True)
+        return {"errors": [f"ats_optimization: {e}"], "ats_score": 0, "missing_keywords": [], "ats_optimization_plan": []}

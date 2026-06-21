@@ -10,8 +10,8 @@ import java.util.Map;
 /**
  * Operational endpoints for the AI Gateway.
  *
- *   GET /api/ai/health → {"gemini":"UP","deepseek":"UP","qwen":"UP","primary":"gemini"}
- *   GET /api/ai/stats  → {"geminiCalls":1250,"deepseekCalls":48,"qwenCalls":6,"fallbackCount":54, …}
+ *   GET /api/ai/health → {"gemini":"UP","deepseek":"UP","qwen":"UP","primary":"deepseek"}
+ *   GET /api/ai/stats  → {"deepseekCalls":250,"geminiCalls":48,"qwenCalls":6,"fallbackCount":54, …}
  */
 @RestController
 @RequestMapping("/api/ai")

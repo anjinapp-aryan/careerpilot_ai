@@ -43,12 +43,13 @@ spring:
     multipart:
       max-file-size: 10MB
       max-request-size: 12MB
+  web:
+    error:
+      include-message: always
 
 server:
   port: ${PORT:8080}
   forward-headers-strategy: framework
-  error:
-    include-message: always
 
 management:
   endpoints:
@@ -66,8 +67,8 @@ ai:
     api-key: ${GEMINI_API_KEY:}
   # ---- AI Gateway: single entry point for all LLM calls, with failover ----
   gateway:
-    primary: ${PRIMARY_PROVIDER:gemini}
-    order: ${AI_PROVIDER_ORDER:gemini,deepseek,qwen}   # failover priority
+    primary: ${PRIMARY_PROVIDER:deepseek}
+    order: ${AI_PROVIDER_ORDER:deepseek,gemini,qwen}   # failover priority: DeepSeek → Gemini → Qwen
     default-temperature: 0.4
     providers:
       gemini:
@@ -79,7 +80,9 @@ ai:
       deepseek:
         display-name: DeepSeek
         api-key: ${NVIDIA_API_KEY:}
-        model: ${NVIDIA_DEEPSEEK_MODEL:deepseek-v4-flash}
+        # NVIDIA NIM IDs are vendor-namespaced; the bare "deepseek-v4-flash"
+        # 404s. Keep the "deepseek-ai/" prefix in the default.
+        model: ${NVIDIA_DEEPSEEK_MODEL:deepseek-ai/deepseek-v4-flash}
         base-url: ${NVIDIA_BASE_URL:https://integrate.api.nvidia.com/v1}
         timeout-ms: 20000
       qwen:
@@ -146,6 +149,12 @@ kafka:
   topics:
     workflow-events: careerpilot.workflow.events
     audit-events: careerpilot.audit.events
+
+careerpilot:
+  kafka:
+    # When false (or Kafka unreachable), workflow event publishing is skipped
+    # silently so a missing/broken broker never breaks the workflow path.
+    enabled: ${KAFKA_ENABLED:true}
 
 logging:
   level:

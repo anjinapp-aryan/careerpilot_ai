@@ -36,5 +36,17 @@ class Settings(BaseSettings):
     gemini_base_retry_delay: float = 2.0   # ceiling for first retry (seconds)
     gemini_max_retry_delay: float = 60.0   # hard cap on any single backoff
 
+    # ---------------------------------------------------------------------------
+    # NVIDIA NIM API — DeepSeek and Qwen providers for workflow failover
+    # ---------------------------------------------------------------------------
+
+    nvidia_api_key: str = ""
+    nvidia_base_url: str = "https://integrate.api.nvidia.com/v1"
+    # NVIDIA NIM model IDs are namespaced by vendor. The wrong namespace
+    # (e.g. "nvidia/deepseek-...") yields a 404 from /chat/completions, so these
+    # defaults must match the catalog exactly. Overridable via NVIDIA_*_MODEL env.
+    nvidia_deepseek_model: str = "deepseek-ai/deepseek-v4-flash"
+    nvidia_qwen_model: str = "qwen/qwen3-next-80b-a3b-instruct"
+
 
 settings = Settings()

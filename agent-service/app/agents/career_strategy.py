@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import logging
 
-from ..ai_provider import get_ai_provider
+from ..workflow_ai_gateway import get_workflow_ai_gateway
 from ..state import CareerState
 
 log = logging.getLogger(__name__)
@@ -47,12 +47,14 @@ def career_strategy_node(state: CareerState) -> dict:
         f"TARGET_SENIORITY: {state.get('target_seniority', '')}"
     )
     try:
-        result = get_ai_provider().generate_structured_response(prompt, SCHEMA, system=SYSTEM)
+        log.info("career_strategy: stage started")
+        gateway = get_workflow_ai_gateway()
+        result = gateway.generate_structured_response(prompt, SCHEMA, system=SYSTEM, stage="career_strategy")
+        log.info("career_strategy: stage completed successfully")
+        return {
+            "career_roadmap": result.get("career_roadmap", {}),
+            "skill_gaps": result.get("skill_gaps", []),
+        }
     except Exception as e:  # noqa: BLE001
-        log.exception("career_strategy failed")
-        return {"errors": [f"career_strategy: {e}"]}
-
-    return {
-        "career_roadmap": result.get("career_roadmap", {}),
-        "skill_gaps": result.get("skill_gaps", []),
-    }
+        log.error("career_strategy: stage failed", extra={"error": str(e)}, exc_info=True)
+        return {"errors": [f"career_strategy: {e}"], "career_roadmap": {}, "skill_gaps": []}

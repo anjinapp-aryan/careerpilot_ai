@@ -16,6 +16,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
 
@@ -37,22 +38,26 @@ public class AiGatewayService {
     private final AiMetrics metrics;
     private final RetryRegistry retryRegistry;
     private final CircuitBreakerRegistry cbRegistry;
+    private final ProviderHealthTracker healthTracker;
     private final Map<String, LlmProvider> providersByName = new LinkedHashMap<>();
+    private final ThreadLocal<String> lastUsedProvider = new ThreadLocal<>();
 
     public AiGatewayService(List<LlmProvider> providers,
                             AiGatewayProperties props,
                             AiMetrics metrics,
                             RetryRegistry retryRegistry,
-                            CircuitBreakerRegistry cbRegistry) {
+                            CircuitBreakerRegistry cbRegistry,
+                            ProviderHealthTracker healthTracker) {
         this.props = props;
         this.metrics = metrics;
         this.retryRegistry = retryRegistry;
         this.cbRegistry = cbRegistry;
+        this.healthTracker = healthTracker;
         for (LlmProvider p : providers) {
             providersByName.put(p.name(), p);
         }
-        log.info("AI Gateway initialized — order={}, configured={}",
-                props.getOrder(), configuredKeys());
+        log.info("AI Gateway initialized — order={}, configured={}, primary={}",
+                props.getOrder(), configuredKeys(), props.getPrimary());
     }
 
     // ====================================================================
@@ -64,7 +69,11 @@ public class AiGatewayService {
     }
 
     public Flux<String> streamChat(List<ChatMessage> messages, String system) {
-        return streamFrom(orderedConfigured(), 0, messages, system, props.getDefaultTemperature());
+        return streamFrom(orderedConfigured(), 0, messages, system, props.getDefaultTemperature(), null);
+    }
+
+    public Flux<String> streamChat(List<ChatMessage> messages, String system, Consumer<String> providerCallback) {
+        return streamFrom(orderedConfigured(), 0, messages, system, props.getDefaultTemperature(), providerCallback);
     }
 
     public String generateResumeFeedback(String resumeText) {
@@ -117,11 +126,15 @@ public class AiGatewayService {
             }
 
             try {
-                log.info("Using {} Provider", p.displayName());
+                log.info("Request {} - Using {} Provider", op, p.displayName());
                 metrics.recordCall(p.name());
                 Supplier<T> decorated = Retry.decorateSupplier(retryRegistry.retry(p.name()),
                         CircuitBreaker.decorateSupplier(cb, () -> call.apply(p)));
-                return decorated.get();
+                T result = decorated.get();
+                lastUsedProvider.set(p.name());
+                healthTracker.recordSuccess(p.name());
+                log.info("Response Returned from {}", p.displayName());
+                return result;
             } catch (CallNotPermittedException e) {
                 last = e;
                 log.warn("{} circuit opened mid-flight — skipping to fallback", p.displayName());
@@ -129,11 +142,19 @@ public class AiGatewayService {
             } catch (Exception e) {
                 last = e;
                 metrics.recordFailure(p.name());
+                boolean isQuotaError = e.getMessage() != null && e.getMessage().contains("429");
+                if (isQuotaError) {
+                    healthTracker.recordQuotaExceeded(p.name());
+                    log.error("{} Quota exceeded — immediate failover", p.displayName());
+                } else {
+                    healthTracker.recordFailure(p.name(), e.getMessage());
+                    log.error("{} Provider failed: {} - {}", p.displayName(), e.getClass().getSimpleName(), e.getMessage(), e);
+                }
                 if (hasNext) {
                     metrics.recordFallback();
                     log.warn("{} Failed → Switching to {}", p.displayName(), chain.get(i + 1).displayName());
                 } else {
-                    log.error("{} Failed and no fallback remains: {}", p.displayName(), e.toString());
+                    log.error("All {} providers exhausted for operation '{}'", chain.size(), op);
                 }
             }
         }
@@ -145,7 +166,8 @@ public class AiGatewayService {
     // ====================================================================
 
     private Flux<String> streamFrom(List<LlmProvider> chain, int idx,
-                                    List<ChatMessage> messages, String system, double temperature) {
+                                    List<ChatMessage> messages, String system, double temperature,
+                                    Consumer<String> providerCallback) {
         if (chain.isEmpty()) {
             return Flux.error(new AiGatewayException("No AI provider is configured", null));
         }
@@ -159,32 +181,62 @@ public class AiGatewayService {
         if (!cb.tryAcquirePermission()) {
             log.warn("{} circuit is OPEN — skipping to fallback (stream)", p.displayName());
             if (hasNext) metrics.recordFallback();
-            return streamFrom(chain, idx + 1, messages, system, temperature);
+            return streamFrom(chain, idx + 1, messages, system, temperature, providerCallback);
         }
 
-        log.info("Using {} Provider (stream)", p.displayName());
+        log.info("Copilot streaming request - Using {} Provider", p.displayName());
         metrics.recordCall(p.name());
         long start = System.nanoTime();
         AtomicBoolean emitted = new AtomicBoolean(false);
 
         return p.streamChat(messages, system, temperature)
                 .doOnNext(t -> emitted.set(true))
-                .doOnComplete(() -> cb.onSuccess(System.nanoTime() - start, TimeUnit.NANOSECONDS))
+                .doOnComplete(() -> {
+                    long elapsedMs = (System.nanoTime() - start) / 1_000_000;
+                    lastUsedProvider.set(p.name());
+                    log.info("Stream complete for {}. Callback present: {}", p.displayName(), providerCallback != null);
+                    if (providerCallback != null) {
+                        providerCallback.accept(p.name());
+                        log.info("Provider callback executed for {}", p.name());
+                    }
+                    healthTracker.recordSuccess(p.name());
+                    log.info("Response Returned from {} in {}ms", p.displayName(), elapsedMs);
+                    cb.onSuccess(System.nanoTime() - start, TimeUnit.NANOSECONDS);
+                })
                 .onErrorResume(err -> {
                     cb.onError(System.nanoTime() - start, TimeUnit.NANOSECONDS, err);
                     metrics.recordFailure(p.name());
+                    boolean isQuotaError = err.getMessage() != null && err.getMessage().contains("429");
+                    if (isQuotaError) {
+                        healthTracker.recordQuotaExceeded(p.name());
+                        log.error("{} Quota exceeded — immediate failover", p.displayName());
+                    } else {
+                        healthTracker.recordFailure(p.name(), err.getMessage());
+                        log.error("{} Provider failed: {} - {}", p.displayName(), err.getClass().getSimpleName(), err.getMessage(), err);
+                    }
                     if (emitted.get()) {
                         // Tokens already streamed to the client — cannot transparently fail over.
-                        log.error("{} failed mid-stream: {}", p.displayName(), err.toString());
+                        log.error("{} failed mid-stream — cannot failover", p.displayName());
                         return Flux.error(err);
                     }
                     if (hasNext) {
                         metrics.recordFallback();
-                        log.warn("{} Failed → Switching to {} (stream)", p.displayName(), chain.get(idx + 1).displayName());
+                        log.warn("{} Failed → Switching to {}", p.displayName(), chain.get(idx + 1).displayName());
+                    } else {
+                        log.error("All {} providers exhausted", chain.size());
                     }
-                    return streamFrom(chain, idx + 1, messages, system, temperature);
+                    return streamFrom(chain, idx + 1, messages, system, temperature, providerCallback);
                 });
     }
+
+    public String getLastUsedProvider() {
+        return lastUsedProvider.get();
+    }
+
+    public void clearLastUsedProvider() {
+        lastUsedProvider.remove();
+    }
+
 
     // ====================================================================
     // Health / stats support

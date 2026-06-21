@@ -1,6 +1,6 @@
 # CareerPilot AI
 
-Agentic AI Career Operating System. Multi-agent platform built on LangGraph (Python) with a Spring Boot (Java 21) control plane, React/TypeScript frontend, Postgres+pgvector, Redis, Kafka, and S3-compatible storage.
+Agentic AI Career Operating System. Multi-agent platform built on LangGraph (Python) with a Spring Boot (Java 25) control plane, React/TypeScript frontend, Postgres+pgvector, Redis, Kafka, and S3-compatible storage.
 
 ## What's in this vertical slice
 
@@ -124,7 +124,7 @@ npm run dev
 
 ```
 careerpilot_ai/
-├── backend/                 Spring Boot 3 · Java 21
+├── backend/                 Spring Boot 4 · Java 25
 │   ├── src/main/java/ai/careerpilot/
 │   │   ├── CareerPilotApplication.java
 │   │   ├── ai/              AIProvider + GeminiProvider (JVM)

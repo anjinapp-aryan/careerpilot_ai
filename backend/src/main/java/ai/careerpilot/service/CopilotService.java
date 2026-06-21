@@ -6,6 +6,9 @@ import ai.careerpilot.api.dto.CopilotDtos.CopilotStreamRequest;
 import ai.careerpilot.domain.CopilotConversation;
 import ai.careerpilot.domain.CopilotMessage;
 import ai.careerpilot.security.AuthenticatedUser;
+import ai.careerpilot.service.copilot.CopilotSkillHandler;
+import ai.careerpilot.service.copilot.CopilotSkillRouter;
+import ai.careerpilot.service.copilot.SkillContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -17,11 +20,13 @@ import java.util.List;
 import java.util.UUID;
 
 /**
- * Orchestrates a single streaming Copilot turn end-to-end:
- * resolve conversation → persist the user turn → assemble a grounded, page-aware
- * prompt (via {@link AgentOrchestrator}) → stream the model response → persist
- * the assistant turn on completion. Returns the live token {@link Flux} for the
- * SSE controller to relay to the browser.
+ * Enterprise Career Intelligence Assistant orchestration.
+ * Routes requests to specialized skill handlers, assembles RAG context,
+ * and streams responses with source attribution via the AI Gateway.
+ *
+ * Supports 10 career intelligence skills: Resume Analysis, ATS Analysis,
+ * Job Match, Application Strategy, Interview Prep, Career Guidance,
+ * Workflow Explanation, Salary Guidance, Skills Gap, and Recommendations.
  */
 @Service
 public class CopilotService {
@@ -30,16 +35,19 @@ public class CopilotService {
 
     private final AiGatewayService ai;
     private final ConversationMemory memory;
+    private final CopilotSkillRouter skillRouter;
     private final AgentOrchestrator orchestrator;
 
-    public CopilotService(AiGatewayService ai, ConversationMemory memory, AgentOrchestrator orchestrator) {
+    public CopilotService(AiGatewayService ai, ConversationMemory memory,
+                          CopilotSkillRouter skillRouter, AgentOrchestrator orchestrator) {
         this.ai = ai;
         this.memory = memory;
+        this.skillRouter = skillRouter;
         this.orchestrator = orchestrator;
     }
 
-    /** The live result of a turn: the (possibly newly created) conversation id + token stream. */
-    public record StreamResult(UUID conversationId, Flux<String> tokens) {}
+    /** The live result of a turn: the conversation id + token stream + sources + provider reference. */
+    public record StreamResult(UUID conversationId, Flux<String> tokens, List<String> sources, java.util.concurrent.atomic.AtomicReference<String> providerRef) {}
 
     public StreamResult streamTurn(AuthenticatedUser user, CopilotStreamRequest req) {
         CopilotConversation conv = memory.resolve(user.userId(), user.orgId(), req.conversationId(), req.page());
@@ -50,31 +58,53 @@ public class CopilotService {
                 : orchestrator.defaultMessage(req.action());
         memory.append(conv.getId(), "USER", userMessage, req.action());
 
-        // System prompt = persona + task; grounding context goes in the first model-visible turn.
-        String system = orchestrator.systemPrompt(req.page(), req.action());
-        String context = orchestrator.contextBlock(user, req.page(), req.action(), req.contextId());
+        log.info("Copilot turn started: action={}, page={}, contextId={}", req.action(), req.page(), req.contextId());
 
-        List<ChatMessage> turns = buildTurns(conv.getId(), context);
+        // Route to appropriate skill handler
+        CopilotSkillHandler handler = skillRouter.route(req.action(), userMessage);
+        SkillContext skillCtx = new SkillContext(user, userMessage, req.contextId(), req.page());
+
+        // Assemble RAG context
+        try {
+            handler.assembleContext(skillCtx);
+        } catch (Exception e) {
+            log.warn("Could not assemble full context for skill: {}", e.getMessage());
+            // Continue with partial context — graceful degradation
+        }
+
+        String system = handler.systemPrompt(skillCtx);
+        String contextBlock = handler.contextBlock(skillCtx);
+        String sourcesBlock = skillCtx.sourcesBlock();
+
+        List<ChatMessage> turns = buildTurns(conv.getId(), contextBlock);
+
+        // Track which provider was used via callback. Capture the callback in a variable
+        // that can be shared through Reactor's async pipeline (ThreadLocal won't work across threads).
+        java.util.concurrent.atomic.AtomicReference<String> usedProvider = new java.util.concurrent.atomic.AtomicReference<>("Unknown");
+        java.util.function.Consumer<String> providerCallback = providerName -> {
+            usedProvider.set(providerName);
+            log.info("Copilot response from provider: {}", providerName);
+        };
 
         StringBuilder assistant = new StringBuilder();
-        // Single entry point for AI: Gemini → DeepSeek → Qwen with automatic,
-        // user-invisible failover. The Copilot never talks to a provider directly.
-        Flux<String> tokens = ai.streamChat(turns, system)
+        Flux<String> tokens = ai.streamChat(turns, system, providerCallback)
                 .doOnNext(assistant::append)
-                .doOnComplete(() -> persistAssistantAsync(conv.getId(), assistant.toString()))
+                .doOnComplete(() -> {
+                    persistAssistantAsync(conv.getId(), assistant.toString(), sourcesBlock);
+                })
                 .onErrorResume(err -> {
                     log.warn("Copilot stream failed for conversation {}: {}", conv.getId(), err.toString());
-                    String msg = "\n\n_The assistant hit an error generating a response. Please try again._";
-                    persistAssistantAsync(conv.getId(), assistant + msg);
+                    String msg = "\n\n_I'm temporarily unable to generate a response. Trying backup AI model..._";
+                    persistAssistantAsync(conv.getId(), assistant + msg, sourcesBlock);
                     return Flux.just(assistant.length() == 0 ? msg.strip() : msg);
                 });
 
-        return new StreamResult(conv.getId(), tokens);
+        return new StreamResult(conv.getId(), tokens, new ArrayList<>(skillCtx.sources()), usedProvider);
     }
 
     /**
      * Builds the model-visible turn list: a leading grounded user/model pair carrying the
-     * CONTEXT, followed by the real conversation history (USER/ASSISTANT only).
+     * RAG context (sources + data), followed by the real conversation history (USER/ASSISTANT only).
      */
     private List<ChatMessage> buildTurns(UUID conversationId, String context) {
         List<ChatMessage> turns = new ArrayList<>();
@@ -95,11 +125,12 @@ public class CopilotService {
      * Persists the assistant turn off the reactive event-loop thread so the
      * blocking JDBC write never stalls token delivery.
      */
-    private void persistAssistantAsync(UUID conversationId, String content) {
+    private void persistAssistantAsync(UUID conversationId, String content, String sourcesBlock) {
         if (content == null || content.isBlank()) return;
         Schedulers.boundedElastic().schedule(() -> {
             try {
-                memory.append(conversationId, "ASSISTANT", content, null);
+                String contentWithSources = content + (sourcesBlock != null ? sourcesBlock : "");
+                memory.append(conversationId, "ASSISTANT", contentWithSources, null);
             } catch (Exception e) {
                 log.error("Failed to persist assistant message for {}", conversationId, e);
             }

@@ -89,6 +89,15 @@ export interface WorkflowRun {
   interviewReadinessScore?: number | null;
   state?: string;
   createdAt?: string;
+  updatedAt?: string;
+  /** Derived per-stage timeline; the list endpoint returns this too. */
+  agents?: WorkflowAgent[];
+  // Audit trail (Phase 6) — populated once the approval gate has been actioned.
+  approvedBy?: string | null;
+  approvedAt?: string | null;
+  rejectedBy?: string | null;
+  rejectedAt?: string | null;
+  feedback?: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -100,12 +109,17 @@ export type AgentStatus =
   | 'ACTIVE'
   | 'PENDING'
   | 'WAITING_FOR_APPROVAL'
-  | 'FAILED';
+  | 'FAILED'
+  | 'REJECTED';
 
 export interface WorkflowAgent {
   name: string;
   status: AgentStatus;
   completedAt?: string;
+  /** Provider that actually served this stage (e.g. "deepseek", "gemini"). */
+  provider?: string | null;
+  /** Wall-clock duration of the stage in milliseconds. */
+  durationMs?: number | null;
 }
 
 export interface WorkflowStatusDetail {

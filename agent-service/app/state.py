@@ -52,3 +52,10 @@ class CareerState(TypedDict, total=False):
     # Cross-cutting
     errors: Annotated[list[str], operator.add]
     cost_usd: float
+
+    # Execution telemetry — one entry appended per agent node as it runs.
+    # Each entry: {stage, name, status, started_at, completed_at, duration_ms,
+    #              provider, error}. Drives the frontend execution timeline,
+    #              provider attribution, and observability. Uses operator.add so
+    #              LangGraph appends across nodes instead of overwriting.
+    agent_execution: Annotated[list[dict], operator.add]

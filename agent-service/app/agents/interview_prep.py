@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import logging
 
-from ..ai_provider import get_ai_provider
+from ..workflow_ai_gateway import get_workflow_ai_gateway
 from ..state import CareerState
 
 log = logging.getLogger(__name__)
@@ -48,12 +48,14 @@ def interview_prep_node(state: CareerState) -> dict:
         f"TARGET_JOB:\n{json.dumps(target)}"
     )
     try:
-        result = get_ai_provider().generate_structured_response(prompt, SCHEMA, system=SYSTEM)
+        log.info("interview_prep: stage started")
+        gateway = get_workflow_ai_gateway()
+        result = gateway.generate_structured_response(prompt, SCHEMA, system=SYSTEM, stage="interview_prep")
+        log.info("interview_prep: stage completed successfully")
+        return {
+            "interview_plan": result.get("interview_plan", {}),
+            "interview_readiness_score": int(result.get("interview_readiness_score", 0)),
+        }
     except Exception as e:  # noqa: BLE001
-        log.exception("interview_prep failed")
-        return {"errors": [f"interview_prep: {e}"]}
-
-    return {
-        "interview_plan": result.get("interview_plan", {}),
-        "interview_readiness_score": int(result.get("interview_readiness_score", 0)),
-    }
+        log.error("interview_prep: stage failed", extra={"error": str(e)}, exc_info=True)
+        return {"errors": [f"interview_prep: {e}"], "interview_plan": {}, "interview_readiness_score": 0}

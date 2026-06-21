@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
@@ -18,6 +18,7 @@ import { PageHeader } from '@/components/common/PageHeader';
 import { ErrorBoundary } from '@/components/common/ErrorBoundary';
 import { WorkflowForm } from '@/components/workflow/WorkflowForm';
 import { WorkflowStatusStepper } from '@/components/workflow/WorkflowStatusStepper';
+import { WorkflowInsights } from '@/components/workflow/WorkflowInsights';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge, type BadgeTone } from '@/components/ui/badge';
@@ -25,6 +26,13 @@ import { Input, Label } from '@/components/ui/input';
 import { EmptyState } from '@/components/ui/empty-state';
 import { cn } from '@/lib/cn';
 import type { WorkflowRun } from '@/types/workflow';
+
+/** A stage focus request from the top pipeline, consumed by the matching RunCard. */
+interface FocusRequest {
+  threadId: string;
+  stage: string;
+  nonce: number;
+}
 
 const PIPELINE = [
   'Resume Intelligence',
@@ -77,6 +85,7 @@ export default function Workflow() {
     targetLocations: 'Remote, US',
   });
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [focusRequest, setFocusRequest] = useState<FocusRequest | null>(null);
 
   const { data: runs = [] } = useQuery<WorkflowRun[]>({
     queryKey: ['workflows'],
@@ -112,7 +121,13 @@ export default function Workflow() {
       />
 
       {/* Pipeline — live for the most recent run, static template when idle */}
-      <PipelineOverview latestRun={runs[0]} />
+      <PipelineOverview
+        latestRun={runs[0]}
+        allRuns={runs}
+        onStageClick={(stage) =>
+          runs[0] && setFocusRequest({ threadId: runs[0].threadId, stage, nonce: Date.now() })
+        }
+      />
 
       {/* Start form */}
       <ErrorBoundary>
@@ -201,6 +216,7 @@ export default function Workflow() {
                   }}
                   isResuming={isResuming}
                   resumeError={resumeError}
+                  focusRequest={focusRequest}
                 />
               );
             })}
@@ -218,7 +234,15 @@ export default function Workflow() {
  * runs it falls back to the static template so the page communicates the shape
  * of the pipeline before the first run.
  */
-function PipelineOverview({ latestRun }: { latestRun: WorkflowRun | undefined }) {
+function PipelineOverview({
+  latestRun,
+  allRuns,
+  onStageClick,
+}: {
+  latestRun: WorkflowRun | undefined;
+  allRuns: WorkflowRun[];
+  onStageClick: (stageName: string) => void;
+}) {
   // Hook is called unconditionally (disabled when threadId is absent). It shares
   // the ['workflow-status', threadId] query cache with the run card's stepper.
   const { data } = useWorkflowStatus(latestRun?.threadId);
@@ -303,6 +327,13 @@ function PipelineOverview({ latestRun }: { latestRun: WorkflowRun | undefined })
           workflowId={latestRun.threadId}
           variant="horizontal"
           className="border-0 bg-transparent p-0"
+          onStageNavigate={onStageClick}
+        />
+
+        <WorkflowInsights
+          agents={agents}
+          allRuns={allRuns}
+          costUsd={typeof data?.state?.cost_usd === 'number' ? (data.state.cost_usd as number) : null}
         />
       </CardContent>
     </Card>
@@ -327,14 +358,37 @@ function RunCard({
   onReject,
   isResuming,
   resumeError,
+  focusRequest,
 }: {
   run: WorkflowRun;
   onApprove: (id: string) => void;
   onReject: (id: string) => void;
   isResuming: boolean;
   resumeError: unknown;
+  focusRequest: FocusRequest | null;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const [activeFocusStage, setActiveFocusStage] = useState<{ stage: string; nonce: number } | null>(null);
+  const cardRef = useRef<HTMLDivElement>(null);
+  const isFocusTarget = focusRequest?.threadId === run.threadId;
+
+  // A click on the top pipeline targets this card: expand it (if not already),
+  // scroll it into view, then — once its own open animation has had time to
+  // finish — hand the stage focus down to the timeline stepper. The timeout
+  // (rather than an onAnimationComplete callback) deliberately avoids two
+  // auto-height Framer Motion animations (this card opening, the stage panel
+  // opening) running concurrently, which is a known height-jump footgun.
+  useEffect(() => {
+    if (!isFocusTarget || !focusRequest) return;
+    setExpanded(true);
+    cardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    const t = setTimeout(() => {
+      setActiveFocusStage({ stage: focusRequest.stage, nonce: focusRequest.nonce });
+    }, 300);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusRequest?.nonce]);
+
   const cfg = RUN_STATUS[run.status] ?? { icon: Clock, tone: 'neutral' as BadgeTone, label: run.status };
   const Icon = cfg.icon;
   const hasScores =
@@ -353,7 +407,7 @@ function RunCard({
   const hasAudit = run.rejectedBy || run.rejectedAt || run.approvedBy || run.approvedAt || run.feedback;
 
   return (
-    <Card className="overflow-hidden">
+    <Card ref={cardRef} className="overflow-hidden">
       <button
         className="flex w-full items-center justify-between gap-4 px-5 py-4 text-left"
         onClick={() => setExpanded((v) => !v)}
@@ -418,7 +472,12 @@ function RunCard({
                   </span>
                 )}
               </div>
-              <WorkflowStatusStepper workflowId={run.threadId} variant="vertical" />
+              <WorkflowStatusStepper
+                workflowId={run.threadId}
+                variant="vertical"
+                focusStage={activeFocusStage?.stage}
+                focusNonce={activeFocusStage?.nonce}
+              />
 
               {/* Phase 5 + 6 — rejected/approved audit trail. */}
               {hasAudit && (

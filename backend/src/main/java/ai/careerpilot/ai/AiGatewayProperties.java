@@ -22,10 +22,10 @@ import java.util.Map;
 public class AiGatewayProperties {
 
     /** The preferred provider key (reported by /api/ai/health). */
-    private String primary = "gemini";
+    private String primary = "deepseek";
 
     /** Failover order of provider keys, highest priority first. */
-    private List<String> order = new ArrayList<>(List.of("gemini", "deepseek", "qwen"));
+    private List<String> order = new ArrayList<>(List.of("deepseek", "gemini", "groq", "qwen"));
 
     /** Default sampling temperature for chat/feature calls. */
     private double defaultTemperature = 0.4;

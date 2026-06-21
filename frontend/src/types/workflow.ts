@@ -87,7 +87,8 @@ export interface WorkflowRun {
   atsScore?: number | null;
   jobMatchScore?: number | null;
   interviewReadinessScore?: number | null;
-  state?: string;
+  /** Full per-stage agent output blob (candidate_profile, ranked_jobs, agent_execution, cost_usd, …). */
+  state?: Record<string, unknown>;
   createdAt?: string;
   updatedAt?: string;
   /** Derived per-stage timeline; the list endpoint returns this too. */
@@ -127,6 +128,20 @@ export interface WorkflowStatusDetail {
   status: string;
   currentAgent?: string;
   agents: WorkflowAgent[];
+  /** Full per-stage agent output blob — same shape as WorkflowRun.state. */
+  state?: Record<string, unknown>;
+}
+
+/** One entry of `state.agent_execution` — per-node execution telemetry (not emitted for Human Approval). */
+export interface AgentExecutionEntry {
+  stage: string;
+  name: string;
+  status: string;
+  started_at?: string;
+  completed_at?: string;
+  duration_ms?: number;
+  provider?: string;
+  error?: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -139,4 +154,12 @@ export interface WorkflowStatusStepperProps {
   currentAgent?: string;
   variant?: 'vertical' | 'horizontal';
   className?: string;
+  /** Full per-stage state blob, passed through so stage rows can render real detail without an extra fetch. */
+  state?: Record<string, unknown>;
+  /** Externally requested stage name to expand + scroll into view (e.g. from the top pipeline). */
+  focusStage?: string | null;
+  /** A changing token so the same stage can be re-focused even if it was already open. */
+  focusNonce?: number;
+  /** Horizontal-only: bubbles a stage click up for navigation (does not expand anything locally). */
+  onStageNavigate?: (stageName: string) => void;
 }

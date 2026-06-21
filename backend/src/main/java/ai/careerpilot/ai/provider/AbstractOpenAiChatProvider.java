@@ -3,6 +3,7 @@ package ai.careerpilot.ai.provider;
 import ai.careerpilot.ai.AbstractLlmProvider;
 import ai.careerpilot.ai.AiGatewayProperties;
 import ai.careerpilot.ai.ChatMessage;
+import ai.careerpilot.ai.QuotaExceededException;
 import com.fasterxml.jackson.databind.JsonNode;
 import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.HttpHeaders;
@@ -10,6 +11,7 @@ import org.springframework.http.MediaType;
 import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -59,6 +61,11 @@ public abstract class AbstractOpenAiChatProvider extends AbstractLlmProvider {
                 .contentType(MediaType.APPLICATION_JSON)
                 .bodyValue(body)
                 .retrieve()
+                // 429 → throw the typed quota exception so the gateway fails over
+                // immediately instead of wasting its retry budget on a rate-limited
+                // provider (Resilience4j ignores QuotaExceededException for retry).
+                .onStatus(status -> status.value() == 429,
+                        r -> Mono.error(new QuotaExceededException(displayName() + " 429 quota/rate limit", null)))
                 .bodyToMono(JsonNode.class)
                 .timeout(timeout())
                 .block();
@@ -79,6 +86,8 @@ public abstract class AbstractOpenAiChatProvider extends AbstractLlmProvider {
                 .accept(MediaType.TEXT_EVENT_STREAM)
                 .bodyValue(body)
                 .retrieve()
+                .onStatus(status -> status.value() == 429,
+                        r -> Mono.error(new QuotaExceededException(displayName() + " 429 quota/rate limit", null)))
                 .bodyToFlux(SSE_TYPE)
                 .timeout(timeout())
                 .mapNotNull(ServerSentEvent::data)

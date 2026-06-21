@@ -388,7 +388,8 @@ public class WorkflowService {
             Map<String, Object> parsed = mapper.readValue(run.getState(), Map.class);
             return parsed;
         } catch (Exception e) {
-            log.error("Failed to parse workflow state for {}: {}", run.getThreadId(), e.getMessage());
+            log.error("Failed to parse workflow state for {}: error_type={}, error={}",
+                    run.getThreadId(), e.getClass().getSimpleName(), e.getMessage(), e);
             return new HashMap<>();
         }
     }

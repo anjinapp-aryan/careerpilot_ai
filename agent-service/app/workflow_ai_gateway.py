@@ -3,12 +3,13 @@ Workflow AI Gateway — multi-provider failover for LangGraph agents.
 
 Mirrors the Java AiGatewayService architecture with automatic failover:
     1. DeepSeek V4 Flash (NVIDIA NIM) [PRIMARY]
-    2. Qwen 3 Next 80B (NVIDIA NIM) [FALLBACK #1]
-    3. Gemini 2.5 Flash [FALLBACK #2]
+    2. Gemini 2.5 Flash [FALLBACK #1]
+    3. Llama 3.3 70B (Groq) [FALLBACK #2]
+    4. Qwen 3 Next 80B (NVIDIA NIM) [FALLBACK #3]
 
 Circuit breaker pattern:
     - 429 ResourceExhausted → mark provider QUOTA_EXCEEDED
-    - Block provider for 30 minutes
+    - Block provider for 60s (transient per-minute rate limit; re-probed next run)
     - Use ProviderHealthTracker
 
 Timeout protection:
@@ -78,8 +79,15 @@ class ProviderHealth:
     def mark_quota_exceeded(self) -> None:
         self.status = ProviderStatus.QUOTA_EXCEEDED
         self.last_checked_at = time.time()
-        # Extend TTL for quota exhaustion to 30 minutes
-        self.ttl_seconds = 1800.0
+        # NVIDIA NIM / Gemini free-tier 429s are TRANSIENT per-minute rate limits
+        # ("Too Many Requests"), not hard daily-quota exhaustion — they clear within
+        # ~60s. The gateway is a process-wide singleton, so a long lockout benches the
+        # provider for EVERY workflow run in the window: a single transient 429 on the
+        # primary (DeepSeek) was blackballing it for 30 min and forcing all runs onto
+        # Gemini. Re-probe the primary on the next run instead (proven recoverable: a
+        # direct call to the same key/model returns 200 seconds later). Still long
+        # enough to avoid hammering a rate-limited endpoint within one run.
+        self.ttl_seconds = 60.0
 
     def mark_healthy(self) -> None:
         self.status = ProviderStatus.HEALTHY
@@ -103,7 +111,7 @@ class ProviderHealthTracker:
             return health.status
 
     def mark_quota_exceeded(self, provider_name: str) -> None:
-        """Mark provider as quota exhausted (30min lockout)."""
+        """Mark provider rate-limited (60s lockout; transient 429, re-probed next run)."""
         with self._lock:
             if provider_name not in self._health:
                 self._health[provider_name] = ProviderHealth()
@@ -151,7 +159,7 @@ class DeepSeekProvider(WorkflowAIProvider):
 
     def __init__(self, api_key: str, base_url: str, model: str):
         if not api_key or not base_url:
-            raise RuntimeError("NVIDIA_API_KEY and NVIDIA_BASE_URL required for DeepSeek")
+            raise RuntimeError("DEEP_SHEEK_NVIDIA_API_KEY and NVIDIA_BASE_URL required for DeepSeek")
         self._api_key = api_key
         self._base_url = base_url.rstrip("/")
         self._model = model
@@ -237,7 +245,7 @@ class QwenProvider(WorkflowAIProvider):
 
     def __init__(self, api_key: str, base_url: str, model: str):
         if not api_key or not base_url:
-            raise RuntimeError("NVIDIA_API_KEY and NVIDIA_BASE_URL required for Qwen")
+            raise RuntimeError("QWEN3_NVIDIA_API_KEY and NVIDIA_BASE_URL required for Qwen")
         self._api_key = api_key
         self._base_url = base_url.rstrip("/")
         self._model = model
@@ -315,6 +323,110 @@ class QwenProvider(WorkflowAIProvider):
 
 
 # ---------------------------------------------------------------------------
+# Groq provider (OpenAI-compatible)
+# ---------------------------------------------------------------------------
+
+class GroqProvider(WorkflowAIProvider):
+    """Llama 3.3 70B via Groq API (OpenAI-compatible)."""
+
+    def __init__(self, api_key: str, base_url: str, model: str):
+        if not api_key or not base_url:
+            raise RuntimeError("GROQ_API_KEY and GROQ_BASE_URL required for Groq")
+        self._api_key = api_key
+        self._base_url = base_url.rstrip("/")
+        self._model = model
+        log.info(
+            "groq_provider_init",
+            extra={
+                "event": "groq_provider_init",
+                "model": model,
+                "base_url": base_url,
+            },
+        )
+
+    @property
+    def name(self) -> str:
+        return "groq"
+
+    def generate_structured_response(
+        self, prompt: str, schema: dict, *, system: str | None = None, timeout_seconds: float = 15.0
+    ) -> dict:
+        """Call Groq for structured JSON output.
+
+        IMPORTANT: Groq's `response_format: json_schema` is only supported on a
+        subset of models — `llama-3.3-70b-versatile` (our default) rejects it with
+        HTTP 400 ("This model does not support response format `json_schema`").
+        So we use `json_object` mode (which every Groq chat model supports) and
+        embed the JSON Schema in the system message instead. json_object guarantees
+        syntactically-valid JSON; the embedded schema steers it to the right shape —
+        the same contract DeepSeek/Qwen/Gemini fulfil via native schema enforcement.
+        Groq also REQUIRES the literal word "json" to appear in the messages when
+        json_object mode is on, which the schema instruction below satisfies.
+        """
+        import httpx
+
+        headers = {
+            "Authorization": f"Bearer {self._api_key}",
+            "Content-Type": "application/json",
+        }
+
+        schema_instruction = (
+            "You must respond with ONLY a single valid JSON object (no prose, no "
+            "markdown fences) that conforms to this JSON Schema:\n"
+            f"{json.dumps(schema)}"
+        )
+        system_content = f"{system}\n\n{schema_instruction}" if system else schema_instruction
+
+        messages = [
+            {"role": "system", "content": system_content},
+            {"role": "user", "content": prompt},
+        ]
+
+        payload = {
+            "model": self._model,
+            "messages": messages,
+            "temperature": 0.2,
+            "response_format": {"type": "json_object"},
+        }
+
+        try:
+            with httpx.Client(timeout=timeout_seconds) as client:
+                resp = client.post(f"{self._base_url}/chat/completions", json=payload, headers=headers)
+                if resp.status_code != 200:
+                    log.error(
+                        "groq_http_error",
+                        extra={
+                            "event": "groq_http_error",
+                            "status_code": resp.status_code,
+                            "model": self._model,
+                            "endpoint": f"{self._base_url}/chat/completions",
+                            "response_body": resp.text[:500],
+                        },
+                    )
+                resp.raise_for_status()
+                data = resp.json()
+                content = data.get("choices", [{}])[0].get("message", {}).get("content", "{}")
+                result = json.loads(content)
+                log.debug(
+                    "groq_request_succeeded",
+                    extra={"event": "groq_request_succeeded", "model": self._model},
+                )
+                return result
+        except httpx.TimeoutException as e:
+            log.error(
+                "groq_timeout",
+                extra={"event": "groq_timeout", "timeout_seconds": timeout_seconds, "error": str(e)},
+            )
+            raise
+        except Exception as e:
+            log.error(
+                "groq_request_failed",
+                extra={"event": "groq_request_failed", "error_type": type(e).__name__, "error": str(e), "model": self._model},
+            )
+            raise
+
+
+# ---------------------------------------------------------------------------
 # Gemini provider (existing)
 # ---------------------------------------------------------------------------
 
@@ -386,12 +498,13 @@ class WorkflowAiGateway:
 
     Failover chain:
         1. DeepSeek (NVIDIA NIM)
-        2. Qwen (NVIDIA NIM)
-        3. Gemini (Google)
+        2. Gemini (Google)
+        3. Groq (Llama 3.3 70B)
+        4. Qwen (NVIDIA NIM)
 
     Features:
         - Automatic failover on error
-        - Circuit breaker (429 quota → 30min lockout)
+        - Circuit breaker (429 rate limit → 60s lockout, re-probed next run)
         - 15s timeout per provider (fail fast, don't wait)
         - Comprehensive logging
     """
@@ -399,18 +512,22 @@ class WorkflowAiGateway:
     def __init__(
         self,
         deepseek_provider: DeepSeekProvider | None,
-        qwen_provider: QwenProvider | None,
         gemini_provider: GeminiWorkflowProvider,
+        groq_provider: GroqProvider | None,
+        qwen_provider: QwenProvider | None,
     ):
         self._providers = []
         self._health = ProviderHealthTracker()
 
-        # Build provider chain (skip None providers)
+        # Build provider chain (skip None providers) in the required order:
+        # DeepSeek -> Gemini -> Groq -> Qwen.
         if deepseek_provider:
             self._providers.append(deepseek_provider)
+        self._providers.append(gemini_provider)
+        if groq_provider:
+            self._providers.append(groq_provider)
         if qwen_provider:
             self._providers.append(qwen_provider)
-        self._providers.append(gemini_provider)
 
         log.info(
             "workflow_ai_gateway_init",
@@ -625,10 +742,10 @@ def get_workflow_ai_gateway() -> WorkflowAiGateway:
         deepseek_provider = None
         qwen_provider = None
 
-        if settings.nvidia_api_key:
+        if settings.deep_sheek_nvidia_api_key:
             try:
                 deepseek_provider = DeepSeekProvider(
-                    api_key=settings.nvidia_api_key,
+                    api_key=settings.deep_sheek_nvidia_api_key,
                     base_url=settings.nvidia_base_url,
                     model=settings.nvidia_deepseek_model,
                 )
@@ -638,9 +755,13 @@ def get_workflow_ai_gateway() -> WorkflowAiGateway:
                     extra={"event": "deepseek_provider_init_failed", "error": str(e)},
                 )
 
+        # Qwen is provisioned under its own NVIDIA account (QWEN3_NVIDIA_API_KEY),
+        # distinct from DeepSeek's deep_sheek_nvidia_api_key — gated independently
+        # so DeepSeek-only or Qwen-only configs both work.
+        if settings.qwen3_nvidia_api_key:
             try:
                 qwen_provider = QwenProvider(
-                    api_key=settings.nvidia_api_key,
+                    api_key=settings.qwen3_nvidia_api_key,
                     base_url=settings.nvidia_base_url,
                     model=settings.nvidia_qwen_model,
                 )
@@ -655,10 +776,25 @@ def get_workflow_ai_gateway() -> WorkflowAiGateway:
             model=settings.ai_model,
         )
 
+        groq_provider = None
+        if settings.groq_api_key:
+            try:
+                groq_provider = GroqProvider(
+                    api_key=settings.groq_api_key,
+                    base_url=settings.groq_base_url,
+                    model=settings.groq_model,
+                )
+            except Exception as e:
+                log.warning(
+                    "groq_provider_init_failed",
+                    extra={"event": "groq_provider_init_failed", "error": str(e)},
+                )
+
         _gateway = WorkflowAiGateway(
             deepseek_provider=deepseek_provider,
-            qwen_provider=qwen_provider,
             gemini_provider=gemini_provider,
+            groq_provider=groq_provider,
+            qwen_provider=qwen_provider,
         )
 
     return _gateway

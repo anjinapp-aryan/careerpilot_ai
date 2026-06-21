@@ -23,8 +23,9 @@ import java.util.function.Supplier;
 /**
  * The single entry point for all AI in CareerPilot. Business services depend on
  * this — never on a concrete provider. Routes every call through the configured
- * provider order (Gemini → DeepSeek → Qwen) with automatic failover, per-provider
- * retry + circuit breaking (Resilience4j) + timeouts, usage metrics, and logging.
+ * provider order (e.g. DeepSeek → Gemini → Groq → Qwen) with automatic failover,
+ * per-provider retry + circuit breaking (Resilience4j) + timeouts, usage metrics,
+ * and structured logging.
  *
  * Users never see internal provider failures: as long as one provider in the
  * chain succeeds, they get a response.
@@ -111,7 +112,7 @@ public class AiGatewayService {
     private <T> T execute(String op, Function<LlmProvider, T> call) {
         List<LlmProvider> chain = orderedConfigured();
         if (chain.isEmpty()) {
-            throw new AiGatewayException("No AI provider is configured", null);
+            throw new AiGatewayException("No AI provider is configured", null, List.of());
         }
         Throwable last = null;
         for (int i = 0; i < chain.size(); i++) {
@@ -120,45 +121,105 @@ public class AiGatewayService {
             CircuitBreaker cb = cbRegistry.circuitBreaker(p.name());
 
             if (cb.getState() == CircuitBreaker.State.OPEN) {
-                log.warn("{} circuit is OPEN — skipping to fallback", p.displayName());
+                metrics.recordCircuitOpen(p.name());
+                log.warn("AI_GATEWAY provider={} result=SKIPPED reason=CIRCUIT_OPEN fallbackDepth={}", p.displayName(), i);
                 if (hasNext) metrics.recordFallback();
                 continue;
             }
 
             try {
-                log.info("Request {} - Using {} Provider", op, p.displayName());
+                log.info("AI_GATEWAY op={} provider={} model={} attempt fallbackDepth={}", op, p.displayName(), modelOf(p), i);
                 metrics.recordCall(p.name());
+                long start = System.nanoTime();
                 Supplier<T> decorated = Retry.decorateSupplier(retryRegistry.retry(p.name()),
                         CircuitBreaker.decorateSupplier(cb, () -> call.apply(p)));
                 T result = decorated.get();
+                long elapsedMs = (System.nanoTime() - start) / 1_000_000;
+
+                // Treat a null/blank response as a failure and fail over — a 200 with no
+                // usable content is no better than an exception for the caller.
+                if (result instanceof String s && s.isBlank()) {
+                    last = new AiGatewayException(p.displayName() + " returned an empty response", null);
+                    metrics.recordFailure(p.name());
+                    healthTracker.recordFailure(p.name(), "empty response");
+                    log.warn("AI_GATEWAY provider={} result=FAILED reason=EMPTY_RESPONSE fallback={} fallbackDepth={}",
+                            p.displayName(), hasNext ? chain.get(i + 1).displayName() : "NONE", i);
+                    if (hasNext) metrics.recordFallback();
+                    continue;
+                }
+
                 lastUsedProvider.set(p.name());
+                metrics.recordSuccess(p.name());
+                metrics.recordLatency(p.name(), elapsedMs);
                 healthTracker.recordSuccess(p.name());
-                log.info("Response Returned from {}", p.displayName());
+                log.info("AI_GATEWAY provider={} model={} result=SUCCESS latencyMs={} fallbackDepth={}",
+                        p.displayName(), modelOf(p), elapsedMs, i);
                 return result;
             } catch (CallNotPermittedException e) {
                 last = e;
-                log.warn("{} circuit opened mid-flight — skipping to fallback", p.displayName());
+                metrics.recordCircuitOpen(p.name());
+                log.warn("AI_GATEWAY provider={} result=FAILED reason=CIRCUIT_OPEN fallback={} fallbackDepth={}",
+                        p.displayName(), hasNext ? chain.get(i + 1).displayName() : "NONE", i);
                 if (hasNext) metrics.recordFallback();
             } catch (Exception e) {
                 last = e;
-                metrics.recordFailure(p.name());
-                boolean isQuotaError = e.getMessage() != null && e.getMessage().contains("429");
-                if (isQuotaError) {
-                    healthTracker.recordQuotaExceeded(p.name());
-                    log.error("{} Quota exceeded — immediate failover", p.displayName());
-                } else {
-                    healthTracker.recordFailure(p.name(), e.getMessage());
-                    log.error("{} Provider failed: {} - {}", p.displayName(), e.getClass().getSimpleName(), e.getMessage(), e);
-                }
+                String reason = recordFailure(p, e);
                 if (hasNext) {
                     metrics.recordFallback();
-                    log.warn("{} Failed → Switching to {}", p.displayName(), chain.get(i + 1).displayName());
+                    log.warn("AI_GATEWAY provider={} result=FAILED reason={} fallback={} fallbackDepth={}",
+                            p.displayName(), reason, chain.get(i + 1).displayName(), i);
                 } else {
-                    log.error("All {} providers exhausted for operation '{}'", chain.size(), op);
+                    log.error("AI_GATEWAY provider={} result=FAILED reason={} fallback=NONE fallbackDepth={} — all {} providers exhausted for op='{}'",
+                            p.displayName(), reason, i, chain.size(), op);
                 }
             }
         }
-        throw new AiGatewayException("All AI providers are unavailable", last);
+        throw new AiGatewayException("All AI providers are unavailable", last, displayNames(chain));
+    }
+
+    // ====================================================================
+    // Failure classification + small helpers (shared by blocking + stream)
+    // ====================================================================
+
+    /** Record metrics + health for a failed call and return a short reason code for logging. */
+    private String recordFailure(LlmProvider p, Throwable e) {
+        metrics.recordFailure(p.name());
+        if (isQuota(e)) {
+            metrics.recordRateLimit(p.name());
+            healthTracker.recordQuotaExceeded(p.name());
+            return "RATE_LIMIT";
+        }
+        if (isTimeout(e)) {
+            metrics.recordTimeout(p.name());
+            healthTracker.recordFailure(p.name(), "timeout");
+            return "TIMEOUT";
+        }
+        healthTracker.recordFailure(p.name(), e.getMessage());
+        return "ERROR";
+    }
+
+    private static boolean isQuota(Throwable e) {
+        return e instanceof QuotaExceededException
+                || e.getCause() instanceof QuotaExceededException
+                || (e.getMessage() != null && e.getMessage().contains("429"));
+    }
+
+    private static boolean isTimeout(Throwable e) {
+        if (e instanceof java.util.concurrent.TimeoutException
+                || e.getCause() instanceof java.util.concurrent.TimeoutException) {
+            return true;
+        }
+        String m = e.getMessage();
+        return m != null && m.toLowerCase().contains("timeout");
+    }
+
+    private String modelOf(LlmProvider p) {
+        String model = props.provider(p.name()).getModel();
+        return model == null ? "?" : model;
+    }
+
+    private static List<String> displayNames(List<LlmProvider> chain) {
+        return chain.stream().map(LlmProvider::displayName).toList();
     }
 
     // ====================================================================
@@ -169,17 +230,18 @@ public class AiGatewayService {
                                     List<ChatMessage> messages, String system, double temperature,
                                     Consumer<String> providerCallback) {
         if (chain.isEmpty()) {
-            return Flux.error(new AiGatewayException("No AI provider is configured", null));
+            return Flux.error(new AiGatewayException("No AI provider is configured", null, List.of()));
         }
         if (idx >= chain.size()) {
-            return Flux.error(new AiGatewayException("All AI providers are unavailable", null));
+            return Flux.error(new AiGatewayException("All AI providers are unavailable", null, displayNames(chain)));
         }
         LlmProvider p = chain.get(idx);
         boolean hasNext = idx < chain.size() - 1;
         CircuitBreaker cb = cbRegistry.circuitBreaker(p.name());
 
         if (!cb.tryAcquirePermission()) {
-            log.warn("{} circuit is OPEN — skipping to fallback (stream)", p.displayName());
+            metrics.recordCircuitOpen(p.name());
+            log.warn("AI_GATEWAY provider={} result=SKIPPED reason=CIRCUIT_OPEN fallbackDepth={} (stream)", p.displayName(), idx);
             if (hasNext) metrics.recordFallback();
             return streamFrom(chain, idx + 1, messages, system, temperature, providerCallback);
         }
@@ -194,36 +256,32 @@ public class AiGatewayService {
                 .doOnComplete(() -> {
                     long elapsedMs = (System.nanoTime() - start) / 1_000_000;
                     lastUsedProvider.set(p.name());
-                    log.info("Stream complete for {}. Callback present: {}", p.displayName(), providerCallback != null);
                     if (providerCallback != null) {
                         providerCallback.accept(p.name());
-                        log.info("Provider callback executed for {}", p.name());
                     }
+                    metrics.recordSuccess(p.name());
+                    metrics.recordLatency(p.name(), elapsedMs);
                     healthTracker.recordSuccess(p.name());
-                    log.info("Response Returned from {} in {}ms", p.displayName(), elapsedMs);
+                    log.info("AI_GATEWAY provider={} model={} result=SUCCESS latencyMs={} fallbackDepth={} (stream)",
+                            p.displayName(), modelOf(p), elapsedMs, idx);
                     cb.onSuccess(System.nanoTime() - start, TimeUnit.NANOSECONDS);
                 })
                 .onErrorResume(err -> {
                     cb.onError(System.nanoTime() - start, TimeUnit.NANOSECONDS, err);
-                    metrics.recordFailure(p.name());
-                    boolean isQuotaError = err.getMessage() != null && err.getMessage().contains("429");
-                    if (isQuotaError) {
-                        healthTracker.recordQuotaExceeded(p.name());
-                        log.error("{} Quota exceeded — immediate failover", p.displayName());
-                    } else {
-                        healthTracker.recordFailure(p.name(), err.getMessage());
-                        log.error("{} Provider failed: {} - {}", p.displayName(), err.getClass().getSimpleName(), err.getMessage(), err);
-                    }
+                    String reason = recordFailure(p, err);
                     if (emitted.get()) {
                         // Tokens already streamed to the client — cannot transparently fail over.
-                        log.error("{} failed mid-stream — cannot failover", p.displayName());
+                        log.error("AI_GATEWAY provider={} result=FAILED reason={} fallback=NONE_MID_STREAM fallbackDepth={} (stream)",
+                                p.displayName(), reason, idx);
                         return Flux.error(err);
                     }
                     if (hasNext) {
                         metrics.recordFallback();
-                        log.warn("{} Failed → Switching to {}", p.displayName(), chain.get(idx + 1).displayName());
+                        log.warn("AI_GATEWAY provider={} result=FAILED reason={} fallback={} fallbackDepth={} (stream)",
+                                p.displayName(), reason, chain.get(idx + 1).displayName(), idx);
                     } else {
-                        log.error("All {} providers exhausted", chain.size());
+                        log.error("AI_GATEWAY provider={} result=FAILED reason={} fallback=NONE fallbackDepth={} — all {} providers exhausted (stream)",
+                                p.displayName(), reason, idx, chain.size());
                     }
                     return streamFrom(chain, idx + 1, messages, system, temperature, providerCallback);
                 });

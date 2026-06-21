@@ -124,10 +124,28 @@ def _instrument(stage: str, display_name: str, fn: Callable[[CareerState], dict]
 
 @lru_cache(maxsize=1)
 def _pool() -> ConnectionPool:
+    # Neon serverless closes idle server-side connections well under common
+    # client pool-idle defaults. Without `check`, a connection that Neon already
+    # dropped looks healthy at checkout time and the first query against it
+    # fails mid-request with psycopg.OperationalError ("SSL SYSCALL error: EOF
+    # detected") inside graph.invoke()/get_state(). `check_connection` runs a
+    # cheap liveness probe on checkout and transparently replaces a dead
+    # connection instead of handing it to the caller; `max_idle` proactively
+    # recycles connections before Neon's own idle timeout can fire; the libpq
+    # keepalive kwargs detect a half-open socket faster than TCP defaults.
     pool = ConnectionPool(
         conninfo=settings.database_url,
         max_size=10,
-        kwargs={"autocommit": True, "prepare_threshold": 0},
+        kwargs={
+            "autocommit": True,
+            "prepare_threshold": 0,
+            "keepalives": 1,
+            "keepalives_idle": 30,
+            "keepalives_interval": 10,
+            "keepalives_count": 3,
+        },
+        check=ConnectionPool.check_connection,
+        max_idle=180,
         open=True,
     )
     return pool

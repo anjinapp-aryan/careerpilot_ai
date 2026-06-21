@@ -1,5 +1,6 @@
 package ai.careerpilot.api;
 
+import ai.careerpilot.ai.AiGatewayException;
 import jakarta.validation.ConstraintViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -52,6 +53,22 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(ConstraintViolationException.class)
     public ResponseEntity<Map<String, Object>> cv(ConstraintViolationException e) {
         return body(HttpStatus.BAD_REQUEST, e.getMessage());
+    }
+
+    /**
+     * Total AI outage — every configured provider failed. Returns a structured
+     * 503 the UI can render gracefully (never a stack trace), listing which
+     * providers were attempted. Only reached when no provider could serve the
+     * request; a single provider success never lands here.
+     */
+    @ExceptionHandler(AiGatewayException.class)
+    public ResponseEntity<Map<String, Object>> aiUnavailable(AiGatewayException e) {
+        Map<String, Object> b = new LinkedHashMap<>();
+        b.put("timestamp", Instant.now().toString());
+        b.put("status", "AI_PROVIDER_UNAVAILABLE");
+        b.put("message", "All configured AI providers are currently unavailable.");
+        b.put("providerAttempts", e.getProviderAttempts());
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(b);
     }
 
     @ExceptionHandler(Exception.class)

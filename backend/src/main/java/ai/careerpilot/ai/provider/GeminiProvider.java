@@ -3,6 +3,7 @@ package ai.careerpilot.ai.provider;
 import ai.careerpilot.ai.AbstractLlmProvider;
 import ai.careerpilot.ai.AiGatewayProperties;
 import ai.careerpilot.ai.ChatMessage;
+import ai.careerpilot.ai.QuotaExceededException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
@@ -10,6 +11,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 
 import java.time.Duration;
 import java.util.List;
@@ -59,6 +61,8 @@ public class GeminiProvider extends AbstractLlmProvider {
                         .queryParam("key", cfg.getApiKey()).build(cfg.getModel()))
                 .bodyValue(body)
                 .retrieve()
+                .onStatus(status -> status.value() == 429,
+                        r -> Mono.error(new QuotaExceededException("Gemini 429 quota/rate limit", null)))
                 .bodyToMono(JsonNode.class)
                 .timeout(timeout())
                 .block();
@@ -76,7 +80,7 @@ public class GeminiProvider extends AbstractLlmProvider {
                 .retrieve()
                 .onStatus(status -> status.value() == 429, resp -> {
                     log.error("Gemini 429 Quota Exceeded — failover required");
-                    return resp.createException();
+                    return Mono.error(new QuotaExceededException("Gemini 429 quota/rate limit", null));
                 })
                 .bodyToFlux(String.class)
                 .timeout(timeout())

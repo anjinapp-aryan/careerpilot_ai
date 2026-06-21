@@ -68,7 +68,11 @@ ai:
   # ---- AI Gateway: single entry point for all LLM calls, with failover ----
   gateway:
     primary: ${PRIMARY_PROVIDER:deepseek}
-    order: ${AI_PROVIDER_ORDER:deepseek,gemini,qwen}   # failover priority: DeepSeek → Gemini → Qwen
+    # Failover priority: DeepSeek → Gemini → Groq → Qwen (provider diversity is
+    # intentional — NVIDIA, Google, Groq, NVIDIA — so one vendor's outage/quota
+    # never takes out two consecutive hops). Unconfigured providers (no API key)
+    # are skipped automatically, so Groq simply sits idle until GROQ_API_KEY is set.
+    order: ${AI_PROVIDER_ORDER:deepseek,gemini,groq,qwen}
     default-temperature: 0.4
     providers:
       gemini:
@@ -79,15 +83,21 @@ ai:
         timeout-ms: 15000
       deepseek:
         display-name: DeepSeek
-        api-key: ${NVIDIA_API_KEY:}
+        api-key: ${DEEP_SHEEK_NVIDIA_API_KEY:}
         # NVIDIA NIM IDs are vendor-namespaced; the bare "deepseek-v4-flash"
         # 404s. Keep the "deepseek-ai/" prefix in the default.
         model: ${NVIDIA_DEEPSEEK_MODEL:deepseek-ai/deepseek-v4-flash}
         base-url: ${NVIDIA_BASE_URL:https://integrate.api.nvidia.com/v1}
         timeout-ms: 20000
+      groq:
+        display-name: Groq
+        api-key: ${GROQ_API_KEY:}
+        model: ${GROQ_MODEL:llama-3.3-70b-versatile}
+        base-url: ${GROQ_BASE_URL:https://api.groq.com/openai/v1}
+        timeout-ms: 20000
       qwen:
         display-name: Qwen
-        api-key: ${NVIDIA_API_KEY:}
+        api-key: ${QWEN3_NVIDIA_API_KEY:}
         model: ${NVIDIA_QWEN_MODEL:qwen/qwen3-next-80b-a3b-instruct}
         base-url: ${NVIDIA_BASE_URL:https://integrate.api.nvidia.com/v1}
         timeout-ms: 25000
@@ -96,14 +106,23 @@ ai:
 resilience4j:
   retry:
     instances:
+      # 2 retries before failing over (3 attempts total), exponential backoff
+      # 1s → 2s. Quota/rate-limit (429) is mapped to QuotaExceededException and
+      # ignored here, so a rate-limited provider fails over immediately instead of
+      # burning the retry budget. CallNotPermittedException (open circuit) likewise
+      # short-circuits straight to the next provider.
       gemini: &retryDefaults
-        max-attempts: 2
-        wait-duration: 400ms
+        max-attempts: 3
+        wait-duration: 1s
+        enable-exponential-backoff: true
+        exponential-backoff-multiplier: 2
         retry-exceptions:
           - java.lang.Exception
         ignore-exceptions:
           - io.github.resilience4j.circuitbreaker.CallNotPermittedException
+          - ai.careerpilot.ai.QuotaExceededException
       deepseek: *retryDefaults
+      groq: *retryDefaults
       qwen: *retryDefaults
   circuitbreaker:
     instances:
@@ -116,6 +135,7 @@ resilience4j:
         permitted-number-of-calls-in-half-open-state: 3
         automatic-transition-from-open-to-half-open-enabled: true
       deepseek: *cbDefaults
+      groq: *cbDefaults
       qwen: *cbDefaults
 
 agent-service:

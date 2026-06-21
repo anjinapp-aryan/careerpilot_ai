@@ -72,9 +72,18 @@ public class AgentServiceClient {
                     resp != null ? resp.status() : "null");
             return resp;
         } catch (WebClientResponseException e) {
+            // 409 = the agent's checkpoint says this run is no longer awaiting approval
+            // (decision already applied, or never reached the gate). Surface it as a
+            // conflict so GlobalExceptionHandler maps it to HTTP 409 — not a 500.
+            if (e.getStatusCode().value() == 409) {
+                log.info("Agent resumeRun conflict (not awaiting approval): thread_id={}", threadId);
+                throw new IllegalStateException("Workflow is not awaiting approval");
+            }
             log.error("Agent resumeRun HTTP error: status={}, body={}",
                     e.getStatusCode(), e.getResponseBodyAsString(), e);
             throw new AgentServiceException("Agent service HTTP error: " + e.getStatusCode(), e);
+        } catch (IllegalStateException e) {
+            throw e;
         } catch (Exception e) {
             log.error("Agent resumeRun failed", e);
             throw new AgentServiceException("Agent service unavailable", e);

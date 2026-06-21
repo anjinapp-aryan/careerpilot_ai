@@ -89,6 +89,15 @@ export interface WorkflowRun {
   interviewReadinessScore?: number | null;
   state?: string;
   createdAt?: string;
+  updatedAt?: string;
+  /** Derived per-stage timeline; the list endpoint returns this too. */
+  agents?: WorkflowAgent[];
+  // Audit trail (Phase 6) — populated once the approval gate has been actioned.
+  approvedBy?: string | null;
+  approvedAt?: string | null;
+  rejectedBy?: string | null;
+  rejectedAt?: string | null;
+  feedback?: string | null;
 }
 
 // ---------------------------------------------------------------------------

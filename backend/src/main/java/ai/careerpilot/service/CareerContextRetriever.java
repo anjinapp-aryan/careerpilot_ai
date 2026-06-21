@@ -22,13 +22,16 @@ public class CareerContextRetriever {
     private final JobRepository jobs;
     private final ApplicationRepository applications;
     private final WorkflowRunRepository workflowRuns;
+    private final WorkflowService workflowService;
 
     public CareerContextRetriever(ResumeRepository resumes, JobRepository jobs,
-                                  ApplicationRepository applications, WorkflowRunRepository workflowRuns) {
+                                  ApplicationRepository applications, WorkflowRunRepository workflowRuns,
+                                  WorkflowService workflowService) {
         this.resumes = resumes;
         this.jobs = jobs;
         this.applications = applications;
         this.workflowRuns = workflowRuns;
+        this.workflowService = workflowService;
     }
 
     @Transactional(readOnly = true)
@@ -94,9 +97,11 @@ public class CareerContextRetriever {
     public WorkflowContext getWorkflowContext(AuthenticatedUser user, String workflowId) {
         WorkflowRun run = resolveWorkflowRun(user, workflowId)
                 .orElseThrow(() -> new IllegalArgumentException("Workflow not found or access denied"));
+        // Report the DERIVED lifecycle status (same value the UI shows), not the raw
+        // persisted column — so the assistant never contradicts the pipeline the user sees.
         return new WorkflowContext(
                 run.getThreadId(),
-                run.getStatus(),
+                workflowService.deriveDisplayStatus(run),
                 run.getTargetRole(),
                 run.getTargetSeniority(),
                 run.getResumeScore(),

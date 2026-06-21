@@ -26,7 +26,7 @@ public class WorkflowController {
     public WorkflowRunResponse resume(AuthenticatedUser user,
                                       @PathVariable String threadId,
                                       @RequestBody Map<String, String> body) {
-        return workflows.toResponse(workflows.resume(user.userId(), threadId,
+        return workflows.toResponse(workflows.resume(user.userId(), user.email(), threadId,
                 body.getOrDefault("decision", "approved"),
                 body.getOrDefault("feedback", "")));
     }

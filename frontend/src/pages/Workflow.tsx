@@ -47,6 +47,28 @@ const RUN_STATUS: Record<string, { icon: React.ElementType; tone: BadgeTone; lab
   INTERRUPTED: { icon: AlertTriangle, tone: 'warning', label: 'Needs approval' },
 };
 
+/** Compact human label for a millisecond duration (e.g. "1.4s", "820ms", "2m 5s"). */
+function formatDuration(ms: number): string {
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
+  const m = Math.floor(ms / 60_000);
+  const s = Math.round((ms % 60_000) / 1000);
+  return `${m}m ${s}s`;
+}
+
+/** Format an ISO timestamp as a short local date+time, tolerant of bad input. */
+function formatWhen(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return new Intl.DateTimeFormat('en-US', {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).format(d);
+}
+
 export default function Workflow() {
   const qc = useQueryClient();
   const [targeting, setTargeting] = useState({
@@ -168,8 +190,15 @@ export default function Workflow() {
                 <RunCard
                   key={run.threadId}
                   run={run}
-                  onApprove={(id) => resumeMutation.mutate({ threadId: id, decision: 'approved' })}
-                  onReject={(id) => resumeMutation.mutate({ threadId: id, decision: 'rejected' })}
+                  // Double-submit guard (Scenario E): ignore extra clicks while any resume
+                  // is in flight. The backend + agent service also reject a second decision
+                  // with 409, so this is purely to avoid firing redundant requests.
+                  onApprove={(id) => {
+                    if (!resumeMutation.isPending) resumeMutation.mutate({ threadId: id, decision: 'approved' });
+                  }}
+                  onReject={(id) => {
+                    if (!resumeMutation.isPending) resumeMutation.mutate({ threadId: id, decision: 'rejected' });
+                  }}
                   isResuming={isResuming}
                   resumeError={resumeError}
                 />
@@ -225,7 +254,10 @@ function PipelineOverview({ latestRun }: { latestRun: WorkflowRun | undefined })
   const current =
     agents.find((a) => a.status === 'FAILED' || a.status === 'REJECTED') ??
     agents.find((a) => a.status === 'ACTIVE' || a.status === 'WAITING_FOR_APPROVAL') ??
-    agents.find((a) => a.status === 'PENDING');
+    agents.find((a) => a.status === 'PENDING') ??
+    // All stages COMPLETED → the current stage is the final one (Application Tracking),
+    // so a finished run reads "Current stage: Application Tracking" rather than "—".
+    agents[agents.length - 1];
   const runStatus = data?.status ?? latestRun.status;
   const cfg = RUN_STATUS[runStatus] ?? { icon: Clock, tone: 'neutral' as BadgeTone, label: runStatus };
   const StatusIcon = cfg.icon;
@@ -308,6 +340,18 @@ function RunCard({
   const hasScores =
     run.resumeScore != null || run.atsScore != null || run.jobMatchScore != null || run.interviewReadinessScore != null;
 
+  // Phase 9 — at-a-glance health, derived from the same agents[] the timeline renders.
+  const agents = run.agents ?? [];
+  const currentStage =
+    agents.find((a) => a.status === 'FAILED' || a.status === 'REJECTED') ??
+    agents.find((a) => a.status === 'ACTIVE' || a.status === 'WAITING_FOR_APPROVAL') ??
+    agents.find((a) => a.status === 'PENDING') ??
+    agents[agents.length - 1];
+  const totalDurationMs = agents.reduce((sum, a) => sum + (a.durationMs ?? 0), 0);
+  const updatedLabel = run.updatedAt ? formatWhen(run.updatedAt) : null;
+  const isRejected = run.status === 'REJECTED';
+  const hasAudit = run.rejectedBy || run.rejectedAt || run.approvedBy || run.approvedAt || run.feedback;
+
   return (
     <Card className="overflow-hidden">
       <button
@@ -326,6 +370,18 @@ function RunCard({
             <Icon className={cn('h-3 w-3', cfg.spin && 'animate-spin')} />
             {cfg.label}
           </Badge>
+
+          {/* Phase 9 — current stage + last updated, visible without expanding. */}
+          {currentStage && run.status !== 'COMPLETED' && (
+            <span className="hidden text-xs text-muted-foreground md:inline">
+              {currentStage.name}
+            </span>
+          )}
+          {updatedLabel && (
+            <span className="hidden items-center gap-1 text-xs text-muted-foreground lg:inline-flex">
+              <Clock className="h-3 w-3" /> {updatedLabel}
+            </span>
+          )}
         </div>
 
         {hasScores && (
@@ -352,10 +408,61 @@ function RunCard({
             className="overflow-hidden"
           >
             <div className="border-t border-border px-5 py-5">
-              <div className="mb-3 flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                <BarChart3 className="h-3.5 w-3.5" /> Execution timeline
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                <span className="flex items-center gap-2">
+                  <BarChart3 className="h-3.5 w-3.5" /> Execution timeline
+                </span>
+                {totalDurationMs > 0 && (
+                  <span className="flex items-center gap-1 normal-case tabular-nums">
+                    <Clock className="h-3 w-3" /> {formatDuration(totalDurationMs)} total
+                  </span>
+                )}
               </div>
               <WorkflowStatusStepper workflowId={run.threadId} variant="vertical" />
+
+              {/* Phase 5 + 6 — rejected/approved audit trail. */}
+              {hasAudit && (
+                <div
+                  className={cn(
+                    'mt-4 rounded-lg border px-4 py-3 text-sm',
+                    isRejected ? 'border-danger/30 bg-danger/5' : 'border-success/30 bg-success/5',
+                  )}
+                >
+                  <div className="mb-2 flex items-center gap-2 font-medium">
+                    {isRejected ? (
+                      <>
+                        <XCircle className="h-4 w-4 text-danger" />
+                        <span className="text-danger">Workflow Rejected</span>
+                      </>
+                    ) : (
+                      <>
+                        <CheckCircle2 className="h-4 w-4 text-success" />
+                        <span className="text-success">Approved</span>
+                      </>
+                    )}
+                  </div>
+                  <dl className="grid gap-x-6 gap-y-1 text-xs text-muted-foreground sm:grid-cols-2">
+                    {(isRejected ? run.rejectedBy : run.approvedBy) && (
+                      <div className="flex gap-1.5">
+                        <dt className="font-medium text-foreground">{isRejected ? 'Rejected by' : 'Approved by'}:</dt>
+                        <dd>{isRejected ? run.rejectedBy : run.approvedBy}</dd>
+                      </div>
+                    )}
+                    {(isRejected ? run.rejectedAt : run.approvedAt) && (
+                      <div className="flex gap-1.5">
+                        <dt className="font-medium text-foreground">{isRejected ? 'Rejected at' : 'Approved at'}:</dt>
+                        <dd>{formatWhen((isRejected ? run.rejectedAt : run.approvedAt) as string)}</dd>
+                      </div>
+                    )}
+                    {run.feedback && (
+                      <div className="flex gap-1.5 sm:col-span-2">
+                        <dt className="font-medium text-foreground">Feedback:</dt>
+                        <dd className="italic">"{run.feedback}"</dd>
+                      </div>
+                    )}
+                  </dl>
+                </div>
+              )}
 
               {run.status === 'INTERRUPTED' && (
                 <div className="mt-4 space-y-2">

@@ -32,5 +32,12 @@ public final class WorkflowDtos {
             List<WorkflowAgent> agents,
             String errorMessage,
             Instant createdAt,
-            Instant updatedAt) {}
+            Instant updatedAt,
+            // Audit trail (Phase 6) — sourced from the workflow state blob, populated by
+            // the backend on resume. Null until the approval gate has been actioned.
+            String approvedBy,
+            String approvedAt,
+            String rejectedBy,
+            String rejectedAt,
+            String feedback) {}
 }

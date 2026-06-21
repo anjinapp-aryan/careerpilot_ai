@@ -86,11 +86,24 @@ public class WorkflowService {
     }
 
     @Transactional
-    public WorkflowRun resume(UUID userId, String threadId, String decision, String feedback) {
+    public WorkflowRun resume(UUID userId, String actor, String threadId, String decision, String feedback) {
         WorkflowRun run = runs.findByThreadId(threadId).orElseThrow();
         if (!run.getUserId().equals(userId)) throw new SecurityException("forbidden");
+
+        // Invalid-state / double-submit guard (Scenario E/F): a run may be resumed ONLY
+        // while it is genuinely awaiting approval. We check the DERIVED status — the exact
+        // value the UI rendered — so the guard can never disagree with what the user saw.
+        // This short-circuits illegal transitions (approve-a-completed-run, reject-a-rejected-run,
+        // approve-a-rejected-run, …) with a 409 before any agent round-trip, and the
+        // agent-service repeats the check atomically against its checkpoint for the
+        // true-concurrency window.
+        String current = deriveDisplayStatus(run);
+        if (!"INTERRUPTED".equals(current)) {
+            throw new IllegalStateException("Workflow is not awaiting approval (status=" + current + ")");
+        }
+
         AgentRunResponse resp = agent.resumeRun(threadId, decision, feedback);
-        return mergeResponse(run, resp);
+        return mergeResponse(run, resp, actor, decision, feedback);
     }
 
     public WorkflowRun get(UUID userId, String threadId) {
@@ -116,8 +129,24 @@ public class WorkflowService {
         return mergeState(run, status, state);
     }
 
-    private WorkflowRun mergeResponse(WorkflowRun run, AgentRunResponse resp) {
-        return mergeState(run, mapStatus(resp.status()), resp.state());
+    private WorkflowRun mergeResponse(WorkflowRun run, AgentRunResponse resp,
+                                      String actor, String decision, String feedback) {
+        // Audit trail (Phase 6, Option A — no schema change): stamp who/when the decision
+        // was made directly into the workflow state blob so it persists and is exposed on
+        // every read via toResponse(). approved_* and rejected_* are mutually exclusive.
+        Map<String, Object> state = new HashMap<>(resp.state() == null ? Map.of() : resp.state());
+        String nowIso = java.time.Instant.now().toString();
+        if ("rejected".equalsIgnoreCase(decision == null ? "" : decision.trim())) {
+            state.put("rejected_by", actor);
+            state.put("rejected_at", nowIso);
+        } else {
+            state.put("approved_by", actor);
+            state.put("approved_at", nowIso);
+        }
+        if (feedback != null && !feedback.isBlank()) {
+            state.put("human_feedback", feedback);
+        }
+        return mergeState(run, mapStatus(resp.status()), state);
     }
 
     private WorkflowRun mergeState(WorkflowRun run, String status, Map<String, Object> state) {
@@ -351,6 +380,36 @@ public class WorkflowService {
         return null;
     }
 
+    /** Parse the persisted JSON state blob into a Map, tolerant of null/empty/corrupt. */
+    private Map<String, Object> parseState(WorkflowRun run) {
+        if (run.getState() == null || run.getState().isEmpty()) return new HashMap<>();
+        try {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> parsed = mapper.readValue(run.getState(), Map.class);
+            return parsed;
+        } catch (Exception e) {
+            log.error("Failed to parse workflow state for {}: {}", run.getThreadId(), e.getMessage());
+            return new HashMap<>();
+        }
+    }
+
+    /**
+     * The lifecycle status as DERIVED from the agent timeline — identical to what
+     * {@link #toResponse} returns and the UI renders. Exposed so other read paths (e.g.
+     * the Copilot and the resume guard) report the same status the user sees, never the
+     * raw persisted {@code run.status} column.
+     */
+    public String deriveDisplayStatus(WorkflowRun run) {
+        Map<String, Object> stateMap = parseState(run);
+        List<WorkflowDtos.WorkflowAgent> agents = extractAgentTimeline(stateMap);
+        return deriveRunStatus(agents, stateMap, run.getStatus());
+    }
+
+    private static String auditField(Map<String, Object> state, String key) {
+        Object v = state.get(key);
+        return v == null ? null : v.toString();
+    }
+
     public WorkflowRunResponse toResponse(WorkflowRun run) {
         log.info("toResponse_enter: thread={}", run.getThreadId());
         Map<String, Object> stateMap = new HashMap<>();
@@ -387,7 +446,12 @@ public class WorkflowService {
                     agents,
                     run.getErrorMessage(),
                     run.getCreatedAt(),
-                    run.getUpdatedAt());
+                    run.getUpdatedAt(),
+                    auditField(stateMap, "approved_by"),
+                    auditField(stateMap, "approved_at"),
+                    auditField(stateMap, "rejected_by"),
+                    auditField(stateMap, "rejected_at"),
+                    auditField(stateMap, "human_feedback"));
             log.info("response_created: thread={}, response_state_keys={}, agents_count={}", run.getThreadId(), stateMap.keySet(), agents.size());
             return response;
         } catch (Exception e) {

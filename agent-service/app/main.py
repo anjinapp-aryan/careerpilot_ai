@@ -270,6 +270,28 @@ def resume_run(req: ResumeRunRequest) -> RunResponse:
     if not snapshot:
         raise HTTPException(status_code=404, detail="thread not found")
 
+    # Idempotency / invalid-state guard (Scenario E/F): a run may be resumed ONLY
+    # while it is genuinely parked at the human_approval gate. LangGraph leaves
+    # "human_approval" in snapshot.next exactly while the NodeInterrupt is pending;
+    # once a decision has been applied (approved/rejected) — or the run failed before
+    # ever reaching the gate — it is no longer there. Without this guard, a double-click
+    # or a late/duplicate decision re-runs update_state()+invoke(), which can flip an
+    # already-REJECTED run to "completed" via _classify() (the decision is overwritten
+    # to "approved" and no error remains). Returning 409 makes the second decision a
+    # no-op and keeps the terminal status immutable.
+    next_nodes = tuple(snapshot.next) if snapshot.next else ()
+    if "human_approval" not in next_nodes:
+        log.info(
+            "workflow_resume_rejected_not_awaiting",
+            extra={
+                "event": "workflow_resume_rejected_not_awaiting",
+                "thread_id": req.thread_id,
+                "next_nodes": list(next_nodes),
+                "decision": req.human_decision,
+            },
+        )
+        raise HTTPException(status_code=409, detail="Run is not awaiting approval")
+
     graph.update_state(
         cfg,
         {

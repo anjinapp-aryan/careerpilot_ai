@@ -61,6 +61,54 @@ export interface JobsPage {
   size?: number;
 }
 
+/** Candidate snapshot derived from the user's latest workflow run. Mirrors `CandidateProfileSummary`. */
+export interface CandidateProfileSummary {
+  yearsExperience?: number | null;
+  currentTitle?: string | null;
+  topSkills: string[];
+  preferredRoles: string[];
+  resumeScore?: number | null;
+}
+
+/** A job ranked by the Stage 1 deterministic recommender. Mirrors `RecommendedJob`. */
+export interface RecommendedJob {
+  job: Job;
+  matchScore: number;
+  matchedSkills: string[];
+  missingSkills: string[];
+}
+
+/** `GET /api/jobs/recommended` response. `profile` is null until the user runs the AI workflow. */
+export interface RecommendedJobsResponse {
+  profile: CandidateProfileSummary | null;
+  jobs: RecommendedJob[];
+}
+
+/** A persisted, AI-optimized version of a resume. Mirrors `ResumeVersionResponse`. */
+export interface ResumeVersion {
+  id: string;
+  resumeId: string;
+  versionNumber: number;
+  optimizationMode?: string | null;
+  atsBefore?: number | null;
+  atsAfter?: number | null;
+  providerUsed?: string | null;
+  workflowThreadId?: string | null;
+  hasDownload: boolean;
+  createdAt: string;
+}
+
+/** A Resume Optimization target mode (preset role, generic ATS, pasted JD, or existing job). */
+export type OptimizationMode =
+  | 'generic_ats'
+  | 'senior_java_developer'
+  | 'java_architect'
+  | 'solution_architect'
+  | 'enterprise_architect'
+  | 'engineering_manager'
+  | 'upload_jd'
+  | 'select_job';
+
 /** The exact shape of the workflow form's controlled state. */
 export interface WorkflowFormState {
   resumeId: string;

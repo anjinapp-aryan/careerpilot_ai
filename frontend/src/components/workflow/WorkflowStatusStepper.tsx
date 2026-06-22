@@ -78,6 +78,7 @@ const AGENT_ICONS: Record<string, React.ElementType> = {
   'Salary Intelligence': DollarSign,
   'Human Approval': UserCheck,
   'Application Tracking': ClipboardList,
+  'Resume Export': FileText,
 };
 
 function getAgentIcon(name: string): React.ElementType {

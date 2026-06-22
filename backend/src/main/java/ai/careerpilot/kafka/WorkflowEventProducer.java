@@ -50,4 +50,15 @@ public class WorkflowEventProducer {
             log.warn("Workflow event publish failed (sync) for key={}: {}", key, e.toString());
         }
     }
+
+    /**
+     * Publish a resume-optimization event (e.g. {@code resume.optimization.completed},
+     * {@code resume.version.created}) onto the same best-effort workflow topic, tagged with
+     * an {@code event} type. Stage 1 has no dedicated topic/consumers — this is fire-and-forget.
+     */
+    public void publishResumeEvent(String key, String eventType, Map<String, Object> payload) {
+        Map<String, Object> enriched = new java.util.HashMap<>(payload == null ? Map.of() : payload);
+        enriched.put("event", eventType);
+        publish(key, enriched);
+    }
 }

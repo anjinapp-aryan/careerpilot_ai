@@ -1,7 +1,9 @@
 package ai.careerpilot.api;
 
+import ai.careerpilot.api.dto.JobRecommendationDtos.RecommendedJobsResponse;
 import ai.careerpilot.domain.Job;
 import ai.careerpilot.security.AuthenticatedUser;
+import ai.careerpilot.service.JobRecommendationService;
 import ai.careerpilot.service.JobService;
 import org.springframework.data.domain.Page;
 import org.springframework.web.bind.annotation.*;
@@ -13,8 +15,12 @@ import java.util.UUID;
 public class JobController {
 
     private final JobService jobs;
+    private final JobRecommendationService recommendations;
 
-    public JobController(JobService jobs) { this.jobs = jobs; }
+    public JobController(JobService jobs, JobRecommendationService recommendations) {
+        this.jobs = jobs;
+        this.recommendations = recommendations;
+    }
 
     @GetMapping
     public Page<Job> search(AuthenticatedUser user,
@@ -34,5 +40,12 @@ public class JobController {
     public Job get(AuthenticatedUser user, @PathVariable UUID id) {
         // Multi-tenant: verify ownership
         return jobs.get(user.orgId(), id);
+    }
+
+    /** Stage 1 Recommended Jobs: deterministic skill/role/location scoring, no AI call. */
+    @GetMapping("/recommended")
+    public RecommendedJobsResponse recommended(AuthenticatedUser user,
+                                               @RequestParam(defaultValue = "10") int limit) {
+        return recommendations.recommend(user.userId(), user.orgId(), limit);
     }
 }

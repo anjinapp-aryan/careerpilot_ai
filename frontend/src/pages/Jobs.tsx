@@ -21,6 +21,7 @@ import { Badge } from '@/components/ui/badge';
 import { Input, Label, Textarea } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
 import { EmptyState } from '@/components/ui/empty-state';
+import { Tabs } from '@/components/ui/tabs';
 import { useToast } from '@/components/ui/toast';
 import {
   Dialog,
@@ -31,7 +32,17 @@ import {
   DialogDescription,
 } from '@/components/ui/dialog';
 import { cn } from '@/lib/cn';
-import type { Job, JobsPage } from '@/types/workflow';
+import { RecommendedJobs } from '@/components/jobs/RecommendedJobs';
+import type { Application, Job, JobsPage } from '@/types/workflow';
+
+type JobsTab = 'recommended' | 'saved' | 'applied' | 'browse';
+
+const TAB_ITEMS: { value: JobsTab; label: string }[] = [
+  { value: 'recommended', label: 'Recommended' },
+  { value: 'saved', label: 'Saved' },
+  { value: 'applied', label: 'Applied' },
+  { value: 'browse', label: 'Browse' },
+];
 
 const EMPTY_DRAFT = { title: '', company: '', location: '', description: '', salaryRange: '' };
 
@@ -52,11 +63,44 @@ export default function Jobs() {
   const [showNew, setShowNew] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
   const [draft, setDraft] = useState(EMPTY_DRAFT);
+  const [tab, setTab] = useState<JobsTab>('recommended');
 
   const { data, isLoading } = useQuery<JobsPage>({
     queryKey: ['jobs', q],
     queryFn: async () => (await api.get('/api/jobs', { params: { q } })).data,
+    enabled: tab === 'browse',
   });
+
+  const { data: applications } = useQuery<Application[]>({
+    queryKey: ['applications'],
+    queryFn: async () => (await api.get('/api/applications')).data,
+    enabled: tab === 'saved' || tab === 'applied',
+  });
+
+  const { data: allJobsPage } = useQuery<JobsPage>({
+    queryKey: ['jobs', ''],
+    queryFn: async () => (await api.get('/api/jobs')).data,
+    enabled: tab === 'saved' || tab === 'applied',
+  });
+
+  const jobMap = useMemo(() => {
+    const m = new Map<string, Job>();
+    (allJobsPage?.content ?? []).forEach((j) => m.set(j.id, j));
+    return m;
+  }, [allJobsPage]);
+
+  const savedJobs = useMemo(
+    () =>
+      (applications ?? [])
+        .filter((a) => a.status === 'SAVED')
+        .map((a) => jobMap.get(a.jobId))
+        .filter((j): j is Job => Boolean(j)),
+    [applications, jobMap],
+  );
+  const appliedApplications = useMemo(
+    () => (applications ?? []).filter((a) => a.status !== 'SAVED'),
+    [applications],
+  );
 
   const create = useMutation({
     mutationFn: async () => (await api.post('/api/jobs', draft)).data as Job,
@@ -151,17 +195,83 @@ export default function Jobs() {
         title="Jobs"
         description="Discover roles, track openings, and push them into your pipeline."
         actions={
-          <>
-            <Button variant="outline" className="lg:hidden" onClick={() => setShowFilters((v) => !v)}>
-              <Filter className="h-4 w-4" /> Filters{activeFilters ? ` (${activeFilters})` : ''}
-            </Button>
-            <Button onClick={() => setShowNew(true)}>
-              <Plus className="h-4 w-4" /> Add job
-            </Button>
-          </>
+          tab === 'browse' && (
+            <>
+              <Button variant="outline" className="lg:hidden" onClick={() => setShowFilters((v) => !v)}>
+                <Filter className="h-4 w-4" /> Filters{activeFilters ? ` (${activeFilters})` : ''}
+              </Button>
+              <Button onClick={() => setShowNew(true)}>
+                <Plus className="h-4 w-4" /> Add job
+              </Button>
+            </>
+          )
         }
       />
 
+      <Tabs items={TAB_ITEMS} value={tab} onChange={(v) => setTab(v as JobsTab)} />
+
+      {tab === 'recommended' && (
+        <RecommendedJobs
+          onApply={(jobId) => track.mutate({ jobId, status: 'APPLIED' })}
+          onSave={(jobId) => track.mutate({ jobId, status: 'SAVED' })}
+          busy={track.isPending}
+        />
+      )}
+
+      {tab === 'saved' && (
+        savedJobs.length === 0 ? (
+          <EmptyState
+            icon={Bookmark}
+            title="No saved jobs yet"
+            description="Save a role from Recommended or Browse to keep track of it here."
+          />
+        ) : (
+          <div className="space-y-4">
+            {savedJobs.map((job, i) => (
+              <JobCard
+                key={job.id}
+                job={job}
+                index={i}
+                onSave={() => track.mutate({ jobId: job.id, status: 'SAVED' })}
+                onApply={() => track.mutate({ jobId: job.id, status: 'APPLIED' })}
+                busy={track.isPending}
+              />
+            ))}
+          </div>
+        )
+      )}
+
+      {tab === 'applied' && (
+        appliedApplications.length === 0 ? (
+          <EmptyState
+            icon={Send}
+            title="No applications yet"
+            description="Apply to a role from Recommended or Browse to start tracking it here."
+          />
+        ) : (
+          <div className="space-y-4">
+            {appliedApplications.map((a) => {
+              const job = jobMap.get(a.jobId);
+              if (!job) return null;
+              return (
+                <Card key={a.id} className="p-5">
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div>
+                      <h3 className="text-base font-semibold text-foreground">{job.title}</h3>
+                      <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
+                        <Building2 className="h-3.5 w-3.5" /> {job.company}
+                      </p>
+                    </div>
+                    <Badge tone="primary">{a.status}</Badge>
+                  </div>
+                </Card>
+              );
+            })}
+          </div>
+        )
+      )}
+
+      {tab === 'browse' && (
       <div className="grid gap-6 lg:grid-cols-[260px_1fr]">
         {/* Left: filters */}
         <aside className="hidden lg:block">
@@ -220,6 +330,7 @@ export default function Jobs() {
           )}
         </div>
       </div>
+      )}
 
       {/* Add job dialog */}
       <Dialog open={showNew} onOpenChange={setShowNew} size="lg">

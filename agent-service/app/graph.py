@@ -17,6 +17,7 @@ from .agents.career_strategy import career_strategy_node
 from .agents.human_approval import human_approval_node
 from .agents.interview_prep import interview_prep_node
 from .agents.job_discovery import job_discovery_node
+from .agents.resume_export import resume_export_node
 from .agents.resume_intelligence import resume_intelligence_node
 from .agents.salary_intelligence import salary_intelligence_node
 from .config import settings
@@ -26,16 +27,51 @@ from .workflow_ai_gateway import get_stage_provider
 log = logging.getLogger(__name__)
 
 
+def _workflow_type(state: CareerState) -> str:
+    """Normalize the workflow template selector. Absent => the original pipeline."""
+    return (state.get("workflow_type") or "full_career").strip().lower()
+
+
+def _route_after_resume(state: CareerState) -> str:
+    """
+    Branch after Resume Intelligence by workflow template.
+
+    full_career         -> job_discovery (the original 8-node pipeline)
+    resume_optimization -> ats_optimization (skip job/interview/career/salary)
+    """
+    routed = "resume_optimization" if _workflow_type(state) == "resume_optimization" else "full_career"
+    log.info("resume_routed", extra={"event": "resume_routed", "route": routed})
+    return routed
+
+
+def _route_after_ats(state: CareerState) -> str:
+    """
+    Branch after ATS Optimization by workflow template.
+
+    full_career         -> interview_prep (continue the original pipeline)
+    resume_optimization -> human_approval (go straight to the approval gate)
+    """
+    routed = "resume_optimization" if _workflow_type(state) == "resume_optimization" else "full_career"
+    log.info("ats_routed", extra={"event": "ats_routed", "route": routed})
+    return routed
+
+
 def _route_after_approval(state: CareerState) -> str:
     """
-    Branch the graph on the human decision.
+    Branch the graph on the human decision AND the workflow template.
 
-    A rejection must STOP the pipeline — it may not run application_tracking
-    (which would make Reject behave identically to Approve). An approval (or any
-    non-"rejected" decision, defensively) proceeds to application_tracking.
+    A rejection must STOP the pipeline (it may not run any post-approval node —
+    that would make Reject behave like Approve). An approval routes to the
+    template's terminal node: application_tracking for full_career, resume_export
+    for resume_optimization.
     """
     decision = (state.get("human_decision") or "").strip().lower()
-    routed = "rejected" if decision == "rejected" else "approved"
+    if decision == "rejected":
+        routed = "rejected"
+    elif _workflow_type(state) == "resume_optimization":
+        routed = "approved_resume"
+    else:
+        routed = "approved_full"
     log.info(
         "approval_routed",
         extra={"event": "approval_routed", "decision": decision, "route": routed},
@@ -171,23 +207,45 @@ def _build_graph() -> StateGraph:
     g.add_node("salary_intelligence", _instrument("salary_intelligence", "Salary Intelligence", salary_intelligence_node))
     g.add_node("human_approval", human_approval_node)
     g.add_node("application_tracking", _instrument("application_tracking", "Application Tracking", application_tracking_node))
+    g.add_node("resume_export", _instrument("resume_export", "Resume Export", resume_export_node))
 
     g.add_edge(START, "resume_intelligence")
-    g.add_edge("resume_intelligence", "job_discovery")
+    # Template fork after Resume Intelligence. full_career runs the original
+    # pipeline; resume_optimization skips straight to ATS. Both share the
+    # resume_intelligence + ats_optimization nodes unchanged. An absent
+    # workflow_type resolves to full_career, so existing runs are unchanged.
+    g.add_conditional_edges(
+        "resume_intelligence",
+        _route_after_resume,
+        {"full_career": "job_discovery", "resume_optimization": "ats_optimization"},
+    )
     g.add_edge("job_discovery", "ats_optimization")
-    g.add_edge("ats_optimization", "interview_prep")
+    # Template fork after ATS. full_career continues; resume_optimization goes
+    # directly to the human approval gate.
+    g.add_conditional_edges(
+        "ats_optimization",
+        _route_after_ats,
+        {"full_career": "interview_prep", "resume_optimization": "human_approval"},
+    )
     g.add_edge("interview_prep", "career_strategy")
     g.add_edge("career_strategy", "salary_intelligence")
     g.add_edge("salary_intelligence", "human_approval")
-    # Conditional: approval continues to application_tracking; rejection ends the
-    # graph so a rejected run never executes application_tracking. Without this
-    # branch, Reject and Approve produce identical execution (the original bug).
+    # Conditional: approval routes to the template's terminal node
+    # (application_tracking for full_career, resume_export for
+    # resume_optimization); rejection ends the graph so a rejected run never
+    # executes a post-approval node. Without this branch, Reject and Approve
+    # produce identical execution (the original bug).
     g.add_conditional_edges(
         "human_approval",
         _route_after_approval,
-        {"approved": "application_tracking", "rejected": END},
+        {
+            "approved_full": "application_tracking",
+            "approved_resume": "resume_export",
+            "rejected": END,
+        },
     )
     g.add_edge("application_tracking", END)
+    g.add_edge("resume_export", END)
     return g
 
 

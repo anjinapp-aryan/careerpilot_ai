@@ -1,5 +1,6 @@
 import { useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import {
   Clock,
@@ -229,14 +230,15 @@ export default function Resumes() {
   );
 }
 
-function QuickActions() {
+function QuickActions({ resume }: { resume: Resume }) {
+  const navigate = useNavigate();
   return (
     <DropdownMenu>
       <DropdownMenuTrigger className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground">
         <MoreVertical className="h-4 w-4" />
       </DropdownMenuTrigger>
       <DropdownMenuContent>
-        <DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => navigate(`/resumes/${resume.id}/optimize`)}>
           <Sparkles className="h-4 w-4 text-muted-foreground" /> Optimize with AI
         </DropdownMenuItem>
         <DropdownMenuItem>
@@ -263,7 +265,7 @@ function ResumeCard({ resume, index }: { resume: Resume; index: number }) {
           <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-primary/10 text-primary">
             <FileText className="h-5 w-5" />
           </span>
-          <QuickActions />
+          <QuickActions resume={resume} />
         </div>
         <h3 className="mt-4 truncate text-sm font-semibold text-foreground" title={resume.filename}>
           {resume.filename}
@@ -298,7 +300,7 @@ function ResumeRow({ resume }: { resume: Resume }) {
         </p>
       </div>
       <Badge tone={scoreTone(resume.resumeScore)}>ATS {resume.resumeScore ?? '—'}</Badge>
-      <QuickActions />
+      <QuickActions resume={resume} />
     </div>
   );
 }

@@ -56,6 +56,12 @@
         <dependency><groupId>org.apache.tika</groupId><artifactId>tika-core</artifactId><version>2.9.2</version></dependency>
         <dependency><groupId>org.apache.tika</groupId><artifactId>tika-parsers-standard-package</artifactId><version>2.9.2</version></dependency>
 
+        <!-- DOCX generation for optimized resume export (Resume Optimization, Stage 1) -->
+        <dependency><groupId>org.apache.poi</groupId><artifactId>poi-ooxml</artifactId><version>5.3.0</version></dependency>
+        <!-- POI 5.3.0 needs commons-io >= 2.16 (BoundedInputStream.builder); Tika pins an
+             older one, so align it explicitly to avoid a NoSuchMethodError at runtime. -->
+        <dependency><groupId>commons-io</groupId><artifactId>commons-io</artifactId><version>2.18.0</version></dependency>
+
         <dependency><groupId>org.springdoc</groupId><artifactId>springdoc-openapi-starter-webmvc-ui</artifactId><version>${springdoc.version}</version></dependency>
 
         <dependency><groupId>org.projectlombok</groupId><artifactId>lombok</artifactId><optional>true</optional></dependency>

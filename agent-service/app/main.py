@@ -87,6 +87,10 @@ class StartRunRequest(BaseModel):
     target_locations: list[str] = Field(default_factory=list)
     job_descriptions: list[JobDescriptionDTO] = Field(default_factory=list)
     thread_id: str | None = None
+    # Workflow template selector. Absent/"full_career" => original 8-node
+    # pipeline; "resume_optimization" => the shorter resume-export path.
+    workflow_type: str = "full_career"
+    optimization_mode: str = ""
 
 
 class ResumeRunRequest(BaseModel):
@@ -240,6 +244,8 @@ def start_run(req: StartRunRequest) -> RunResponse:
         "target_seniority": req.target_seniority,
         "target_locations": req.target_locations,
         "job_descriptions": [j.model_dump() for j in req.job_descriptions],
+        "workflow_type": req.workflow_type or "full_career",
+        "optimization_mode": req.optimization_mode,
         "awaiting_human_approval": True,
         "human_decision": "",
         "errors": [],

@@ -68,12 +68,31 @@ ai:
   # ---- AI Gateway: single entry point for all LLM calls, with failover ----
   gateway:
     primary: ${PRIMARY_PROVIDER:deepseek}
-    # Failover priority: DeepSeek → Gemini → Groq → Qwen (provider diversity is
-    # intentional — NVIDIA, Google, Groq, NVIDIA — so one vendor's outage/quota
-    # never takes out two consecutive hops). Unconfigured providers (no API key)
-    # are skipped automatically, so Groq simply sits idle until GROQ_API_KEY is set.
-    order: ${AI_PROVIDER_ORDER:deepseek,gemini,groq,qwen}
+    # Failover priority: DeepSeek → Gemini → Groq → Qwen → GLM (provider diversity
+    # is intentional — NVIDIA, Google, Groq, NVIDIA, Zhipu — so one vendor's
+    # outage/quota never takes out two consecutive hops). Unconfigured providers
+    # (no API key) are skipped automatically, so Groq and GLM simply sit idle
+    # until GROQ_API_KEY / GLM_API_KEY are set — the live production order is
+    # DeepSeek → Gemini → Qwen until those keys are supplied.
+    order: ${AI_PROVIDER_ORDER:deepseek,gemini,groq,qwen,openrouter}
     default-temperature: 0.4
+    # Phase A Enterprise Smart Router feature flag. false = pure sequential
+    # failover over `order` (current production behavior, unchanged). Task-aware
+    # routing using `routing` below is wired in a later phase and only takes
+    # effect when this is true.
+    smart-router-enabled: ${AI_SMART_ROUTER_ENABLED:false}
+    # Per-task provider preference lists. LOADED BUT NOT CONSULTED in Phase A
+    # (only used when smart-router-enabled=true). Lets per-task provider order
+    # change via config alone — no code change. Unknown providers in a list are
+    # ignored; unconfigured ones are skipped, exactly like `order`.
+    routing:
+      resumeOptimization: [deepseek, gemini, openrouter]
+      atsOptimization: [deepseek, gemini, qwen]
+      jobMatching: [deepseek, qwen, openrouter]
+      chatbot: [deepseek, gemini, openrouter]
+      interviewPreparation: [gemini, deepseek, groq]
+      careerStrategy: [gemini, deepseek, openrouter]
+      salaryIntelligence: [gemini, qwen, openrouter]
     providers:
       gemini:
         display-name: Gemini
@@ -101,6 +120,17 @@ ai:
         model: ${NVIDIA_QWEN_MODEL:qwen/qwen3-next-80b-a3b-instruct}
         base-url: ${NVIDIA_BASE_URL:https://integrate.api.nvidia.com/v1}
         timeout-ms: 25000
+      # OpenRouter — last-resort fallback, OpenAI-compatible. Provides access to
+      # many models (free and paid). api-key is empty by default → provider is
+      # UNAVAILABLE and skipped. Supply OPENROUTER_API_KEY to activate (it then
+      # joins the chain after Qwen automatically). Model can be any OpenRouter-
+      # supported model (e.g., qwen/qwen3-next-80b-a3b-instruct:free for free tier).
+      openrouter:
+        display-name: OpenRouter
+        api-key: ${OPENROUTER_API_KEY:}
+        model: ${OPENROUTER_MODEL:qwen/qwen3-next-80b-a3b-instruct:free}
+        base-url: ${OPENROUTER_BASE_URL:https://openrouter.ai/api/v1}
+        timeout-ms: 25000
 
 # ---- Resilience4j: retry + circuit breaker per provider ----
 resilience4j:
@@ -124,6 +154,7 @@ resilience4j:
       deepseek: *retryDefaults
       groq: *retryDefaults
       qwen: *retryDefaults
+      openrouter: *retryDefaults
   circuitbreaker:
     instances:
       gemini: &cbDefaults
@@ -137,6 +168,7 @@ resilience4j:
       deepseek: *cbDefaults
       groq: *cbDefaults
       qwen: *cbDefaults
+      openrouter: *cbDefaults
 
 agent-service:
   base-url: ${AGENT_SERVICE_URL:http://localhost:8088}
@@ -175,6 +207,42 @@ careerpilot:
     # When false (or Kafka unreachable), workflow event publishing is skipped
     # silently so a missing/broken broker never breaks the workflow path.
     enabled: ${KAFKA_ENABLED:true}
+
+# ---- Phase 2 Job Discovery ----
+# Real-job ingest from adapter providers. Keyless providers (RemoteOK, Arbeitnow)
+# always run; keyed providers (Adzuna, Jooble) are skipped until their keys are set,
+# so the platform works on free infra with zero extra config.
+jobs:
+  # ---- Recommendation engine (rule-based 6-factor scoring + LLM explanations) ----
+  # All flag-gated for instant rollback: v2-enabled=false reverts Recommended to the
+  # legacy unthresholded behavior with no redeploy.
+  enrich:
+    enabled: ${JOB_ENRICH_ENABLED:true}          # keyword classification at ingest
+  recommendation:
+    v2-enabled: ${JOB_RECO_V2_ENABLED:true}      # gate Recommended on score+confidence
+    threshold: ${JOB_RECO_THRESHOLD:75}          # min match score for Recommended
+  explain:
+    enabled: ${JOB_EXPLAIN_ENABLED:true}         # "Why am I a match?" LLM endpoint
+  discovery:
+    enabled: ${JOB_DISCOVERY_ENABLED:true}
+    # Daily at 06:00. Tighten to hourly later ("0 0 * * * *") with no code change.
+    cron: ${JOB_DISCOVERY_CRON:0 0 6 * * *}
+    user-agent: ${JOB_DISCOVERY_USER_AGENT:CareerPilotAI/1.0 (+https://careerpilot.ai)}
+    providers:
+      remoteok:
+        base-url: ${REMOTEOK_BASE_URL:https://remoteok.com}
+      arbeitnow:
+        base-url: ${ARBEITNOW_BASE_URL:https://www.arbeitnow.com}
+      adzuna:
+        base-url: ${ADZUNA_BASE_URL:https://api.adzuna.com}
+        app-id: ${ADZUNA_APP_ID:}
+        app-key: ${ADZUNA_APP_KEY:}
+        countries: ${ADZUNA_COUNTRIES:gb,us,in}
+        results-per-page: ${ADZUNA_RESULTS_PER_PAGE:50}
+      jooble:
+        base-url: ${JOOBLE_BASE_URL:https://jooble.org}
+        api-key: ${JOOBLE_API_KEY:}
+        keywords: ${JOOBLE_KEYWORDS:software engineer,data engineer}
 
 logging:
   level:

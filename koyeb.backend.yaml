@@ -61,8 +61,10 @@ env:
     value: gemini
   - key: GEMINI_MODEL
     value: gemini-2.5-flash
-  - key: NVIDIA_API_KEY
+  - key: DEEP_SHEEK_NVIDIA_API_KEY
     type: SECRET            # from https://build.nvidia.com — blank = Gemini-only
+  - key: QWEN3_NVIDIA_API_KEY
+    type: SECRET            # Qwen's own, separate NVIDIA account/key
   - key: NVIDIA_DEEPSEEK_MODEL
     value: deepseek-v4-flash
   - key: NVIDIA_QWEN_MODEL

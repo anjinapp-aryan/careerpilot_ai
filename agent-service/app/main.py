@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import logging.config
+import time
 import uuid
 from typing import Any
 
@@ -86,6 +87,10 @@ class StartRunRequest(BaseModel):
     target_locations: list[str] = Field(default_factory=list)
     job_descriptions: list[JobDescriptionDTO] = Field(default_factory=list)
     thread_id: str | None = None
+    # Workflow template selector. Absent/"full_career" => original 8-node
+    # pipeline; "resume_optimization" => the shorter resume-export path.
+    workflow_type: str = "full_career"
+    optimization_mode: str = ""
 
 
 class ResumeRunRequest(BaseModel):
@@ -106,6 +111,81 @@ class RunResponse(BaseModel):
 
 def _config(thread_id: str) -> dict:
     return {"configurable": {"thread_id": thread_id}}
+
+
+def _safe_get_state(graph, cfg: dict):
+    """
+    Read checkpoint state without ever raising.
+
+    graph.get_state() hits the same Postgres pool as graph.invoke(); calling it
+    from inside an `except` block that is already recovering from a transient
+    DB error (e.g. Neon dropping an idle connection — psycopg.OperationalError:
+    "SSL SYSCALL error: EOF detected") can fail a second time with the same
+    error class, and an unguarded second failure propagates past the route
+    handler's own try/except as an unhandled 500. One retry covers the common
+    case (the pool replaces the dead connection on the first failed checkout);
+    any further failure degrades to None instead of crashing the request.
+    """
+    for attempt in range(2):
+        try:
+            return graph.get_state(cfg)
+        except Exception as e:  # noqa: BLE001
+            log.error(
+                "checkpoint_read_failed",
+                extra={
+                    "event": "checkpoint_read_failed",
+                    "attempt": attempt,
+                    "exception_type": type(e).__name__,
+                    "exception_msg": str(e),
+                },
+                exc_info=True,
+            )
+    return None
+
+
+def _log_workflow_error(
+    *,
+    thread_id: str,
+    stage: str,
+    exc: Exception,
+    duration_ms: int,
+    state: dict[str, Any] | None = None,
+    agent: str | None = None,
+) -> None:
+    """
+    Emit the [WORKFLOW_ERROR] structured diagnostic block.
+
+    Single, consistent shape for every workflow-level failure (as opposed to
+    the per-node `stage_failed` log in graph.py's `_instrument`, which already
+    covers node-internal exceptions). Always logged with exc_info so the full
+    traceback is captured — this never replaces re-raising/returning an error
+    state, it runs alongside it.
+    """
+    state = state or {}
+    provider = None
+    for entry in reversed(state.get("agent_execution") or []):
+        if entry.get("error"):
+            provider = entry.get("provider")
+            stage = stage or entry.get("stage", stage)
+            agent = agent or entry.get("name")
+            break
+    log.error(
+        "[WORKFLOW_ERROR]",
+        extra={
+            "event": "WORKFLOW_ERROR",
+            "workflowId": thread_id,
+            "threadId": thread_id,
+            "stage": stage,
+            "agent": agent,
+            "provider": provider,
+            "status": "ERROR",
+            "errorType": type(exc).__name__,
+            "rootCause": str(exc),
+            "duration": duration_ms,
+            "stateKeys": list(state.keys()),
+        },
+        exc_info=True,
+    )
 
 
 def _classify(state: dict[str, Any]) -> str:
@@ -164,6 +244,8 @@ def start_run(req: StartRunRequest) -> RunResponse:
         "target_seniority": req.target_seniority,
         "target_locations": req.target_locations,
         "job_descriptions": [j.model_dump() for j in req.job_descriptions],
+        "workflow_type": req.workflow_type or "full_career",
+        "optimization_mode": req.optimization_mode,
         "awaiting_human_approval": True,
         "human_decision": "",
         "errors": [],
@@ -178,6 +260,7 @@ def start_run(req: StartRunRequest) -> RunResponse:
             "target_role": req.target_role,
         },
     )
+    t0 = time.monotonic()
     try:
         log.info(
             "workflow_invoke_begin",
@@ -207,7 +290,7 @@ def start_run(req: StartRunRequest) -> RunResponse:
             },
             exc_info=True,
         )
-        snapshot = graph.get_state(_config(thread_id))
+        snapshot = _safe_get_state(graph, _config(thread_id))
         state = dict(snapshot.values) if snapshot else {}
         next_nodes = tuple(snapshot.next) if snapshot and snapshot.next else ()
         # A *genuine* human-approval pause parks the graph exactly at human_approval
@@ -237,6 +320,13 @@ def start_run(req: StartRunRequest) -> RunResponse:
         state["errors"] = errors
         state["awaiting_human_approval"] = False
         log.exception("workflow_run_failed", extra={"event": "workflow_run_failed", "thread_id": thread_id})
+        _log_workflow_error(
+            thread_id=thread_id,
+            stage="unknown",
+            exc=e,
+            duration_ms=int((time.monotonic() - t0) * 1000),
+            state=state,
+        )
         return RunResponse(thread_id=thread_id, status="error", state=state)
 
     status = _classify(final_state)
@@ -266,8 +356,16 @@ def start_run(req: StartRunRequest) -> RunResponse:
 def resume_run(req: ResumeRunRequest) -> RunResponse:
     graph = get_compiled_graph()
     cfg = _config(req.thread_id)
-    snapshot = graph.get_state(cfg)
-    if not snapshot:
+    snapshot = _safe_get_state(graph, cfg)
+    # graph.get_state() never returns None for a genuinely unknown thread_id —
+    # LangGraph hands back an empty StateSnapshot (values={}, next=()) instead.
+    # A bare None here can therefore only come from _safe_get_state degrading
+    # after the checkpoint store itself failed both read attempts, so it must
+    # be a 503 (transient), never a 404 (which would wrongly tell the caller
+    # the thread never existed and risks the backend abandoning a live run).
+    if snapshot is None:
+        raise HTTPException(status_code=503, detail="checkpoint store temporarily unavailable")
+    if not snapshot.values:
         raise HTTPException(status_code=404, detail="thread not found")
 
     # Idempotency / invalid-state guard (Scenario E/F): a run may be resumed ONLY
@@ -308,6 +406,7 @@ def resume_run(req: ResumeRunRequest) -> RunResponse:
             "decision": req.human_decision,
         },
     )
+    t0 = time.monotonic()
     try:
         final_state = graph.invoke(None, config=cfg)
     except Exception as e:  # noqa: BLE001
@@ -326,12 +425,19 @@ def resume_run(req: ResumeRunRequest) -> RunResponse:
             },
             exc_info=True,
         )
-        snapshot = graph.get_state(cfg)
+        snapshot = _safe_get_state(graph, cfg)
         state = dict(snapshot.values) if snapshot else {}
         errors = list(state.get("errors") or [])
         errors.append(f"Resume failed: {type(e).__name__}: {e}")
         state["errors"] = errors
         state["awaiting_human_approval"] = False
+        _log_workflow_error(
+            thread_id=req.thread_id,
+            stage="application_tracking",
+            exc=e,
+            duration_ms=int((time.monotonic() - t0) * 1000),
+            state=state,
+        )
         return RunResponse(thread_id=req.thread_id, status="error", state=state)
 
     return RunResponse(thread_id=req.thread_id, status=_classify(final_state), state=final_state)
@@ -340,8 +446,14 @@ def resume_run(req: ResumeRunRequest) -> RunResponse:
 @app.get("/runs/{thread_id}", response_model=RunResponse)
 def get_run(thread_id: str) -> RunResponse:
     graph = get_compiled_graph()
-    snapshot = graph.get_state(_config(thread_id))
-    if not snapshot:
+    snapshot = _safe_get_state(graph, _config(thread_id))
+    # See start_run/resume_run: None means the checkpoint store failed both
+    # read attempts (transient), an empty StateSnapshot means the thread_id
+    # was never checkpointed (genuinely not found) — these must not be
+    # reported with the same status code.
+    if snapshot is None:
+        raise HTTPException(status_code=503, detail="checkpoint store temporarily unavailable")
+    if not snapshot.values:
         raise HTTPException(status_code=404, detail="thread not found")
     status = "interrupted" if snapshot.next else _classify(snapshot.values)
     return RunResponse(thread_id=thread_id, status=status, state=snapshot.values)

@@ -15,6 +15,12 @@ class CareerState(TypedDict, total=False):
     target_locations: list[str]
     job_descriptions: list[dict]  # [{id, title, company, description, location, salary?}]
 
+    # Workflow template selector. Absent/"full_career" => the original linear
+    # 8-node pipeline (unchanged). "resume_optimization" => the shorter path
+    # resume_intelligence -> ats_optimization -> human_approval -> resume_export.
+    workflow_type: str
+    optimization_mode: str  # e.g. "generic_ats", "enterprise_architect", ... (resume_optimization only)
+
     # Resume Intelligence outputs
     candidate_profile: dict
     resume_score: int
@@ -48,6 +54,11 @@ class CareerState(TypedDict, total=False):
 
     # Application Tracking
     tracked_application: dict
+
+    # Resume Export outputs (resume_optimization workflow only)
+    optimized_resume: dict   # {executive_summary, professional_experience[], skills_section[], full_markdown}
+    ats_before: int          # ats_score captured before optimization
+    ats_after: int           # estimated ats_score after applying the optimization
 
     # Cross-cutting
     errors: Annotated[list[str], operator.add]

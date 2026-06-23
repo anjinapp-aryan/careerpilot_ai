@@ -43,7 +43,7 @@ print("\n[CHECK 3] Config has NVIDIA settings...")
 config = os.path.join(base, "app/config.py")
 with open(config) as f:
     content = f.read()
-    has_nvidia = "nvidia_api_key" in content and "nvidia_base_url" in content
+    has_nvidia = "deep_sheek_nvidia_api_key" in content and "qwen3_nvidia_api_key" in content and "nvidia_base_url" in content
     if has_nvidia:
         print(f"  OK: Config has NVIDIA provider settings")
     else:

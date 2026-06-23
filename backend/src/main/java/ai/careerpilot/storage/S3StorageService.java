@@ -6,6 +6,7 @@ import org.springframework.web.multipart.MultipartFile;
 import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.CreateBucketRequest;
+import software.amazon.awssdk.services.s3.model.GetObjectRequest;
 import software.amazon.awssdk.services.s3.model.HeadBucketRequest;
 import software.amazon.awssdk.services.s3.model.NoSuchBucketException;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
@@ -46,5 +47,23 @@ public class S3StorageService {
                         .build(),
                 RequestBody.fromBytes(file.getBytes()));
         return key;
+    }
+
+    /** Upload raw bytes (e.g. a generated DOCX) under a deterministic prefix; returns the key. */
+    public String uploadBytes(byte[] data, String prefix, String filename, String contentType) {
+        String key = prefix + "/" + UUID.randomUUID() + "-" + filename;
+        s3.putObject(
+                PutObjectRequest.builder()
+                        .bucket(bucket)
+                        .key(key)
+                        .contentType(contentType)
+                        .build(),
+                RequestBody.fromBytes(data));
+        return key;
+    }
+
+    /** Fetch an object's bytes by key. */
+    public byte[] download(String key) {
+        return s3.getObjectAsBytes(GetObjectRequest.builder().bucket(bucket).key(key).build()).asByteArray();
     }
 }

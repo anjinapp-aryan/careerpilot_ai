@@ -40,13 +40,27 @@ class Settings(BaseSettings):
     # NVIDIA NIM API — DeepSeek and Qwen providers for workflow failover
     # ---------------------------------------------------------------------------
 
-    nvidia_api_key: str = ""
+    # DeepSeek and Qwen are each provisioned under their OWN, dedicated NVIDIA
+    # account/key — do not assume they share a key, even though both hit the
+    # same NIM base URL.
+    deep_sheek_nvidia_api_key: str = ""
+    qwen3_nvidia_api_key: str = ""
     nvidia_base_url: str = "https://integrate.api.nvidia.com/v1"
     # NVIDIA NIM model IDs are namespaced by vendor. The wrong namespace
     # (e.g. "nvidia/deepseek-...") yields a 404 from /chat/completions, so these
     # defaults must match the catalog exactly. Overridable via NVIDIA_*_MODEL env.
     nvidia_deepseek_model: str = "deepseek-ai/deepseek-v4-flash"
     nvidia_qwen_model: str = "qwen/qwen3-next-80b-a3b-instruct"
+
+    # ---------------------------------------------------------------------------
+    # Groq API — OpenAI-compatible, used as the 3rd link in the workflow failover
+    # chain (DeepSeek -> Gemini -> Groq -> Qwen). Empty key skips the provider,
+    # matching the dedicated-key convention above.
+    # ---------------------------------------------------------------------------
+
+    groq_api_key: str = ""
+    groq_base_url: str = "https://api.groq.com/openai/v1"
+    groq_model: str = "llama-3.3-70b-versatile"
 
 
 settings = Settings()

@@ -6,12 +6,14 @@ import {
   Building2,
   CalendarDays,
   DollarSign,
+  ExternalLink,
   Filter,
   MapPin,
   Plus,
   Search,
   Send,
   SlidersHorizontal,
+  Settings2,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { PageHeader } from '@/components/common/PageHeader';
@@ -21,6 +23,7 @@ import { Badge } from '@/components/ui/badge';
 import { Input, Label, Textarea } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
 import { EmptyState } from '@/components/ui/empty-state';
+import { Tabs } from '@/components/ui/tabs';
 import { useToast } from '@/components/ui/toast';
 import {
   Dialog,
@@ -31,7 +34,24 @@ import {
   DialogDescription,
 } from '@/components/ui/dialog';
 import { cn } from '@/lib/cn';
-import type { Job, JobsPage } from '@/types/workflow';
+import { RecommendedJobs } from '@/components/jobs/RecommendedJobs';
+import { PreferencesDialog } from '@/components/jobs/PreferencesDialog';
+import { JobBadges } from '@/components/jobs/JobBadges';
+import { trackJobEvent } from '@/lib/jobTelemetry';
+import type { Application, Job, JobsPage } from '@/types/workflow';
+
+type JobsTab = 'recommended' | 'domestic' | 'international' | 'saved' | 'applied' | 'browse';
+
+const TAB_ITEMS: { value: JobsTab; label: string }[] = [
+  { value: 'recommended', label: 'Recommended' },
+  { value: 'domestic', label: 'Domestic' },
+  { value: 'international', label: 'International' },
+  { value: 'saved', label: 'Saved' },
+  { value: 'applied', label: 'Applied' },
+  { value: 'browse', label: 'Browse' },
+];
+
+const HOME_COUNTRIES = ['India', 'United States', 'United Kingdom', 'Canada', 'Germany', 'Australia'];
 
 const EMPTY_DRAFT = { title: '', company: '', location: '', description: '', salaryRange: '' };
 
@@ -52,11 +72,78 @@ export default function Jobs() {
   const [showNew, setShowNew] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
   const [draft, setDraft] = useState(EMPTY_DRAFT);
+  const [tab, setTab] = useState<JobsTab>('recommended');
+  const [homeCountry, setHomeCountry] = useState('India');
+  const [showPreferences, setShowPreferences] = useState(false);
+  // International facets
+  const [remoteTypeFilter, setRemoteTypeFilter] = useState('');
+  const [sponsorshipFilter, setSponsorshipFilter] = useState(false);
+  const [relocationFilter, setRelocationFilter] = useState(false);
+  const [countrySearch, setCountrySearch] = useState('');
 
   const { data, isLoading } = useQuery<JobsPage>({
     queryKey: ['jobs', q],
     queryFn: async () => (await api.get('/api/jobs', { params: { q } })).data,
+    enabled: tab === 'browse',
   });
+
+  const isDiscoverTab = tab === 'domestic' || tab === 'international';
+  const discoverParams =
+    tab === 'international'
+      ? {
+          scope: tab,
+          country: homeCountry,
+          remoteType: remoteTypeFilter || undefined,
+          sponsorship: sponsorshipFilter || undefined,
+          relocation: relocationFilter || undefined,
+          q: countrySearch || undefined,
+        }
+      : { scope: tab, country: homeCountry };
+  const { data: discoveredPage, isLoading: discoveredLoading } = useQuery<JobsPage>({
+    queryKey: ['jobs', 'discovered', tab, homeCountry, remoteTypeFilter, sponsorshipFilter, relocationFilter, countrySearch],
+    queryFn: async () => (await api.get('/api/jobs/discovered', { params: discoverParams })).data,
+    enabled: isDiscoverTab,
+  });
+  const discoveredJobs = discoveredPage?.content ?? [];
+
+  // Browse "more opportunities": global discovered pool minus high-confidence recommendations.
+  const { data: poolPage } = useQuery<JobsPage>({
+    queryKey: ['jobs', 'pool'],
+    queryFn: async () => (await api.get('/api/jobs/pool')).data,
+    enabled: tab === 'browse',
+  });
+  const poolJobs = poolPage?.content ?? [];
+
+  const { data: applications } = useQuery<Application[]>({
+    queryKey: ['applications'],
+    queryFn: async () => (await api.get('/api/applications')).data,
+    enabled: tab === 'saved' || tab === 'applied',
+  });
+
+  const { data: allJobsPage } = useQuery<JobsPage>({
+    queryKey: ['jobs', ''],
+    queryFn: async () => (await api.get('/api/jobs')).data,
+    enabled: tab === 'saved' || tab === 'applied',
+  });
+
+  const jobMap = useMemo(() => {
+    const m = new Map<string, Job>();
+    (allJobsPage?.content ?? []).forEach((j) => m.set(j.id, j));
+    return m;
+  }, [allJobsPage]);
+
+  const savedJobs = useMemo(
+    () =>
+      (applications ?? [])
+        .filter((a) => a.status === 'SAVED')
+        .map((a) => jobMap.get(a.jobId))
+        .filter((j): j is Job => Boolean(j)),
+    [applications, jobMap],
+  );
+  const appliedApplications = useMemo(
+    () => (applications ?? []).filter((a) => a.status !== 'SAVED'),
+    [applications],
+  );
 
   const create = useMutation({
     mutationFn: async () => (await api.post('/api/jobs', draft)).data as Job,
@@ -83,6 +170,16 @@ export default function Jobs() {
     },
     onError: () => toast({ variant: 'error', title: 'Action failed' }),
   });
+
+  // Telemetry-wrapped actions for the discovered/saved/browse/pool cards.
+  const applyJob = (jobId: string) => {
+    trackJobEvent('apply', { jobId });
+    track.mutate({ jobId, status: 'APPLIED' });
+  };
+  const saveJob = (jobId: string) => {
+    trackJobEvent('save', { jobId });
+    track.mutate({ jobId, status: 'SAVED' });
+  };
 
   const jobs = data?.content ?? [];
   const filtered = useMemo(
@@ -152,16 +249,187 @@ export default function Jobs() {
         description="Discover roles, track openings, and push them into your pipeline."
         actions={
           <>
-            <Button variant="outline" className="lg:hidden" onClick={() => setShowFilters((v) => !v)}>
-              <Filter className="h-4 w-4" /> Filters{activeFilters ? ` (${activeFilters})` : ''}
+            <Button variant="outline" onClick={() => setShowPreferences(true)}>
+              <Settings2 className="h-4 w-4" /> Preferences
             </Button>
-            <Button onClick={() => setShowNew(true)}>
-              <Plus className="h-4 w-4" /> Add job
-            </Button>
+            {tab === 'browse' && (
+              <>
+                <Button variant="outline" className="lg:hidden" onClick={() => setShowFilters((v) => !v)}>
+                  <Filter className="h-4 w-4" /> Filters{activeFilters ? ` (${activeFilters})` : ''}
+                </Button>
+                <Button onClick={() => setShowNew(true)}>
+                  <Plus className="h-4 w-4" /> Add job
+                </Button>
+              </>
+            )}
           </>
         }
       />
 
+      <Tabs items={TAB_ITEMS} value={tab} onChange={(v) => setTab(v as JobsTab)} />
+
+      {tab === 'recommended' && (
+        <RecommendedJobs
+          onApply={(jobId) => track.mutate({ jobId, status: 'APPLIED' })}
+          onSave={(jobId) => track.mutate({ jobId, status: 'SAVED' })}
+          busy={track.isPending}
+        />
+      )}
+
+      {isDiscoverTab && (
+        <div className="space-y-4">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-sm font-medium text-muted-foreground">Home country</span>
+            {HOME_COUNTRIES.map((c) => (
+              <button
+                key={c}
+                onClick={() => setHomeCountry(c)}
+                className={cn(
+                  'rounded-full border px-3 py-1 text-xs font-medium transition-colors',
+                  homeCountry === c
+                    ? 'border-primary bg-primary/10 text-primary'
+                    : 'border-border text-muted-foreground hover:bg-muted',
+                )}
+              >
+                {c}
+              </button>
+            ))}
+          </div>
+          {tab === 'international' && (
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  value={countrySearch}
+                  onChange={(e) => setCountrySearch(e.target.value)}
+                  placeholder="Search country / role…"
+                  className="h-8 w-52 pl-8 text-xs"
+                />
+              </div>
+              {(['REMOTE', 'HYBRID', 'ONSITE'] as const).map((rt) => (
+                <button
+                  key={rt}
+                  onClick={() => setRemoteTypeFilter((v) => (v === rt ? '' : rt))}
+                  className={cn(
+                    'rounded-full border px-3 py-1 text-xs font-medium transition-colors',
+                    remoteTypeFilter === rt
+                      ? 'border-primary bg-primary/10 text-primary'
+                      : 'border-border text-muted-foreground hover:bg-muted',
+                  )}
+                >
+                  {rt.charAt(0) + rt.slice(1).toLowerCase()}
+                </button>
+              ))}
+              <button
+                onClick={() => setSponsorshipFilter((v) => !v)}
+                className={cn(
+                  'rounded-full border px-3 py-1 text-xs font-medium transition-colors',
+                  sponsorshipFilter ? 'border-primary bg-primary/10 text-primary' : 'border-border text-muted-foreground hover:bg-muted',
+                )}
+              >
+                Visa Sponsorship
+              </button>
+              <button
+                onClick={() => setRelocationFilter((v) => !v)}
+                className={cn(
+                  'rounded-full border px-3 py-1 text-xs font-medium transition-colors',
+                  relocationFilter ? 'border-primary bg-primary/10 text-primary' : 'border-border text-muted-foreground hover:bg-muted',
+                )}
+              >
+                Relocation Support
+              </button>
+            </div>
+          )}
+          <p className="text-sm text-muted-foreground">
+            {discoveredLoading
+              ? 'Loading roles…'
+              : tab === 'domestic'
+                ? `${discoveredJobs.length} role${discoveredJobs.length === 1 ? '' : 's'} in ${homeCountry}`
+                : `${discoveredJobs.length} role${discoveredJobs.length === 1 ? '' : 's'} outside ${homeCountry}`}
+          </p>
+          {discoveredLoading ? (
+            <div className="space-y-4">
+              {Array.from({ length: 4 }).map((_, i) => (
+                <Skeleton key={i} className="h-36 rounded-xl" />
+              ))}
+            </div>
+          ) : discoveredJobs.length === 0 ? (
+            <EmptyState
+              icon={Building2}
+              title="No discovered jobs yet"
+              description="Daily job discovery pulls real roles from RemoteOK, Arbeitnow, Adzuna and Jooble. Once a run completes they appear here."
+            />
+          ) : (
+            <div className="space-y-4">
+              {discoveredJobs.map((job, i) => (
+                <JobCard
+                  key={job.id}
+                  job={job}
+                  index={i}
+                  onSave={() => saveJob(job.id)}
+                  onApply={() => applyJob(job.id)}
+                  busy={track.isPending}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {tab === 'saved' && (
+        savedJobs.length === 0 ? (
+          <EmptyState
+            icon={Bookmark}
+            title="No saved jobs yet"
+            description="Save a role from Recommended or Browse to keep track of it here."
+          />
+        ) : (
+          <div className="space-y-4">
+            {savedJobs.map((job, i) => (
+              <JobCard
+                key={job.id}
+                job={job}
+                index={i}
+                onSave={() => saveJob(job.id)}
+                onApply={() => applyJob(job.id)}
+                busy={track.isPending}
+              />
+            ))}
+          </div>
+        )
+      )}
+
+      {tab === 'applied' && (
+        appliedApplications.length === 0 ? (
+          <EmptyState
+            icon={Send}
+            title="No applications yet"
+            description="Apply to a role from Recommended or Browse to start tracking it here."
+          />
+        ) : (
+          <div className="space-y-4">
+            {appliedApplications.map((a) => {
+              const job = jobMap.get(a.jobId);
+              if (!job) return null;
+              return (
+                <Card key={a.id} className="p-5">
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div>
+                      <h3 className="text-base font-semibold text-foreground">{job.title}</h3>
+                      <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
+                        <Building2 className="h-3.5 w-3.5" /> {job.company}
+                      </p>
+                    </div>
+                    <Badge tone="primary">{a.status}</Badge>
+                  </div>
+                </Card>
+              );
+            })}
+          </div>
+        )
+      )}
+
+      {tab === 'browse' && (
       <div className="grid gap-6 lg:grid-cols-[260px_1fr]">
         {/* Left: filters */}
         <aside className="hidden lg:block">
@@ -211,8 +479,31 @@ export default function Jobs() {
                   key={job.id}
                   job={job}
                   index={i}
-                  onSave={() => track.mutate({ jobId: job.id, status: 'SAVED' })}
-                  onApply={() => track.mutate({ jobId: job.id, status: 'APPLIED' })}
+                  onSave={() => saveJob(job.id)}
+                  onApply={() => applyJob(job.id)}
+                  busy={track.isPending}
+                />
+              ))}
+            </div>
+          )}
+
+          {/* More opportunities: discovered roles below your high-confidence match bar. */}
+          {poolJobs.length > 0 && (
+            <div className="space-y-4 pt-2">
+              <div className="flex items-center gap-2">
+                <h2 className="text-sm font-semibold text-foreground">More opportunities</h2>
+                <Badge tone="neutral">{poolJobs.length}</Badge>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Discovered roles that didn’t clear your 75% match bar — still worth a look.
+              </p>
+              {poolJobs.map((job, i) => (
+                <JobCard
+                  key={job.id}
+                  job={job}
+                  index={i}
+                  onSave={() => saveJob(job.id)}
+                  onApply={() => applyJob(job.id)}
                   busy={track.isPending}
                 />
               ))}
@@ -220,6 +511,9 @@ export default function Jobs() {
           )}
         </div>
       </div>
+      )}
+
+      <PreferencesDialog open={showPreferences} onOpenChange={setShowPreferences} />
 
       {/* Add job dialog */}
       <Dialog open={showNew} onOpenChange={setShowNew} size="lg">
@@ -302,8 +596,10 @@ function JobCard({ job, index, onSave, onApply, busy }: JobCardProps) {
                   <Building2 className="h-3.5 w-3.5" /> {job.company}
                 </p>
               </div>
-              {isRemote && <Badge tone="success">Remote</Badge>}
+              {isRemote && !job.remoteType && <Badge tone="success">Remote</Badge>}
             </div>
+
+            <JobBadges job={job} className="mt-2.5" />
 
             <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs text-muted-foreground">
               {job.location && (
@@ -311,6 +607,10 @@ function JobCard({ job, index, onSave, onApply, busy }: JobCardProps) {
                   <MapPin className="h-3.5 w-3.5" /> {job.location}
                 </span>
               )}
+              {job.country && !job.location?.toLowerCase().includes(job.country.toLowerCase()) && (
+                <span>{job.country}</span>
+              )}
+              {job.requiredExperience != null && <span>{job.requiredExperience}+ yrs exp</span>}
               {job.salaryRange && (
                 <span className="flex items-center gap-1">
                   <DollarSign className="h-3.5 w-3.5" /> {job.salaryRange}
@@ -334,6 +634,17 @@ function JobCard({ job, index, onSave, onApply, busy }: JobCardProps) {
               <Button size="sm" variant="outline" onClick={onSave} disabled={busy}>
                 <Bookmark className="h-3.5 w-3.5" /> Save
               </Button>
+              {(job.sourceUrl || job.externalUrl) && (
+                <a
+                  href={(job.sourceUrl || job.externalUrl) as string}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  <Button size="sm" variant="ghost">
+                    <ExternalLink className="h-3.5 w-3.5" /> View posting
+                  </Button>
+                </a>
+              )}
             </div>
           </div>
         </div>

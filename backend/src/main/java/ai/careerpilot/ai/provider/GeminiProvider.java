@@ -3,6 +3,7 @@ package ai.careerpilot.ai.provider;
 import ai.careerpilot.ai.AbstractLlmProvider;
 import ai.careerpilot.ai.AiGatewayProperties;
 import ai.careerpilot.ai.ChatMessage;
+import ai.careerpilot.ai.QuotaExceededException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
@@ -10,6 +11,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 
 import java.time.Duration;
 import java.util.List;
@@ -54,15 +56,25 @@ public class GeminiProvider extends AbstractLlmProvider {
     @Override
     public String chat(List<ChatMessage> messages, String system, double temperature) {
         Map<String, Object> body = buildBody(messages, system, temperature);
-        JsonNode resp = client.post()
+        // Parse a String response with our own mapper — the reactive Jackson codec in this
+        // stack cannot construct JsonNode directly (InvalidDefinitionException), so
+        // bodyToMono(JsonNode.class) fails. The streaming path parses Strings for the same reason.
+        String raw = client.post()
                 .uri(uri -> uri.path("/models/{model}:generateContent")
                         .queryParam("key", cfg.getApiKey()).build(cfg.getModel()))
                 .bodyValue(body)
                 .retrieve()
-                .bodyToMono(JsonNode.class)
+                .onStatus(status -> status.value() == 429,
+                        r -> Mono.error(new QuotaExceededException("Gemini 429 quota/rate limit", null)))
+                .bodyToMono(String.class)
                 .timeout(timeout())
                 .block();
-        return extractText(resp).trim();
+        if (raw == null || raw.isBlank()) return "";
+        try {
+            return extractText(mapper.readTree(raw)).trim();
+        } catch (Exception e) {
+            throw new IllegalStateException("Failed to parse Gemini chat response", e);
+        }
     }
 
     @Override
@@ -76,7 +88,7 @@ public class GeminiProvider extends AbstractLlmProvider {
                 .retrieve()
                 .onStatus(status -> status.value() == 429, resp -> {
                     log.error("Gemini 429 Quota Exceeded — failover required");
-                    return resp.createException();
+                    return Mono.error(new QuotaExceededException("Gemini 429 quota/rate limit", null));
                 })
                 .bodyToFlux(String.class)
                 .timeout(timeout())

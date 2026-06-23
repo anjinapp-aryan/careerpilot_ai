@@ -3,6 +3,7 @@ package ai.careerpilot.ai.provider;
 import ai.careerpilot.ai.AbstractLlmProvider;
 import ai.careerpilot.ai.AiGatewayProperties;
 import ai.careerpilot.ai.ChatMessage;
+import ai.careerpilot.ai.QuotaExceededException;
 import com.fasterxml.jackson.databind.JsonNode;
 import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.HttpHeaders;
@@ -10,6 +11,7 @@ import org.springframework.http.MediaType;
 import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -54,16 +56,30 @@ public abstract class AbstractOpenAiChatProvider extends AbstractLlmProvider {
                 "messages", toOpenAiMessages(messages, system),
                 "temperature", temperature,
                 "stream", false);
-        JsonNode resp = client.post()
+        // Deserialize to String and parse with our own ObjectMapper. The reactive Jackson
+        // codec in this stack cannot construct a JsonNode directly (InvalidDefinitionException),
+        // so bodyToMono(JsonNode.class) fails — the streaming path already parses Strings for
+        // the same reason. Keep these two consistent.
+        String raw = client.post()
                 .uri("/chat/completions")
                 .contentType(MediaType.APPLICATION_JSON)
                 .bodyValue(body)
                 .retrieve()
-                .bodyToMono(JsonNode.class)
+                // 429 → throw the typed quota exception so the gateway fails over
+                // immediately instead of wasting its retry budget on a rate-limited
+                // provider (Resilience4j ignores QuotaExceededException for retry).
+                .onStatus(status -> status.value() == 429,
+                        r -> Mono.error(new QuotaExceededException(displayName() + " 429 quota/rate limit", null)))
+                .bodyToMono(String.class)
                 .timeout(timeout())
                 .block();
-        if (resp == null) return "";
-        return resp.path("choices").path(0).path("message").path("content").asText("").trim();
+        if (raw == null || raw.isBlank()) return "";
+        try {
+            JsonNode resp = mapper.readTree(raw);
+            return resp.path("choices").path(0).path("message").path("content").asText("").trim();
+        } catch (Exception e) {
+            throw new IllegalStateException("Failed to parse " + displayName() + " chat response", e);
+        }
     }
 
     @Override
@@ -79,6 +95,8 @@ public abstract class AbstractOpenAiChatProvider extends AbstractLlmProvider {
                 .accept(MediaType.TEXT_EVENT_STREAM)
                 .bodyValue(body)
                 .retrieve()
+                .onStatus(status -> status.value() == 429,
+                        r -> Mono.error(new QuotaExceededException(displayName() + " 429 quota/rate limit", null)))
                 .bodyToFlux(SSE_TYPE)
                 .timeout(timeout())
                 .mapNotNull(ServerSentEvent::data)

@@ -1,6 +1,9 @@
+import { useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   CheckCircle2,
+  ChevronDown,
+  ChevronUp,
   Loader2,
   AlertTriangle,
   XCircle,
@@ -16,6 +19,7 @@ import {
 } from 'lucide-react';
 import { useWorkflowStatus } from '@/hooks/useWorkflowStatus';
 import { StatusBadge } from './StatusBadge';
+import { StageDetailPanel } from './StageDetailPanel';
 import { cn } from '@/lib/cn';
 import type { AgentStatus, WorkflowStatusStepperProps, WorkflowAgent } from '@/types/workflow';
 
@@ -74,6 +78,7 @@ const AGENT_ICONS: Record<string, React.ElementType> = {
   'Salary Intelligence': DollarSign,
   'Human Approval': UserCheck,
   'Application Tracking': ClipboardList,
+  'Resume Export': FileText,
 };
 
 function getAgentIcon(name: string): React.ElementType {
@@ -226,11 +231,24 @@ function ApprovalBanner() {
 // Vertical layout
 // ---------------------------------------------------------------------------
 
-function VerticalStepper({ agents }: { agents: WorkflowAgent[] }) {
+function VerticalStepper({
+  agents,
+  state,
+  expandedStage,
+  onToggleStage,
+  stageRefs,
+}: {
+  agents: WorkflowAgent[];
+  state?: Record<string, unknown>;
+  expandedStage: string | null;
+  onToggleStage: (stageName: string) => void;
+  stageRefs: React.MutableRefObject<Map<string, HTMLLIElement>>;
+}) {
   return (
     <ol className="space-y-0" aria-label="Workflow steps">
       {agents.map((agent, i) => {
         const isLast = i === agents.length - 1;
+        const isExpanded = expandedStage === agent.name;
         const timestamp = agent.completedAt
           ? new Intl.DateTimeFormat('en-US', {
               hour: '2-digit',
@@ -243,6 +261,10 @@ function VerticalStepper({ agents }: { agents: WorkflowAgent[] }) {
         return (
           <motion.li
             key={agent.name}
+            ref={(el) => {
+              if (el) stageRefs.current.set(agent.name, el);
+              else stageRefs.current.delete(agent.name);
+            }}
             className="flex gap-4"
             initial={{ opacity: 0, x: -8 }}
             animate={{ opacity: 1, x: 0 }}
@@ -254,7 +276,12 @@ function VerticalStepper({ agents }: { agents: WorkflowAgent[] }) {
             </div>
 
             <div className={cn('flex-1 pt-1.5', isLast ? 'pb-0' : 'pb-7')}>
-              <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                className="flex w-full flex-wrap items-center gap-2 text-left"
+                onClick={() => onToggleStage(agent.name)}
+                aria-expanded={isExpanded}
+              >
                 <span
                   className={cn(
                     'text-sm font-medium',
@@ -264,7 +291,10 @@ function VerticalStepper({ agents }: { agents: WorkflowAgent[] }) {
                   {agent.name}
                 </span>
                 <StatusBadge status={agent.status} />
-              </div>
+                <span className="ml-auto text-muted-foreground">
+                  {isExpanded ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+                </span>
+              </button>
 
               {(timestamp || agent.provider || agent.durationMs != null) && (
                 <p className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs tabular-nums text-muted-foreground">
@@ -281,6 +311,22 @@ function VerticalStepper({ agents }: { agents: WorkflowAgent[] }) {
               <AnimatePresence>
                 {agent.status === 'WAITING_FOR_APPROVAL' && <ApprovalBanner />}
               </AnimatePresence>
+
+              <AnimatePresence initial={false}>
+                {isExpanded && (
+                  <motion.div
+                    initial={{ height: 0, opacity: 0 }}
+                    animate={{ height: 'auto', opacity: 1 }}
+                    exit={{ height: 0, opacity: 0 }}
+                    transition={{ duration: 0.2, ease: 'easeInOut' }}
+                    className="overflow-hidden"
+                  >
+                    <div className="mt-2 rounded-lg border border-border bg-muted/20 p-3">
+                      <StageDetailPanel stageName={agent.name} state={state} />
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
             </div>
           </motion.li>
         );
@@ -293,7 +339,13 @@ function VerticalStepper({ agents }: { agents: WorkflowAgent[] }) {
 // Horizontal layout
 // ---------------------------------------------------------------------------
 
-function HorizontalStepper({ agents }: { agents: WorkflowAgent[] }) {
+function HorizontalStepper({
+  agents,
+  onStageNavigate,
+}: {
+  agents: WorkflowAgent[];
+  onStageNavigate?: (stageName: string) => void;
+}) {
   return (
     <div role="list" aria-label="Workflow steps" className="w-full">
       <div className="flex items-center">
@@ -303,16 +355,18 @@ function HorizontalStepper({ agents }: { agents: WorkflowAgent[] }) {
           const failed = agent.status === 'FAILED';
           return (
             <div key={agent.name} className="flex flex-1 items-center">
-              <motion.div
+              <motion.button
+                type="button"
                 role="listitem"
-                aria-label={`${agent.name}: ${agent.status}`}
+                aria-label={`${agent.name}: ${agent.status}. View details in the execution timeline.`}
                 className="flex flex-col items-center"
+                onClick={() => onStageNavigate?.(agent.name)}
                 initial={{ opacity: 0, y: 6 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ duration: 0.3, delay: i * 0.07 }}
               >
                 <StepIcon agent={agent} index={i} />
-              </motion.div>
+              </motion.button>
               {!isLast && (
                 <div className="relative mx-1 h-px flex-1 overflow-hidden bg-border">
                   {(done || failed) && (
@@ -328,7 +382,9 @@ function HorizontalStepper({ agents }: { agents: WorkflowAgent[] }) {
       <div className="mt-3 flex items-start">
         {agents.map((agent) => (
           <div key={agent.name} className="flex flex-1 justify-center px-1">
-            <p
+            <button
+              type="button"
+              onClick={() => onStageNavigate?.(agent.name)}
               className={cn(
                 'text-center text-[10px] font-medium leading-tight',
                 agent.status === 'PENDING' ? 'text-muted-foreground' : 'text-foreground',
@@ -336,7 +392,7 @@ function HorizontalStepper({ agents }: { agents: WorkflowAgent[] }) {
               title={agent.name}
             >
               {agent.name}
-            </p>
+            </button>
           </div>
         ))}
       </div>
@@ -361,9 +417,32 @@ export function WorkflowStatusStepper({
   agents: agentsProp,
   variant = 'vertical',
   className = '',
+  focusStage,
+  focusNonce,
+  onStageNavigate,
 }: WorkflowStatusStepperProps) {
   const { data, isLoading, isError } = useWorkflowStatus(workflowId);
   const agents: WorkflowAgent[] = data?.agents ?? agentsProp ?? [];
+  const state = data?.state;
+
+  // One stage open at a time, per stepper instance — co-locating this here (rather
+  // than lifting it into the caller) gives "one open stage per run card" for free,
+  // since each RunCard mounts its own WorkflowStatusStepper instance.
+  const [expandedStage, setExpandedStage] = useState<string | null>(null);
+  const stageRefs = useRef<Map<string, HTMLLIElement>>(new Map());
+
+  // Externally requested focus (e.g. a click on the top horizontal pipeline):
+  // expand that stage here and scroll it into view. `focusNonce` lets the same
+  // stage be re-focused even if it's already open.
+  useEffect(() => {
+    if (!focusStage) return;
+    setExpandedStage(focusStage);
+    const el = stageRefs.current.get(focusStage);
+    el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusStage, focusNonce]);
+
+  const toggleStage = (stageName: string) => setExpandedStage((s) => (s === stageName ? null : stageName));
 
   const shell = 'rounded-xl border border-border bg-muted/30 p-5';
 
@@ -405,9 +484,16 @@ export function WorkflowStatusStepper({
 
       <AnimatePresence mode="wait">
         {variant === 'vertical' ? (
-          <VerticalStepper key="vertical" agents={agents} />
+          <VerticalStepper
+            key="vertical"
+            agents={agents}
+            state={state}
+            expandedStage={expandedStage}
+            onToggleStage={toggleStage}
+            stageRefs={stageRefs}
+          />
         ) : (
-          <HorizontalStepper key="horizontal" agents={agents} />
+          <HorizontalStepper key="horizontal" agents={agents} onStageNavigate={onStageNavigate} />
         )}
       </AnimatePresence>
     </div>

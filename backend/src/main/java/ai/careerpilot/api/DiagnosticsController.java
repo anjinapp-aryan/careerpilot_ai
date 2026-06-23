@@ -28,8 +28,14 @@ public class DiagnosticsController {
     @Value("${GEMINI_API_KEY:}")
     private String geminiKey;
 
-    @Value("${NVIDIA_API_KEY:}")
-    private String nvidiaKey;
+    @Value("${DEEP_SHEEK_NVIDIA_API_KEY:}")
+    private String deepSeekKey;
+
+    @Value("${QWEN3_NVIDIA_API_KEY:}")
+    private String qwenKey;
+
+    @Value("${GROQ_API_KEY:}")
+    private String groqKey;
 
     public DiagnosticsController(AiGatewayService gateway, AiGatewayProperties props) {
         this.gateway = gateway;
@@ -43,7 +49,9 @@ public class DiagnosticsController {
         // API Keys loaded
         Map<String, Object> keys = new LinkedHashMap<>();
         keys.put("gemini_loaded", !geminiKey.isBlank());
-        keys.put("nvidia_loaded", !nvidiaKey.isBlank());
+        keys.put("deepseek_loaded", !deepSeekKey.isBlank());
+        keys.put("qwen_loaded", !qwenKey.isBlank());
+        keys.put("groq_loaded", !groqKey.isBlank());
         result.put("api_keys", keys);
 
         // Models configured

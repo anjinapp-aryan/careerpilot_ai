@@ -4,6 +4,7 @@ import Login from '@/pages/Login';
 import Register from '@/pages/Register';
 import Dashboard from '@/pages/Dashboard';
 import Resumes from '@/pages/Resumes';
+import ResumeOptimization from '@/pages/ResumeOptimization';
 import Jobs from '@/pages/Jobs';
 import Applications from '@/pages/Applications';
 import Workflow from '@/pages/Workflow';
@@ -29,6 +30,7 @@ export default function App() {
       >
         <Route index element={<Dashboard />} />
         <Route path="resumes" element={<Resumes />} />
+        <Route path="resumes/:id/optimize" element={<ResumeOptimization />} />
         <Route path="jobs" element={<Jobs />} />
         <Route path="applications" element={<Applications />} />
         <Route path="workflow" element={<Workflow />} />

@@ -33,56 +33,131 @@ public class WorkflowService {
     private final JobRepository jobs;
     private final WorkflowRunRepository runs;
     private final WorkflowEventProducer events;
+    private final ResumeVersionService resumeVersions;
     private final ObjectMapper mapper = new ObjectMapper();
 
     public WorkflowService(AgentServiceClient agent, ResumeRepository resumes, JobRepository jobs,
-                           WorkflowRunRepository runs, WorkflowEventProducer events) {
+                           WorkflowRunRepository runs, WorkflowEventProducer events,
+                           ResumeVersionService resumeVersions) {
         this.agent = agent;
         this.resumes = resumes;
         this.jobs = jobs;
         this.runs = runs;
         this.events = events;
+        this.resumeVersions = resumeVersions;
     }
 
+    /**
+     * The five core fields drive the default (full_career) workflow. The trailing four are
+     * optional and only consumed by the RESUME_OPTIMIZATION template — they are null on a
+     * normal workflow run, so the existing Workflow page is unaffected.
+     */
     public record StartWorkflowRequest(
             UUID resumeId,
             List<UUID> jobIds,
             String targetRole,
             String targetSeniority,
-            List<String> targetLocations) {}
+            List<String> targetLocations,
+            String workflowType,        // "RESUME_OPTIMIZATION" or null/"full_career"
+            String optimizationMode,    // e.g. "enterprise_architect" (resume_optimization only)
+            String jobDescriptionText,  // mode "upload_jd": pasted JD text
+            UUID jobId) {}              // mode "select_job": an existing job to target
+
+    private static final String WORKFLOW_TYPE_RESUME_OPT = "resume_optimization";
+
+    private boolean isResumeOptimization(StartWorkflowRequest req) {
+        return WORKFLOW_TYPE_RESUME_OPT.equalsIgnoreCase(
+                req.workflowType() == null ? "" : req.workflowType().trim());
+    }
 
     @Transactional
     public WorkflowRun start(UUID userId, UUID orgId, StartWorkflowRequest req) {
-        log.info("Workflow Created: user={}, target_role={}, jobs={}", userId, req.targetRole(), req.jobIds().size());
+        boolean resumeOpt = isResumeOptimization(req);
+        log.info("Workflow Created: user={}, type={}, target_role={}", userId,
+                resumeOpt ? WORKFLOW_TYPE_RESUME_OPT : "full_career", req.targetRole());
 
         Resume resume = resumes.findById(req.resumeId()).orElseThrow();
         if (!resume.getUserId().equals(userId)) throw new SecurityException("forbidden");
 
-        List<Map<String, Object>> jobPayload = new ArrayList<>();
-        for (UUID id : req.jobIds()) {
-            Job j = jobs.findById(id).orElseThrow();
-            jobPayload.add(Map.of(
-                    "id", j.getId().toString(),
-                    "title", j.getTitle(),
-                    "company", j.getCompany(),
-                    "description", j.getDescription(),
-                    "location", j.getLocation() == null ? "" : j.getLocation(),
-                    "salary", j.getSalaryRange() == null ? "" : j.getSalaryRange()));
+        // RESUME_OPTIMIZATION supplies a single (synthetic, pasted, or selected) target JD;
+        // full_career uses the user-selected jobs exactly as before.
+        List<Map<String, Object>> jobPayload = resumeOpt
+                ? buildOptimizationJobs(orgId, req)
+                : buildSelectedJobs(req.jobIds());
+
+        // For resume optimization, default the displayed target role to the mode title.
+        String targetRole = req.targetRole();
+        if (resumeOpt && (targetRole == null || targetRole.isBlank()) && !jobPayload.isEmpty()) {
+            targetRole = String.valueOf(jobPayload.get(0).get("title"));
         }
 
         Map<String, Object> body = new HashMap<>();
         body.put("user_id", userId.toString());
         body.put("org_id", orgId.toString());
         body.put("resume_text", resume.getParsedText() == null ? "" : resume.getParsedText());
-        body.put("target_role", req.targetRole());
-        body.put("target_seniority", req.targetSeniority());
-        body.put("target_locations", req.targetLocations());
+        body.put("target_role", targetRole == null ? "" : targetRole);
+        body.put("target_seniority", req.targetSeniority() == null ? "" : req.targetSeniority());
+        body.put("target_locations", req.targetLocations() == null ? List.of() : req.targetLocations());
         body.put("job_descriptions", jobPayload);
+        body.put("workflow_type", resumeOpt ? WORKFLOW_TYPE_RESUME_OPT : "full_career");
+        body.put("optimization_mode", req.optimizationMode() == null ? "" : req.optimizationMode());
 
         log.info("Workflow Started: calling agent service with {} jobs", jobPayload.size());
         AgentRunResponse resp = agent.startRun(body);
         log.info("Workflow Agent Response: thread_id={}, status={}", resp.thread_id(), resp.status());
         return persistFromResponse(userId, orgId, req, resp);
+    }
+
+    /** Build the agent job payload from the user's explicitly selected jobs (full_career). */
+    private List<Map<String, Object>> buildSelectedJobs(List<UUID> jobIds) {
+        List<Map<String, Object>> payload = new ArrayList<>();
+        if (jobIds == null) return payload;
+        for (UUID id : jobIds) {
+            payload.add(jobMap(jobs.findById(id).orElseThrow()));
+        }
+        return payload;
+    }
+
+    /**
+     * Build the single target JD for RESUME_OPTIMIZATION: an existing job (mode select_job),
+     * the pasted text (mode upload_jd), or a synthesized spec from the optimization mode
+     * (modes 1–6). Always returns exactly one entry so the ATS stage has a target.
+     */
+    private List<Map<String, Object>> buildOptimizationJobs(UUID orgId, StartWorkflowRequest req) {
+        if (req.jobId() != null) {
+            Job j = jobs.findById(req.jobId()).orElseThrow();
+            if (j.getOrgId() != null && !j.getOrgId().equals(orgId)) throw new SecurityException("forbidden");
+            return List.of(jobMap(j));
+        }
+        String title;
+        String description;
+        if (req.jobDescriptionText() != null && !req.jobDescriptionText().isBlank()) {
+            title = req.targetRole() == null || req.targetRole().isBlank() ? "Target Role" : req.targetRole();
+            description = req.jobDescriptionText();
+        } else {
+            OptimizationModeCatalog.ModeSpec spec = OptimizationModeCatalog.specFor(req.optimizationMode());
+            title = spec.title();
+            description = spec.description();
+        }
+        Map<String, Object> jd = new HashMap<>();
+        jd.put("id", "optimization-target");
+        jd.put("title", title);
+        jd.put("company", "Target Role");
+        jd.put("description", description);
+        jd.put("location", "");
+        jd.put("salary", "");
+        return List.of(jd);
+    }
+
+    private Map<String, Object> jobMap(Job j) {
+        Map<String, Object> m = new HashMap<>();
+        m.put("id", j.getId().toString());
+        m.put("title", j.getTitle());
+        m.put("company", j.getCompany());
+        m.put("description", j.getDescription());
+        m.put("location", j.getLocation() == null ? "" : j.getLocation());
+        m.put("salary", j.getSalaryRange() == null ? "" : j.getSalaryRange());
+        return m;
     }
 
     @Transactional
@@ -103,7 +178,62 @@ public class WorkflowService {
         }
 
         AgentRunResponse resp = agent.resumeRun(threadId, decision, feedback);
-        return mergeResponse(run, resp, actor, decision, feedback);
+        WorkflowRun merged = mergeResponse(run, resp, actor, decision, feedback);
+        maybeCreateResumeVersion(run, merged, resp);
+        return merged;
+    }
+
+    /**
+     * After a RESUME_OPTIMIZATION run completes (approved → resume_export ran), persist the
+     * optimized resume as a new version + DOCX. Skipped for full_career runs, rejected runs
+     * (no resume_export output), and any run whose state lacks resume_id. Never throws — a
+     * version-creation failure must not corrupt the workflow response.
+     */
+    private void maybeCreateResumeVersion(WorkflowRun oldRun, WorkflowRun merged, AgentRunResponse resp) {
+        try {
+            Map<String, Object> state = resp.state() == null ? Map.of() : resp.state();
+            String wt = asString(state.get("workflow_type"));
+            if (!WORKFLOW_TYPE_RESUME_OPT.equalsIgnoreCase(wt == null ? "" : wt)) return;
+            if (!"COMPLETED".equals(deriveDisplayStatus(merged))) return;
+            if (!(state.get("optimized_resume") instanceof Map<?, ?> opt) || opt.isEmpty()) return;
+
+            UUID resumeId = resumeIdOf(oldRun);
+            if (resumeId == null) {
+                log.warn("Cannot create resume version: no resume_id in state for thread={}", merged.getThreadId());
+                return;
+            }
+            @SuppressWarnings("unchecked")
+            Map<String, Object> optimized = (Map<String, Object>) opt;
+            resumeVersions.createVersion(new ResumeVersionService.NewVersion(
+                    merged.getUserId(), merged.getOrgId(), resumeId, merged.getThreadId(),
+                    asString(state.get("optimization_mode")),
+                    intOrNull(state, "ats_before"), intOrNull(state, "ats_after"),
+                    providerForStage(state, "resume_export"),
+                    optimized));
+            events.publishResumeEvent(merged.getThreadId(), "resume.optimization.completed", new HashMap<>(Map.of(
+                    "threadId", merged.getThreadId(),
+                    "resumeId", resumeId.toString(),
+                    "userId", merged.getUserId().toString())));
+        } catch (Exception e) {
+            log.error("Resume version creation failed for thread={}: {}", merged.getThreadId(), e.toString(), e);
+        }
+    }
+
+    /** Parse the persisted state blob for the originating resume_id. */
+    private UUID resumeIdOf(WorkflowRun run) {
+        Object v = parseState(run).get("resume_id");
+        if (v == null) return null;
+        try {
+            return UUID.fromString(v.toString());
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
+    }
+
+    /** The provider that served a given stage, from the agent_execution telemetry. */
+    private String providerForStage(Map<String, Object> state, String stageKey) {
+        Map<String, Object> entry = indexExecutionByStage(state).get(stageKey);
+        return entry == null ? null : asString(entry.get("provider"));
     }
 
     public WorkflowRun get(UUID userId, String threadId) {
@@ -119,7 +249,11 @@ public class WorkflowService {
     private WorkflowRun persistFromResponse(UUID userId, UUID orgId, StartWorkflowRequest req, AgentRunResponse resp) {
         String threadId = resp.thread_id();
         String status = mapStatus(resp.status());
-        Map<String, Object> state = resp.state();
+        // Stamp resume_id into the state blob so resume-time version creation can find its
+        // resume (workflow_runs has no resume_id column). The agent echoes workflow_type /
+        // optimization_mode itself; resume_id is ours to carry.
+        Map<String, Object> state = new HashMap<>(resp.state() == null ? Map.of() : resp.state());
+        state.put("resume_id", req.resumeId().toString());
 
         WorkflowRun run = runs.findByThreadId(threadId).orElseGet(() -> WorkflowRun.builder()
                 .userId(userId).orgId(orgId).threadId(threadId)
@@ -135,6 +269,12 @@ public class WorkflowService {
         // was made directly into the workflow state blob so it persists and is exposed on
         // every read via toResponse(). approved_* and rejected_* are mutually exclusive.
         Map<String, Object> state = new HashMap<>(resp.state() == null ? Map.of() : resp.state());
+        // Carry resume_id forward — the agent's fresh state doesn't echo it, but downstream
+        // reads (version creation, UI) need it to persist across the resume.
+        if (!state.containsKey("resume_id")) {
+            UUID resumeId = resumeIdOf(run);
+            if (resumeId != null) state.put("resume_id", resumeId.toString());
+        }
         String nowIso = java.time.Instant.now().toString();
         if ("rejected".equalsIgnoreCase(decision == null ? "" : decision.trim())) {
             state.put("rejected_by", actor);
@@ -206,6 +346,30 @@ public class WorkflowService {
         {"application_tracking", "Application Tracking"}
     };
 
+    // The shorter RESUME_OPTIMIZATION path. Only these stages ever run on that template,
+    // so the timeline must use this list — otherwise job_discovery/interview_prep/etc. would
+    // be perpetually PENDING and the run could never derive COMPLETED/INTERRUPTED.
+    private static final String[][] RESUME_OPTIMIZATION_STAGES = {
+        {"resume_intelligence", "Resume Intelligence"},
+        {"ats_optimization", "ATS Optimization"},
+        {"human_approval", "Human Approval"},
+        {"resume_export", "Resume Export"}
+    };
+
+    /** Pick the stage list for a run from its persisted workflow_type. */
+    private static String[][] stagesFor(Map<String, Object> state) {
+        Object wt = state.get("workflow_type");
+        if (wt instanceof String s && WORKFLOW_TYPE_RESUME_OPT.equalsIgnoreCase(s.trim())) {
+            return RESUME_OPTIMIZATION_STAGES;
+        }
+        return PIPELINE_STAGES;
+    }
+
+    /** Post-approval terminal stages (run only after an approval, not before the gate). */
+    private static boolean isPostGateStage(String stageKey) {
+        return "application_tracking".equals(stageKey) || "resume_export".equals(stageKey);
+    }
+
     /**
      * Build the execution timeline — the SINGLE source of workflow truth — from the
      * agent-service's {@code agent_execution} telemetry (status/provider/duration/
@@ -233,7 +397,7 @@ public class WorkflowService {
         boolean reachedApproval = true;
         boolean upstreamFailed = false;
 
-        for (String[] stage : PIPELINE_STAGES) {
+        for (String[] stage : stagesFor(state)) {
             String stageKey = stage[0];
             String displayName = stage[1];
 
@@ -268,7 +432,7 @@ public class WorkflowService {
                 status = "PENDING";                           // genuinely has not run
             }
 
-            if ("application_tracking".equals(stageKey)) {     // post-gate stage
+            if (isPostGateStage(stageKey)) {                   // post-gate stage
                 agents.add(entry != null ? toAgent(displayName, status, entry)
                         : new WorkflowDtos.WorkflowAgent(displayName, status, null, null, null));
                 continue;
@@ -308,6 +472,7 @@ public class WorkflowService {
             case "career_strategy" -> nonEmpty(state.get("career_roadmap"));
             case "salary_intelligence" -> nonEmpty(state.get("salary_insights"));
             case "application_tracking" -> nonEmpty(state.get("tracked_application"));
+            case "resume_export" -> nonEmpty(state.get("optimized_resume"));
             default -> false;
         };
     }
@@ -388,7 +553,8 @@ public class WorkflowService {
             Map<String, Object> parsed = mapper.readValue(run.getState(), Map.class);
             return parsed;
         } catch (Exception e) {
-            log.error("Failed to parse workflow state for {}: {}", run.getThreadId(), e.getMessage());
+            log.error("Failed to parse workflow state for {}: error_type={}, error={}",
+                    run.getThreadId(), e.getClass().getSimpleName(), e.getMessage(), e);
             return new HashMap<>();
         }
     }

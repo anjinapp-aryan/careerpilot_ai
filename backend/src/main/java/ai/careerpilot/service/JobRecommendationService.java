@@ -4,54 +4,88 @@ import ai.careerpilot.api.dto.JobRecommendationDtos.CandidateProfileSummary;
 import ai.careerpilot.api.dto.JobRecommendationDtos.RecommendedJob;
 import ai.careerpilot.api.dto.JobRecommendationDtos.RecommendedJobsResponse;
 import ai.careerpilot.domain.Job;
+import ai.careerpilot.domain.JobRecommendation;
 import ai.careerpilot.domain.WorkflowRun;
+import ai.careerpilot.jobdiscovery.JobMatchingService;
+import ai.careerpilot.jobdiscovery.JobScoring;
+import ai.careerpilot.jobdiscovery.JobScoring.ScoreBreakdown;
+import ai.careerpilot.repo.JobRecommendationRepository;
 import ai.careerpilot.repo.JobRepository;
 import ai.careerpilot.repo.WorkflowRunRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 
+import java.time.Duration;
+import java.time.Instant;
 import java.util.*;
-import java.util.stream.Collectors;
 
 /**
- * Stage 1 "Recommended Jobs": deterministic, AI-free scoring of the org's existing job
- * pool against the candidate snapshot already produced by the LangGraph workflow
- * (resume_intelligence + job_discovery outputs persisted in WorkflowRun.state). Read-only
- * across existing tables — no new providers, no schema changes, no workflow execution.
+ * "Recommended Jobs": deterministic, AI-free scoring against the candidate snapshot produced
+ * by the LangGraph workflow (persisted in {@code WorkflowRun.state}).
+ *
+ * <p>Phase 2: when the global discovered-job pool is populated, this refreshes and reads
+ * persisted {@code job_recommendations} ({@link JobMatchingService}). When the pool is empty
+ * (e.g. discovery hasn't run, or an org only uses manually-added jobs) it falls back to the
+ * original on-the-fly scoring of the org job pool — so existing behavior never regresses. The
+ * response shape is unchanged either way.
  */
 @Service
 public class JobRecommendationService {
 
-    /**
-     * Bounded vocabulary used only to detect skill mentions inside free-text job
-     * descriptions (so we can report "missing" skills). Not persisted, not AI-derived —
-     * mirrors the lowercase canonical style the resume_intelligence agent already emits.
-     */
-    private static final List<String> SKILL_VOCABULARY = List.of(
-            "java", "spring boot", "spring", "kotlin", "python", "javascript", "typescript",
-            "react", "node", "node.js", "go", "golang", "rust", "c++", "c#", ".net",
-            "kubernetes", "docker", "aws", "azure", "gcp", "terraform", "ansible",
-            "kafka", "rabbitmq", "redis", "postgresql", "mysql", "mongodb", "elasticsearch",
-            "graphql", "rest", "microservices", "ci/cd", "jenkins", "git", "linux",
-            "machine learning", "data engineering", "sql", "nosql", "fastapi", "django",
-            "flask", "spring cloud", "hibernate", "jpa", "vue", "angular", "next.js",
-            "ci", "cd", "agile", "scrum", "leadership", "mentoring", "system design");
+    private static final Logger log = LoggerFactory.getLogger(JobRecommendationService.class);
 
     private final WorkflowRunRepository runs;
     private final JobRepository jobs;
+    private final JobRecommendationRepository recommendations;
+    private final JobMatchingService matching;
+    private final JobScoring scoring;
     private final ObjectMapper mapper = new ObjectMapper();
 
-    public JobRecommendationService(WorkflowRunRepository runs, JobRepository jobs) {
+    /** When true, Recommended is gated to score >= threshold AND confidence >= MEDIUM. */
+    private final boolean v2Enabled;
+    private final int threshold;
+
+    public JobRecommendationService(WorkflowRunRepository runs,
+                                    JobRepository jobs,
+                                    JobRecommendationRepository recommendations,
+                                    JobMatchingService matching,
+                                    JobScoring scoring,
+                                    @Value("${jobs.recommendation.v2-enabled:true}") boolean v2Enabled,
+                                    @Value("${jobs.recommendation.threshold:75}") int threshold) {
         this.runs = runs;
         this.jobs = jobs;
+        this.recommendations = recommendations;
+        this.matching = matching;
+        this.scoring = scoring;
+        this.v2Enabled = v2Enabled;
+        this.threshold = threshold;
     }
 
     public RecommendedJobsResponse recommend(UUID userId, UUID orgId, int limit) {
+        return recommend(userId, orgId, 0, Math.max(1, limit), "all");
+    }
+
+    public RecommendedJobsResponse recommend(UUID userId, UUID orgId, int limit, String filter) {
+        return recommend(userId, orgId, 0, Math.max(1, limit), filter);
+    }
+
+    /**
+     * Build the full gated+filtered+ranked list, then return one page of it. Filters and the
+     * score threshold are applied identically on both the discovered-pool and org-pool paths,
+     * so a chip never silently no-ops on the fallback path.
+     */
+    public RecommendedJobsResponse recommend(UUID userId, UUID orgId, int page, int size, String filter) {
+        int pageSize = size <= 0 ? 10 : Math.min(size, 50);
+        int pageNum = Math.max(0, page);
+
         WorkflowRun latest = runs.findTop20ByUserIdOrderByCreatedAtDesc(userId).stream()
                 .findFirst().orElse(null);
         if (latest == null) {
-            return new RecommendedJobsResponse(null, List.of());
+            return new RecommendedJobsResponse(null, List.of(), pageNum, pageSize, 0, false);
         }
 
         Map<String, Object> state = parseState(latest);
@@ -66,53 +100,92 @@ public class JobRecommendationService {
                 preferredRoles(latest),
                 latest.getResumeScore());
 
-        List<Job> pool = jobs.search(orgId, null, PageRequest.of(0, 50)).getContent();
+        // Prefer the real discovered pool: refresh + read persisted recommendations.
+        matching.refreshForUser(userId);
+        List<RecommendedJob> all = fromPersisted(userId, filter);
 
-        List<RecommendedJob> ranked = pool.stream()
-                .map(job -> score(job, extractedSkills, latest.getTargetRole(), targetLocations))
-                .sorted(Comparator.comparingInt(RecommendedJob::matchScore).reversed())
-                .limit(Math.max(1, limit))
-                .toList();
+        // Fallback: no discovered recommendations yet → score the org pool on the fly (legacy).
+        if (all.isEmpty()) {
+            all = fromOrgPool(orgId, extractedSkills, latest.getTargetRole(), targetLocations, filter);
+        }
 
-        return new RecommendedJobsResponse(profile, ranked);
+        // Paginate in memory (the gated list is small — <= KEEP_TOP).
+        int total = all.size();
+        int from = Math.min(pageNum * pageSize, total);
+        int to = Math.min(from + pageSize, total);
+        List<RecommendedJob> pageItems = all.subList(from, to);
+        boolean hasMore = to < total;
+
+        log.info("RECO_READ user={} filter={} matched={} page={} size={} returned={} hasMore={}",
+                userId, filter, total, pageNum, pageSize, pageItems.size(), hasMore);
+
+        return new RecommendedJobsResponse(profile, pageItems, pageNum, pageSize, total, hasMore);
     }
 
-    private RecommendedJob score(Job job, List<String> candidateSkills, String targetRole, List<String> targetLocations) {
-        String haystack = ((job.getTitle() == null ? "" : job.getTitle()) + " "
-                + (job.getDescription() == null ? "" : job.getDescription())).toLowerCase();
+    /** All gated + filtered persisted recommendations, ranked by score (no pagination here). */
+    private List<RecommendedJob> fromPersisted(UUID userId, String filter) {
+        List<JobRecommendation> recs = recommendations.findByUserIdOrderByMatchScoreDesc(userId);
+        if (recs.isEmpty()) return List.of();
 
-        Set<String> candidateSkillSet = candidateSkills.stream().map(String::toLowerCase).collect(Collectors.toSet());
+        Map<UUID, Job> jobsById = new HashMap<>();
+        jobs.findAllById(recs.stream().map(JobRecommendation::getJobId).toList())
+                .forEach(j -> jobsById.put(j.getId(), j));
 
-        List<String> mentionedSkills = SKILL_VOCABULARY.stream()
-                .filter(haystack::contains)
+        List<RecommendedJob> out = new ArrayList<>();
+        for (JobRecommendation rec : recs) {
+            Job job = jobsById.get(rec.getJobId());
+            if (job == null) continue; // recommendation outlived its job
+
+            // Quality gate: only score >= threshold reaches Recommended; the rest fall through to
+            // Browse (/api/jobs/pool). Confidence is shown as a badge, not used as a hard gate
+            // (it was over-filtering and collapsing the list to the fallback path). Flag-gated.
+            if (v2Enabled && rec.getMatchScore() < threshold) continue;
+            if (!matchesFilter(job, rec.getMatchScore(), filter)) continue;
+
+            out.add(new RecommendedJob(job, rec.getMatchScore(),
+                    csv(rec.getMatchingSkills()), csv(rec.getMissingSkills()),
+                    rec.getConfidenceLevel(), parseBreakdown(rec.getScoreBreakdown())));
+        }
+        return out;
+    }
+
+    /** Recommended-tab filter chips. {@code all} passes everything that cleared the gate. */
+    private boolean matchesFilter(Job job, int matchScore, String filter) {
+        if (filter == null || filter.isBlank() || "all".equalsIgnoreCase(filter)) return true;
+        return switch (filter.toLowerCase()) {
+            case "remote" -> "REMOTE".equals(job.getRemoteType());
+            case "hybrid" -> "HYBRID".equals(job.getRemoteType());
+            case "onsite" -> "ONSITE".equals(job.getRemoteType());
+            case "visa" -> Boolean.TRUE.equals(job.getSponsorshipAvailable());
+            case "relocation" -> Boolean.TRUE.equals(job.getRelocationSupport());
+            case "high" -> matchScore >= 90;
+            case "new" -> job.getPostedDate() != null
+                    && Duration.between(job.getPostedDate(), Instant.now()).toHours() <= 24;
+            default -> true;
+        };
+    }
+
+    private ScoreBreakdown parseBreakdown(String json) {
+        if (json == null || json.isBlank()) return null;
+        try {
+            return mapper.readValue(json, ScoreBreakdown.class);
+        } catch (Exception e) {
+            return null; // old-shape breakdown from a pre-v2 row → re-scored on next refresh
+        }
+    }
+
+    /** Org-pool fallback (legacy on-the-fly scoring), now also filter-aware and unlimited. */
+    private List<RecommendedJob> fromOrgPool(UUID orgId, List<String> skills, String targetRole,
+                                             List<String> targetLocations, String filter) {
+        List<Job> pool = jobs.search(orgId, null, PageRequest.of(0, 100)).getContent();
+        return pool.stream()
+                .map(job -> {
+                    JobScoring.ScoreResult r = scoring.score(job, skills, targetRole, targetLocations);
+                    return new RecommendedJob(job, r.matchScore(), r.matchedSkills(), r.missingSkills());
+                })
+                .filter(rj -> matchesFilter(rj.job(), rj.matchScore(), filter))
+                .sorted(Comparator.comparingInt(RecommendedJob::matchScore).reversed())
                 .toList();
-        List<String> matchedSkills = mentionedSkills.stream().filter(candidateSkillSet::contains).toList();
-        List<String> missingSkills = mentionedSkills.stream().filter(s -> !candidateSkillSet.contains(s)).toList();
-
-        int skillsScore = mentionedSkills.isEmpty() ? 50 : (matchedSkills.size() * 100 / mentionedSkills.size());
-
-        int roleScore;
-        if (targetRole == null || targetRole.isBlank()) {
-            roleScore = 50;
-        } else {
-            String role = targetRole.toLowerCase();
-            roleScore = haystack.contains(role) ? 100
-                    : Arrays.stream(role.split("\\s+")).anyMatch(haystack::contains) ? 60
-                    : 20;
-        }
-
-        int locationScore;
-        String jobLocation = job.getLocation() == null ? "" : job.getLocation().toLowerCase();
-        if (haystack.contains("remote") || jobLocation.contains("remote")) {
-            locationScore = 100;
-        } else if (targetLocations.isEmpty()) {
-            locationScore = 50;
-        } else {
-            locationScore = targetLocations.stream().anyMatch(loc -> jobLocation.contains(loc.toLowerCase())) ? 100 : 30;
-        }
-
-        int total = Math.round(skillsScore * 0.6f + roleScore * 0.25f + locationScore * 0.15f);
-        return new RecommendedJob(job, Math.min(100, Math.max(0, total)), matchedSkills, missingSkills);
     }
 
     private List<String> preferredRoles(WorkflowRun run) {
@@ -120,6 +193,11 @@ public class JobRecommendationService {
         if (run.getTargetRole() != null && !run.getTargetRole().isBlank()) roles.add(run.getTargetRole());
         if (run.getTargetSeniority() != null && !run.getTargetSeniority().isBlank()) roles.add(run.getTargetSeniority());
         return roles;
+    }
+
+    private static List<String> csv(String v) {
+        if (v == null || v.isBlank()) return List.of();
+        return Arrays.stream(v.split(",")).map(String::trim).filter(s -> !s.isEmpty()).toList();
     }
 
     @SuppressWarnings("unchecked")

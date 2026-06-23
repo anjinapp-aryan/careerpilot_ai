@@ -56,17 +56,25 @@ public class GeminiProvider extends AbstractLlmProvider {
     @Override
     public String chat(List<ChatMessage> messages, String system, double temperature) {
         Map<String, Object> body = buildBody(messages, system, temperature);
-        JsonNode resp = client.post()
+        // Parse a String response with our own mapper — the reactive Jackson codec in this
+        // stack cannot construct JsonNode directly (InvalidDefinitionException), so
+        // bodyToMono(JsonNode.class) fails. The streaming path parses Strings for the same reason.
+        String raw = client.post()
                 .uri(uri -> uri.path("/models/{model}:generateContent")
                         .queryParam("key", cfg.getApiKey()).build(cfg.getModel()))
                 .bodyValue(body)
                 .retrieve()
                 .onStatus(status -> status.value() == 429,
                         r -> Mono.error(new QuotaExceededException("Gemini 429 quota/rate limit", null)))
-                .bodyToMono(JsonNode.class)
+                .bodyToMono(String.class)
                 .timeout(timeout())
                 .block();
-        return extractText(resp).trim();
+        if (raw == null || raw.isBlank()) return "";
+        try {
+            return extractText(mapper.readTree(raw)).trim();
+        } catch (Exception e) {
+            throw new IllegalStateException("Failed to parse Gemini chat response", e);
+        }
     }
 
     @Override

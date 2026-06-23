@@ -61,4 +61,15 @@ public class WorkflowEventProducer {
         enriched.put("event", eventType);
         publish(key, enriched);
     }
+
+    /**
+     * Publish a job-discovery event (e.g. {@code job.discovery.completed}) onto the same
+     * best-effort workflow topic, tagged with an {@code event} type. Phase 2 has no
+     * dedicated topic/consumers — fire-and-forget, never breaks ingest.
+     */
+    public void publishJobEvent(String key, String eventType, Map<String, Object> payload) {
+        Map<String, Object> enriched = new java.util.HashMap<>(payload == null ? Map.of() : payload);
+        enriched.put("event", eventType);
+        publish(key, enriched);
+    }
 }

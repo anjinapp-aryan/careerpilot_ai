@@ -56,7 +56,11 @@ public abstract class AbstractOpenAiChatProvider extends AbstractLlmProvider {
                 "messages", toOpenAiMessages(messages, system),
                 "temperature", temperature,
                 "stream", false);
-        JsonNode resp = client.post()
+        // Deserialize to String and parse with our own ObjectMapper. The reactive Jackson
+        // codec in this stack cannot construct a JsonNode directly (InvalidDefinitionException),
+        // so bodyToMono(JsonNode.class) fails — the streaming path already parses Strings for
+        // the same reason. Keep these two consistent.
+        String raw = client.post()
                 .uri("/chat/completions")
                 .contentType(MediaType.APPLICATION_JSON)
                 .bodyValue(body)
@@ -66,11 +70,16 @@ public abstract class AbstractOpenAiChatProvider extends AbstractLlmProvider {
                 // provider (Resilience4j ignores QuotaExceededException for retry).
                 .onStatus(status -> status.value() == 429,
                         r -> Mono.error(new QuotaExceededException(displayName() + " 429 quota/rate limit", null)))
-                .bodyToMono(JsonNode.class)
+                .bodyToMono(String.class)
                 .timeout(timeout())
                 .block();
-        if (resp == null) return "";
-        return resp.path("choices").path(0).path("message").path("content").asText("").trim();
+        if (raw == null || raw.isBlank()) return "";
+        try {
+            JsonNode resp = mapper.readTree(raw);
+            return resp.path("choices").path(0).path("message").path("content").asText("").trim();
+        } catch (Exception e) {
+            throw new IllegalStateException("Failed to parse " + displayName() + " chat response", e);
+        }
     }
 
     @Override

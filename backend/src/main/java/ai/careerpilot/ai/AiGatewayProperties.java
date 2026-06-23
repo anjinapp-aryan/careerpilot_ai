@@ -25,10 +25,28 @@ public class AiGatewayProperties {
     private String primary = "deepseek";
 
     /** Failover order of provider keys, highest priority first. */
-    private List<String> order = new ArrayList<>(List.of("deepseek", "gemini", "groq", "qwen"));
+    private List<String> order = new ArrayList<>(List.of("deepseek", "gemini", "groq", "qwen", "glm"));
 
     /** Default sampling temperature for chat/feature calls. */
     private double defaultTemperature = 0.4;
+
+    /**
+     * Phase A feature flag for the Enterprise Smart Router. When {@code false}
+     * (the default), the gateway behaves exactly as before — pure sequential
+     * failover over {@link #order}. The flag is loaded but NOT consulted by the
+     * routing path in Phase A; task-aware routing (consuming {@link #routing})
+     * is wired in a later phase. Bound to {@code AI_SMART_ROUTER_ENABLED}.
+     */
+    private boolean smartRouterEnabled = false;
+
+    /**
+     * Per-task provider preference lists (task name → ordered provider keys),
+     * e.g. {@code resumeOptimization: [deepseek, gemini, glm]}. Loaded from
+     * config so provider order per task can change without code, but only
+     * consulted when {@link #smartRouterEnabled} is true (future phase). Empty
+     * by default — has zero effect on current behavior.
+     */
+    private Map<String, List<String>> routing = new LinkedHashMap<>();
 
     /** Per-provider settings keyed by provider name (gemini | deepseek | qwen | …). */
     private Map<String, Provider> providers = new LinkedHashMap<>();
@@ -38,6 +56,12 @@ public class AiGatewayProperties {
 
     public List<String> getOrder() { return order; }
     public void setOrder(List<String> order) { this.order = order; }
+
+    public boolean isSmartRouterEnabled() { return smartRouterEnabled; }
+    public void setSmartRouterEnabled(boolean smartRouterEnabled) { this.smartRouterEnabled = smartRouterEnabled; }
+
+    public Map<String, List<String>> getRouting() { return routing; }
+    public void setRouting(Map<String, List<String>> routing) { this.routing = routing; }
 
     public double getDefaultTemperature() { return defaultTemperature; }
     public void setDefaultTemperature(double defaultTemperature) { this.defaultTemperature = defaultTemperature; }

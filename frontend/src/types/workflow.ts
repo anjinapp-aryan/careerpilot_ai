@@ -32,6 +32,22 @@ export interface Job {
   externalUrl?: string | null;
   postedAt?: string | null;
   createdAt?: string;
+  // Phase 2 Job Discovery metadata (populated only for ingested/discovered jobs).
+  country?: string | null;
+  city?: string | null;
+  remote?: boolean | null;
+  currency?: string | null;
+  skills?: string | null;
+  sourceUrl?: string | null;
+  postedDate?: string | null;
+  salaryMin?: number | null;
+  salaryMax?: number | null;
+  // Recommendation-engine enrichment (keyword-derived at ingest; nullable).
+  remoteType?: 'REMOTE' | 'HYBRID' | 'ONSITE' | null;
+  sponsorshipAvailable?: boolean | null;
+  relocationSupport?: boolean | null;
+  companySize?: string | null;
+  requiredExperience?: number | null;
 }
 
 /** An application tracked in the pipeline. Mirrors the `applications` entity. */
@@ -70,18 +86,72 @@ export interface CandidateProfileSummary {
   resumeScore?: number | null;
 }
 
-/** A job ranked by the Stage 1 deterministic recommender. Mirrors `RecommendedJob`. */
+/** Per-factor 0-100 sub-scores behind a match score. Mirrors `ScoreBreakdown`.
+ *  Weights: skills 35, experience 20, role 15, location 10, salary 10, visa 5, workMode 5. */
+export interface ScoreBreakdown {
+  skills: number;
+  experience: number;
+  role: number;
+  location: number;
+  salary: number;
+  visa: number;
+  workMode: number;
+}
+
+/** A job ranked by the deterministic recommender. Mirrors `RecommendedJob`. */
 export interface RecommendedJob {
   job: Job;
   matchScore: number;
   matchedSkills: string[];
   missingSkills: string[];
+  /** Nullable: present only on the v2 (persisted) path. */
+  confidenceLevel?: 'HIGH' | 'MEDIUM' | 'LOW' | null;
+  scoreBreakdown?: ScoreBreakdown | null;
 }
+
+/** Persistent job preferences. Mirrors `CandidatePreferencesDto`. */
+export interface CandidatePreferences {
+  preferredCountries: string[];
+  preferredCities: string[];
+  preferredRoles: string[];
+  remotePreference: boolean;
+  hybridPreference: boolean;
+  onsitePreference: boolean;
+  visaSponsorshipRequired: boolean;
+  relocationRequired: boolean;
+  salaryExpectationMin?: number | null;
+  salaryExpectationMax?: number | null;
+  salaryCurrency?: string | null;
+}
+
+/** `POST /api/jobs/:id/explain` response. Mirrors `JobMatchExplanationDto`. */
+export interface JobMatchExplanation {
+  matchingSkills: string[];
+  missingSkills: string[];
+  resumeImprovements: string[];
+  atsImprovements: string[];
+  modelUsed?: string | null;
+}
+
+/** Recommended-tab filter chips. */
+export type RecommendedFilter =
+  | 'all'
+  | 'remote'
+  | 'hybrid'
+  | 'onsite'
+  | 'visa'
+  | 'relocation'
+  | 'high'
+  | 'new';
 
 /** `GET /api/jobs/recommended` response. `profile` is null until the user runs the AI workflow. */
 export interface RecommendedJobsResponse {
   profile: CandidateProfileSummary | null;
   jobs: RecommendedJob[];
+  page?: number;
+  size?: number;
+  total?: number;
+  hasMore?: boolean;
 }
 
 /** A persisted, AI-optimized version of a resume. Mirrors `ResumeVersionResponse`. */

@@ -166,11 +166,11 @@ public class AiGatewayService {
                 String reason = recordFailure(p, e);
                 if (hasNext) {
                     metrics.recordFallback();
-                    log.warn("AI_GATEWAY provider={} result=FAILED reason={} fallback={} fallbackDepth={}",
-                            p.displayName(), reason, chain.get(i + 1).displayName(), i);
+                    log.warn("AI_GATEWAY provider={} result=FAILED reason={} cause={} fallback={} fallbackDepth={}",
+                            p.displayName(), reason, rootCause(e), chain.get(i + 1).displayName(), i);
                 } else {
-                    log.error("AI_GATEWAY provider={} result=FAILED reason={} fallback=NONE fallbackDepth={} — all {} providers exhausted for op='{}'",
-                            p.displayName(), reason, i, chain.size(), op);
+                    log.error("AI_GATEWAY provider={} result=FAILED reason={} cause={} fallback=NONE fallbackDepth={} — all {} providers exhausted for op='{}'",
+                            p.displayName(), reason, rootCause(e), i, chain.size(), op, e);
                 }
             }
         }
@@ -220,6 +220,16 @@ public class AiGatewayService {
 
     private static List<String> displayNames(List<LlmProvider> chain) {
         return chain.stream().map(LlmProvider::displayName).toList();
+    }
+
+    /** Short "ExceptionClass: message" of the deepest cause — enough to diagnose without a full stack. */
+    private static String rootCause(Throwable e) {
+        Throwable t = e;
+        while (t.getCause() != null && t.getCause() != t) {
+            t = t.getCause();
+        }
+        String msg = t.getMessage();
+        return t.getClass().getSimpleName() + (msg == null ? "" : ": " + msg);
     }
 
     // ====================================================================
@@ -318,6 +328,48 @@ public class AiGatewayService {
 
     public Map<String, Object> stats() {
         return metrics.snapshot(props.getOrder());
+    }
+
+    /**
+     * Per-provider status in failover order: name, displayName, configured, model,
+     * circuit state, and last-known health. Read-only — backs {@code GET /api/ai/providers}.
+     */
+    public List<Map<String, Object>> providerStatuses() {
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (String key : props.getOrder()) {
+            LlmProvider p = providersByName.get(key);
+            boolean configured = p != null && p.isConfigured();
+            CircuitBreaker.State cbState = cbRegistry.circuitBreaker(key).getState();
+            String status = !configured
+                    ? "NOT_CONFIGURED"
+                    : (cbState == CircuitBreaker.State.OPEN ? "DOWN" : "UP");
+
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("name", key);
+            m.put("displayName", p != null ? p.displayName() : key);
+            m.put("configured", configured);
+            m.put("model", props.provider(key).getModel());
+            m.put("status", status);
+            m.put("circuitState", cbState.name());
+            m.put("health", healthTracker.getStatus(key).name());
+            out.add(m);
+        }
+        return out;
+    }
+
+    /**
+     * Router configuration snapshot — backs {@code GET /api/ai/router/status}.
+     * In Phase A {@code mode} is always "sequential" unless the smart-router flag
+     * is enabled; the routing map is reported for visibility but not yet consulted.
+     */
+    public Map<String, Object> routerStatus() {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("smartRouterEnabled", props.isSmartRouterEnabled());
+        m.put("mode", props.isSmartRouterEnabled() ? "task-aware" : "sequential");
+        m.put("order", props.getOrder());
+        m.put("primary", props.getPrimary());
+        m.put("routing", props.getRouting());
+        return m;
     }
 
     // ====================================================================

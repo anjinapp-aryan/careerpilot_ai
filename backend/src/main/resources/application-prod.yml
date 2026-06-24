@@ -1,0 +1,31 @@
+# Production profile for Koyeb deployment
+# Activate with: SPRING_PROFILES_ACTIVE=prod
+# Inherits all settings from application.yml, only overrides below
+
+logging:
+  level:
+    root: WARN
+    ai.careerpilot: INFO
+    org.springframework.web: WARN
+    org.springframework.security: WARN
+    org.hibernate: WARN
+
+management:
+  endpoint:
+    health:
+      # Minimize exposed health details in production
+      show-details: never
+
+spring:
+  jpa:
+    properties:
+      hibernate:
+        # Batch write operations for efficiency under load
+        jdbc.batch_size: 20
+        order_inserts: true
+        order_updates: true
+
+careerpilot:
+  kafka:
+    # Kafka not deployed on free tier; silently disabled
+    enabled: false

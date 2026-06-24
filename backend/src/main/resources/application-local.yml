@@ -1,0 +1,40 @@
+# Local development profile
+# Activate with: SPRING_PROFILES_ACTIVE=local
+# Or rely on application.yml (default profile) which is already dev-friendly
+
+logging:
+  level:
+    root: INFO
+    ai.careerpilot: DEBUG
+    org.springframework.web: DEBUG
+    org.springframework.security: DEBUG
+
+management:
+  endpoint:
+    health:
+      # Show full health details for local debugging
+      show-details: when-authorized
+
+spring:
+  jpa:
+    properties:
+      hibernate:
+        # Disable batching for clearer SQL logs during local dev
+        jdbc.batch_size: 1
+        format_sql: true
+  datasource:
+    hikari:
+      # Liberal for local work
+      maximum-pool-size: 20
+      minimum-idle: 5
+      connection-timeout: 30000
+
+security:
+  cors:
+    # Local frontend on Vite
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:5173}
+
+careerpilot:
+  kafka:
+    # Enable Kafka locally if docker-compose is running
+    enabled: ${KAFKA_ENABLED:true}

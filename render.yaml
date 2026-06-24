@@ -1,0 +1,116 @@
+# Render Blueprint — backend + agent-service.
+# Deploy: Render dashboard -> New -> Blueprint -> connect this repo -> render.yaml is auto-detected.
+# Frontend (Vite) is NOT included here — it deploys separately to Vercel (see DEPLOYMENT.md Step 6).
+#
+# Put both services in the SAME region so they can reach each other over Render's
+# private network later if you want to drop the public hop for AGENT_SERVICE_URL
+# (see the comment on that key below) — something Koyeb's free tier couldn't do.
+#
+# Secrets (sync: false) are NOT set here — fill them in via the Render dashboard
+# after the Blueprint creates the services, or `render env:set` with the CLI.
+
+services:
+  - type: web
+    name: careerpilot-agent
+    runtime: docker
+    repo: https://github.com/<you>/careerpilot_ai
+    branch: main
+    dockerfilePath: ./agent-service/Dockerfile
+    dockerContext: ./agent-service
+    plan: free
+    region: oregon
+    healthCheckPath: /health
+    envVars:
+      - key: PORT
+        value: "8088"
+      - key: AI_PROVIDER
+        value: gemini
+      - key: AI_MODEL
+        value: gemini-2.5-flash
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: DATABASE_URL_PY
+        sync: false                 # Neon DIRECT (no -pooler) libpq URL
+      - key: CORS_ALLOWED_ORIGINS
+        value: https://your-app.vercel.app
+      - key: LOG_LEVEL
+        value: INFO
+
+  - type: web
+    name: careerpilot-backend
+    runtime: docker
+    repo: https://github.com/<you>/careerpilot_ai
+    branch: main
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    plan: free
+    region: oregon
+    healthCheckPath: /actuator/health
+    envVars:
+      - key: PORT
+        value: "8080"
+      - key: SPRING_PROFILES_ACTIVE
+        value: prod
+      - key: JWT_SECRET
+        sync: false                 # generate with: openssl rand -hex 48
+      - key: DATABASE_URL
+        sync: false                 # Neon DIRECT (no -pooler) JDBC URL
+      - key: SPRING_DATASOURCE_USERNAME
+        sync: false
+      - key: SPRING_DATASOURCE_PASSWORD
+        sync: false
+      # Public URL by default (Blueprint env vars can't string-concat a
+      # fromService host:port with "https://"). Once both services are live in
+      # the same region, you can switch this in the dashboard to Render's
+      # internal address (http://careerpilot-agent:8088) to skip the public hop.
+      - key: AGENT_SERVICE_URL
+        value: https://careerpilot-agent.onrender.com
+      - key: AI_PROVIDER
+        value: gemini
+      - key: AI_MODEL
+        value: gemini-2.5-flash
+      # ---- AI Gateway failover chain ----
+      - key: PRIMARY_PROVIDER
+        value: deepseek
+      - key: AI_PROVIDER_ORDER
+        value: deepseek,gemini,groq,qwen,openrouter
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_MODEL
+        value: gemini-2.5-flash
+      - key: DEEP_SHEEK_NVIDIA_API_KEY
+        sync: false
+      - key: NVIDIA_DEEPSEEK_MODEL
+        value: deepseek-ai/deepseek-v4-flash
+      - key: NVIDIA_BASE_URL
+        value: https://integrate.api.nvidia.com/v1
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GROQ_MODEL
+        value: llama-3.3-70b-versatile
+      - key: GROQ_BASE_URL
+        value: https://api.groq.com/openai/v1
+      - key: QWEN3_NVIDIA_API_KEY
+        sync: false
+      - key: NVIDIA_QWEN_MODEL
+        value: qwen/qwen3-next-80b-a3b-instruct
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: OPENROUTER_MODEL
+        value: qwen/qwen3-next-80b-a3b-instruct
+      - key: OPENROUTER_BASE_URL
+        value: https://openrouter.ai/api/v1
+      - key: CORS_ALLOWED_ORIGINS
+        value: https://your-app.vercel.app
+      - key: REDIS_URL
+        sync: false                 # Upstash rediss:// URL recommended
+      - key: KAFKA_BOOTSTRAP_SERVERS
+        value: "localhost:9092"     # Kafka not deployed; producer fails open
+      - key: MINIO_ENDPOINT
+        sync: false                 # Cloudflare R2 endpoint
+      - key: MINIO_ACCESS_KEY
+        sync: false
+      - key: MINIO_SECRET_KEY
+        sync: false
+      - key: S3_REGION
+        value: auto

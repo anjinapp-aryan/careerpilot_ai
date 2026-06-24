@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { motion } from 'framer-motion';
 import {
@@ -38,7 +38,7 @@ import { RecommendedJobs } from '@/components/jobs/RecommendedJobs';
 import { PreferencesDialog } from '@/components/jobs/PreferencesDialog';
 import { JobBadges } from '@/components/jobs/JobBadges';
 import { trackJobEvent } from '@/lib/jobTelemetry';
-import type { Application, Job, JobsPage } from '@/types/workflow';
+import type { Application, CandidatePreferences, Job, JobsPage } from '@/types/workflow';
 
 type JobsTab = 'recommended' | 'domestic' | 'international' | 'saved' | 'applied' | 'browse';
 
@@ -105,6 +105,22 @@ export default function Jobs() {
     enabled: isDiscoverTab,
   });
   const discoveredJobs = discoveredPage?.content ?? [];
+
+  // Home country defaults to the user's first saved preferred country (instead of a hardcoded
+  // 'India'), applied once so a manual chip selection is never overridden on a later refetch.
+  const homeCountryInitialized = useRef(false);
+  const { data: preferences } = useQuery<CandidatePreferences>({
+    queryKey: ['candidate', 'preferences'],
+    queryFn: async () => (await api.get('/api/candidate/preferences')).data,
+  });
+  useEffect(() => {
+    if (homeCountryInitialized.current) return;
+    const first = preferences?.preferredCountries?.[0];
+    if (first) {
+      setHomeCountry(first);
+      homeCountryInitialized.current = true;
+    }
+  }, [preferences]);
 
   // Browse "more opportunities": global discovered pool minus high-confidence recommendations.
   const { data: poolPage } = useQuery<JobsPage>({
@@ -278,23 +294,25 @@ export default function Jobs() {
 
       {isDiscoverTab && (
         <div className="space-y-4">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-sm font-medium text-muted-foreground">Home country</span>
-            {HOME_COUNTRIES.map((c) => (
-              <button
-                key={c}
-                onClick={() => setHomeCountry(c)}
-                className={cn(
-                  'rounded-full border px-3 py-1 text-xs font-medium transition-colors',
-                  homeCountry === c
-                    ? 'border-primary bg-primary/10 text-primary'
-                    : 'border-border text-muted-foreground hover:bg-muted',
-                )}
-              >
-                {c}
-              </button>
-            ))}
-          </div>
+          {tab === 'domestic' && (
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-sm font-medium text-muted-foreground">Home country</span>
+              {HOME_COUNTRIES.map((c) => (
+                <button
+                  key={c}
+                  onClick={() => setHomeCountry(c)}
+                  className={cn(
+                    'rounded-full border px-3 py-1 text-xs font-medium transition-colors',
+                    homeCountry === c
+                      ? 'border-primary bg-primary/10 text-primary'
+                      : 'border-border text-muted-foreground hover:bg-muted',
+                  )}
+                >
+                  {c}
+                </button>
+              ))}
+            </div>
+          )}
           {tab === 'international' && (
             <div className="flex flex-wrap items-center gap-2">
               <div className="relative">
@@ -495,7 +513,7 @@ export default function Jobs() {
                 <Badge tone="neutral">{poolJobs.length}</Badge>
               </div>
               <p className="text-xs text-muted-foreground">
-                Discovered roles that didn’t clear your 75% match bar — still worth a look.
+                Discovered roles that didn’t clear your 70% match bar — still worth a look.
               </p>
               {poolJobs.map((job, i) => (
                 <JobCard

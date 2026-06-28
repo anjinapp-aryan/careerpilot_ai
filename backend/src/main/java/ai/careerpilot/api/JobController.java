@@ -8,6 +8,8 @@ import ai.careerpilot.domain.JobFetchAudit;
 import ai.careerpilot.jobdiscovery.JobAggregationService;
 import ai.careerpilot.jobdiscovery.JobAggregationService.DiscoverySummary;
 import ai.careerpilot.jobdiscovery.JobEmbeddingService;
+import ai.careerpilot.jobdiscovery.enrich.JobAiEnrichmentService;
+import ai.careerpilot.domain.JobAiEnrichment;
 import ai.careerpilot.repo.JobFetchAuditRepository;
 import ai.careerpilot.security.AuthenticatedUser;
 import ai.careerpilot.service.JobMatchExplanationService;
@@ -34,19 +36,22 @@ public class JobController {
     private final JobFetchAuditRepository audits;
     private final JobMatchExplanationService explanations;
     private final JobEmbeddingService embeddings;
+    private final JobAiEnrichmentService enrichment;
 
     public JobController(JobService jobs,
                          JobRecommendationService recommendations,
                          JobAggregationService aggregation,
                          JobFetchAuditRepository audits,
                          JobMatchExplanationService explanations,
-                         JobEmbeddingService embeddings) {
+                         JobEmbeddingService embeddings,
+                         JobAiEnrichmentService enrichment) {
         this.jobs = jobs;
         this.recommendations = recommendations;
         this.aggregation = aggregation;
         this.audits = audits;
         this.explanations = explanations;
         this.embeddings = embeddings;
+        this.enrichment = enrichment;
     }
 
     @GetMapping
@@ -125,6 +130,30 @@ public class JobController {
                                                    @RequestParam(required = false) Integer limit) {
         int written = limit != null ? embeddings.embedMissingJobs(limit) : embeddings.embedMissingJobs();
         return Map.of("embedded", written);
+    }
+
+    /**
+     * LLM-enrich discovered jobs that have no enrichment row yet (capped per call). Idempotent and
+     * safe to re-run; a no-op when enrichment is disabled. Returns the number enriched. The "on-demand
+     * batch" half of Increment B (the scheduler runs this nightly).
+     */
+    @PostMapping("/enrich/backfill")
+    public Map<String, Integer> backfillEnrichment(AuthenticatedUser user,
+                                                   @RequestParam(required = false) Integer limit) {
+        int written = limit != null ? enrichment.enrichMissingJobs(limit) : enrichment.enrichMissingJobs();
+        return Map.of("enriched", written);
+    }
+
+    /**
+     * On-demand single-job enrichment: enrich (or re-enrich) one job synchronously. Returns the saved
+     * enrichment, or 404 when enrichment is disabled, the job is unknown, or extraction failed.
+     */
+    @PostMapping("/{id}/enrich")
+    public JobAiEnrichment enrichOne(AuthenticatedUser user, @PathVariable UUID id) {
+        return enrichment.enrichOne(id)
+                .orElseThrow(() -> new org.springframework.web.server.ResponseStatusException(
+                        org.springframework.http.HttpStatus.NOT_FOUND,
+                        "enrichment unavailable (disabled, unknown job, or extraction failed)"));
     }
 
     /**

@@ -18,13 +18,16 @@ public class JobDiscoveryScheduler {
 
     private final JobAggregationService aggregation;
     private final JobEmbeddingService embeddings;
+    private final ai.careerpilot.jobdiscovery.enrich.JobAiEnrichmentService enrichment;
     private final boolean enabled;
 
     public JobDiscoveryScheduler(JobAggregationService aggregation,
                                  JobEmbeddingService embeddings,
+                                 ai.careerpilot.jobdiscovery.enrich.JobAiEnrichmentService enrichment,
                                  @Value("${jobs.discovery.enabled:true}") boolean enabled) {
         this.aggregation = aggregation;
         this.embeddings = embeddings;
+        this.enrichment = enrichment;
         this.enabled = enabled;
     }
 
@@ -42,6 +45,13 @@ public class JobDiscoveryScheduler {
             embeddings.embedMissingJobs();
         } catch (Exception e) {
             log.warn("Post-discovery embedding pass failed: {}", e.toString());
+        }
+        // LLM-enrich newly-discovered jobs (capped, idempotent). No-op unless enrichment is enabled;
+        // isolated so an enrichment failure never affects the discovery run that just succeeded.
+        try {
+            enrichment.enrichMissingJobs();
+        } catch (Exception e) {
+            log.warn("Post-discovery enrichment pass failed: {}", e.toString());
         }
     }
 }

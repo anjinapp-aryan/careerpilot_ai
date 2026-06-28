@@ -235,6 +235,20 @@ jobs:
   # legacy unthresholded behavior with no redeploy.
   enrich:
     enabled: ${JOB_ENRICH_ENABLED:true}          # keyword classification at ingest
+    # ---- LLM job enrichment (Phase 2 Increment B) ----
+    # Semantic enrichment the keyword tier can't derive (seniority/skills/domains/salary-band/summary),
+    # via the AI Gateway. Stored in the 1:1 job_ai_enrichment table; produced-but-not-consumed in v1
+    # (matching does not read it yet). Gated DARK by default → zero LLM cost / no behavior change.
+    ai:
+      enabled: ${JOBS_ENRICH_AI_ENABLED:false}
+      # Cap on how many missing-enrichment jobs are enriched per run (scheduler + backfill) — cost guard.
+      max-per-run: ${JOBS_ENRICH_AI_MAX_PER_RUN:200}
+      # Max characters of the job description sent to the LLM (cost + payload guard).
+      max-chars: ${JOBS_ENRICH_AI_MAX_CHARS:6000}
+      # Per-call provider preference for this structured-extraction task: prefer a FAST model
+      # (gemini flash) over the default deepseek reasoning model (~68s/job → a few seconds). Still
+      # falls back to the rest of the gateway chain on failure. Comma-separated; first configured wins.
+      providers: ${JOBS_ENRICH_AI_PROVIDERS:gemini}
   # ---- Industry / job-family quality filter ----
   # Excludes non-technical families (Marketing/Sales/HR/Recruiter/Support/Finance) from a tech
   # candidate's recommendations. The candidate's own family is never excluded. Flag-gated for

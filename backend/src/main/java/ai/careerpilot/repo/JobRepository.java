@@ -88,6 +88,18 @@ public interface JobRepository extends JpaRepository<Job, UUID> {
            nativeQuery = true)
     List<Job> findNearestDiscovered(@Param("vec") String vec, @Param("k") int k);
 
+    // ── LLM job enrichment (Phase 2 Increment B) ─────────────────────────────────────
+
+    /**
+     * Newest discovered jobs with no AI-enrichment row yet — the work list for the capped enrichment
+     * pass. LEFT JOIN against the 1:1 {@code job_ai_enrichment} table; {@code e.id IS NULL} selects the
+     * not-yet-enriched. Idempotent by construction: an enriched job drops out of this list.
+     */
+    @Query(value = "SELECT j.* FROM jobs j LEFT JOIN job_ai_enrichment e ON e.job_id = j.id " +
+                   "WHERE j.org_id IS NULL AND j.external_id IS NOT NULL AND e.id IS NULL " +
+                   "ORDER BY j.created_at DESC LIMIT :limit", nativeQuery = true)
+    List<Job> findDiscoveredMissingEnrichment(@Param("limit") int limit);
+
     /**
      * Unified Domestic/International read with optional facets + country search. Booleans/strings
      * are NULL-guarded (and cast) so omitting a facet means "don't filter on it". {@code scope}

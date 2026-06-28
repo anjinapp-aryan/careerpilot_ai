@@ -69,6 +69,19 @@ public class AiGatewayService {
         return execute("chat", p -> p.chat(messages, system, props.getDefaultTemperature()));
     }
 
+    /**
+     * Like {@link #chat(List, String)} but with a per-call provider preference: the providers named
+     * in {@code preferredProviders} (that are configured) are tried first, in that order, then the
+     * rest of the default chain as failover. Lets a latency- or cost-sensitive task pin a fast model
+     * (e.g. a structured-extraction job preferring {@code gemini} flash over a slow reasoning model)
+     * without losing the gateway's failover, retry, and circuit-breaking. Unknown/unconfigured names
+     * are ignored; an empty/null preference falls back to the default order.
+     */
+    public String chat(List<ChatMessage> messages, String system, List<String> preferredProviders) {
+        return execute("chat", orderedConfigured(preferredProviders),
+                p -> p.chat(messages, system, props.getDefaultTemperature()));
+    }
+
     public Flux<String> streamChat(List<ChatMessage> messages, String system) {
         return streamFrom(orderedConfigured(), 0, messages, system, props.getDefaultTemperature(), null);
     }
@@ -110,7 +123,10 @@ public class AiGatewayService {
     // ====================================================================
 
     private <T> T execute(String op, Function<LlmProvider, T> call) {
-        List<LlmProvider> chain = orderedConfigured();
+        return execute(op, orderedConfigured(), call);
+    }
+
+    private <T> T execute(String op, List<LlmProvider> chain, Function<LlmProvider, T> call) {
         if (chain.isEmpty()) {
             throw new AiGatewayException("No AI provider is configured", null, List.of());
         }
@@ -381,6 +397,30 @@ public class AiGatewayService {
         for (String key : props.getOrder()) {
             LlmProvider p = providersByName.get(key);
             if (p != null && p.isConfigured()) {
+                chain.add(p);
+            }
+        }
+        return chain;
+    }
+
+    /**
+     * Configured providers with {@code preferred} pulled to the front (in the given order), then the
+     * rest of the default chain appended for failover. Unknown/unconfigured preferences are skipped;
+     * a null/empty preference yields the plain default order.
+     */
+    private List<LlmProvider> orderedConfigured(List<String> preferred) {
+        if (preferred == null || preferred.isEmpty()) {
+            return orderedConfigured();
+        }
+        List<LlmProvider> chain = new ArrayList<>();
+        for (String key : preferred) {
+            LlmProvider p = providersByName.get(key);
+            if (p != null && p.isConfigured() && !chain.contains(p)) {
+                chain.add(p);
+            }
+        }
+        for (LlmProvider p : orderedConfigured()) {
+            if (!chain.contains(p)) {
                 chain.add(p);
             }
         }

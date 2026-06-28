@@ -3,6 +3,7 @@ package ai.careerpilot.api;
 import ai.careerpilot.ai.AiGatewayService;
 import ai.careerpilot.ai.AiGatewayProperties;
 import ai.careerpilot.service.profile.CandidateProfileMetrics;
+import ai.careerpilot.jobdiscovery.enrich.JobAiEnrichmentMetrics;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -26,6 +27,7 @@ public class DiagnosticsController {
     private final AiGatewayService gateway;
     private final AiGatewayProperties props;
     private final CandidateProfileMetrics candidateProfileMetrics;
+    private final JobAiEnrichmentMetrics jobEnrichmentMetrics;
 
     @Value("${GEMINI_API_KEY:}")
     private String geminiKey;
@@ -42,11 +44,16 @@ public class DiagnosticsController {
     @Value("${candidate.profile.enabled:false}")
     private boolean candidateProfileEnabled;
 
+    @Value("${jobs.enrich.ai.enabled:false}")
+    private boolean jobEnrichmentEnabled;
+
     public DiagnosticsController(AiGatewayService gateway, AiGatewayProperties props,
-                                 CandidateProfileMetrics candidateProfileMetrics) {
+                                 CandidateProfileMetrics candidateProfileMetrics,
+                                 JobAiEnrichmentMetrics jobEnrichmentMetrics) {
         this.gateway = gateway;
         this.props = props;
         this.candidateProfileMetrics = candidateProfileMetrics;
+        this.jobEnrichmentMetrics = jobEnrichmentMetrics;
     }
 
     @GetMapping("/ai")
@@ -103,6 +110,16 @@ public class DiagnosticsController {
         result.put("enabled", candidateProfileEnabled);
         result.putAll(candidateProfileMetrics.snapshot());
         log.info("Candidate Profile Diagnostics endpoint accessed");
+        return result;
+    }
+
+    /** LLM job-enrichment metrics (counts/latency only — no posting content). */
+    @GetMapping("/job-enrichment")
+    public Map<String, Object> jobEnrichmentDiagnostics() {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("enabled", jobEnrichmentEnabled);
+        result.putAll(jobEnrichmentMetrics.snapshot());
+        log.info("Job Enrichment Diagnostics endpoint accessed");
         return result;
     }
 

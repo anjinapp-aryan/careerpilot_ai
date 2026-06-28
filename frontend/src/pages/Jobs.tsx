@@ -35,6 +35,7 @@ import {
 } from '@/components/ui/dialog';
 import { cn } from '@/lib/cn';
 import { RecommendedJobs } from '@/components/jobs/RecommendedJobs';
+import { CandidateProfileCard } from '@/components/jobs/CandidateProfileCard';
 import { PreferencesDialog } from '@/components/jobs/PreferencesDialog';
 import { JobBadges } from '@/components/jobs/JobBadges';
 import { trackJobEvent } from '@/lib/jobTelemetry';
@@ -50,8 +51,6 @@ const TAB_ITEMS: { value: JobsTab; label: string }[] = [
   { value: 'applied', label: 'Applied' },
   { value: 'browse', label: 'Browse' },
 ];
-
-const HOME_COUNTRIES = ['India', 'United States', 'United Kingdom', 'Canada', 'Germany', 'Australia'];
 
 const EMPTY_DRAFT = { title: '', company: '', location: '', description: '', salaryRange: '' };
 
@@ -115,12 +114,16 @@ export default function Jobs() {
   });
   useEffect(() => {
     if (homeCountryInitialized.current) return;
-    const first = preferences?.preferredCountries?.[0];
-    if (first) {
-      setHomeCountry(first);
+    // Home country is server-authoritative for Domestic; mirror it in local state for display +
+    // the legacy country param. Prefer the explicit home country, else the first preferred country.
+    const resolved = preferences?.homeCountry || preferences?.preferredCountries?.[0];
+    if (resolved) {
+      setHomeCountry(resolved);
       homeCountryInitialized.current = true;
     }
   }, [preferences]);
+
+  const preferredCountries = preferences?.preferredCountries ?? [];
 
   // Browse "more opportunities": global discovered pool minus high-confidence recommendations.
   const { data: poolPage } = useQuery<JobsPage>({
@@ -285,11 +288,14 @@ export default function Jobs() {
       <Tabs items={TAB_ITEMS} value={tab} onChange={(v) => setTab(v as JobsTab)} />
 
       {tab === 'recommended' && (
-        <RecommendedJobs
-          onApply={(jobId) => track.mutate({ jobId, status: 'APPLIED' })}
-          onSave={(jobId) => track.mutate({ jobId, status: 'SAVED' })}
-          busy={track.isPending}
-        />
+        <div className="space-y-4">
+          <CandidateProfileCard />
+          <RecommendedJobs
+            onApply={(jobId) => track.mutate({ jobId, status: 'APPLIED' })}
+            onSave={(jobId) => track.mutate({ jobId, status: 'SAVED' })}
+            busy={track.isPending}
+          />
+        </div>
       )}
 
       {isDiscoverTab && (
@@ -297,24 +303,32 @@ export default function Jobs() {
           {tab === 'domestic' && (
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-sm font-medium text-muted-foreground">Home country</span>
-              {HOME_COUNTRIES.map((c) => (
-                <button
-                  key={c}
-                  onClick={() => setHomeCountry(c)}
-                  className={cn(
-                    'rounded-full border px-3 py-1 text-xs font-medium transition-colors',
-                    homeCountry === c
-                      ? 'border-primary bg-primary/10 text-primary'
-                      : 'border-border text-muted-foreground hover:bg-muted',
-                  )}
-                >
-                  {c}
-                </button>
-              ))}
+              <span className="rounded-full border border-primary bg-primary/10 px-3 py-1 text-xs font-medium text-primary">
+                {homeCountry}
+              </span>
+              <button
+                onClick={() => setShowPreferences(true)}
+                className="text-xs font-medium text-primary hover:underline"
+              >
+                Change in Preferences
+              </button>
             </div>
           )}
           {tab === 'international' && (
             <div className="flex flex-wrap items-center gap-2">
+              {preferredCountries.length > 0 && (
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="text-sm font-medium text-muted-foreground">Preferred</span>
+                  {preferredCountries.map((c) => (
+                    <span
+                      key={c}
+                      className="rounded-full border border-border bg-muted/50 px-2.5 py-1 text-xs font-medium text-foreground"
+                    >
+                      {c}
+                    </span>
+                  ))}
+                </div>
+              )}
               <div className="relative">
                 <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
                 <Input
@@ -363,7 +377,7 @@ export default function Jobs() {
               ? 'Loading roles…'
               : tab === 'domestic'
                 ? `${discoveredJobs.length} role${discoveredJobs.length === 1 ? '' : 's'} in ${homeCountry}`
-                : `${discoveredJobs.length} role${discoveredJobs.length === 1 ? '' : 's'} outside ${homeCountry}`}
+                : `${discoveredJobs.length} role${discoveredJobs.length === 1 ? '' : 's'} in your preferred countries`}
           </p>
           {discoveredLoading ? (
             <div className="space-y-4">

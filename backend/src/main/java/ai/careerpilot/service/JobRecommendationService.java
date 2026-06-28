@@ -100,8 +100,9 @@ public class JobRecommendationService {
                 preferredRoles(latest),
                 latest.getResumeScore());
 
-        // Prefer the real discovered pool: refresh + read persisted recommendations.
-        matching.refreshForUser(userId);
+        // Prefer the real discovered pool: refresh + read persisted recommendations. Only recompute
+        // on the first page — "Load more" pagination must not re-score the whole pool on every call.
+        if (pageNum == 0) matching.refreshForUser(userId);
         List<RecommendedJob> all = fromPersisted(userId, filter);
 
         // Fallback: no discovered recommendations yet → score the org pool on the fly (legacy).

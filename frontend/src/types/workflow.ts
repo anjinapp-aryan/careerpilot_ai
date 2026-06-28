@@ -111,9 +111,13 @@ export interface RecommendedJob {
 
 /** Persistent job preferences. Mirrors `CandidatePreferencesDto`. */
 export interface CandidatePreferences {
+  /** Candidate's home country — drives the Domestic discovery tab (server-authoritative). */
+  homeCountry?: string | null;
   preferredCountries: string[];
   preferredCities: string[];
   preferredRoles: string[];
+  /** Role/family names the user never wants recommended (e.g. "Sales", "Marketing"). */
+  excludedRoles: string[];
   remotePreference: boolean;
   hybridPreference: boolean;
   onsitePreference: boolean;
@@ -122,6 +126,30 @@ export interface CandidatePreferences {
   salaryExpectationMin?: number | null;
   salaryExpectationMax?: number | null;
   salaryCurrency?: string | null;
+}
+
+/** Canonical Candidate Intelligence Profile (Phase 1). Mirrors `CandidateProfileDto`.
+ *  Read-only on the frontend; produced server-side from resume AI analysis + preferences. */
+export interface CandidateProfile {
+  resumeId?: string | null;
+  yearsExperience?: number | null;
+  currentRole?: string | null;
+  seniority?: string | null;
+  skills: string[];
+  targetRoles: string[];
+  domains: string[];
+  languages: string[];
+  preferredCountries: string[];
+  preferredCities: string[];
+  workModes: string[];
+  visaRequired?: boolean | null;
+  salaryMin?: number | null;
+  salaryTarget?: number | null;
+  salaryCurrency?: string | null;
+  excludedRoles: string[];
+  profileSummary?: string | null;
+  confidenceScore?: number | null;
+  updatedAt?: string | null;
 }
 
 /** `POST /api/jobs/:id/explain` response. Mirrors `JobMatchExplanationDto`. */

@@ -98,6 +98,7 @@ public class JobNormalizer {
         target.setRelocationSupport(fresh.getRelocationSupport());
         target.setCompanySize(fresh.getCompanySize());
         target.setRequiredExperience(fresh.getRequiredExperience());
+        target.setJobFamily(fresh.getJobFamily());
     }
 
     // ── inference helpers ──────────────────────────────────────────────────────────
@@ -193,17 +194,29 @@ public class JobNormalizer {
     }
 
     private static Map<String, String> buildCountryAliases() {
+        // Insertion order matters: multi-word / specific aliases are checked before short codes
+        // (LinkedHashMap iteration order) so "united states" wins before a bare "us" could fire.
         Map<String, String> m = new LinkedHashMap<>();
         m.put("india", "India");
+        m.put("bharat", "India");
         m.put("united states", "United States");
-        m.put("usa", "United States");
+        m.put("united states of america", "United States");
+        m.put("u.s.a.", "United States");
         m.put("u.s.", "United States");
+        m.put("usa", "United States");
         m.put("united kingdom", "United Kingdom");
+        m.put("great britain", "United Kingdom");
+        m.put("england", "United Kingdom");
+        m.put("scotland", "United Kingdom");
+        m.put("wales", "United Kingdom");
+        m.put("u.k.", "United Kingdom");
         m.put("uk", "United Kingdom");
         m.put("canada", "Canada");
         m.put("germany", "Germany");
         m.put("deutschland", "Germany");
         m.put("netherlands", "Netherlands");
+        m.put("the netherlands", "Netherlands");
+        m.put("holland", "Netherlands");
         m.put("singapore", "Singapore");
         m.put("australia", "Australia");
         m.put("united arab emirates", "United Arab Emirates");
@@ -211,6 +224,43 @@ public class JobNormalizer {
         m.put("ireland", "Ireland");
         m.put("france", "France");
         m.put("spain", "Spain");
+        m.put("españa", "Spain");
+        m.put("italy", "Italy");
+        m.put("italia", "Italy");
+        m.put("poland", "Poland");
+        m.put("polska", "Poland");
+        m.put("portugal", "Portugal");
+        m.put("switzerland", "Switzerland");
+        m.put("austria", "Austria");
+        m.put("österreich", "Austria");
+        m.put("belgium", "Belgium");
+        m.put("sweden", "Sweden");
+        m.put("norway", "Norway");
+        m.put("denmark", "Denmark");
+        m.put("finland", "Finland");
+        m.put("brazil", "Brazil");
+        m.put("brasil", "Brazil");
+        m.put("mexico", "Mexico");
+        m.put("japan", "Japan");
+        m.put("china", "China");
+        m.put("new zealand", "New Zealand");
+        m.put("south africa", "South Africa");
+        m.put("israel", "Israel");
+        m.put("pakistan", "Pakistan");
+        m.put("bangladesh", "Bangladesh");
+        m.put("philippines", "Philippines");
+        m.put("malaysia", "Malaysia");
+        m.put("indonesia", "Indonesia");
+        m.put("nigeria", "Nigeria");
+        m.put("kenya", "Kenya");
+        m.put("egypt", "Egypt");
+        m.put("turkey", "Turkey");
+        m.put("türkiye", "Turkey");
+        m.put("romania", "Romania");
+        m.put("ukraine", "Ukraine");
+        m.put("czech republic", "Czech Republic");
+        m.put("czechia", "Czech Republic");
+        m.put("greece", "Greece");
         return m;
     }
 
@@ -218,25 +268,76 @@ public class JobNormalizer {
         Map<String, String> m = new LinkedHashMap<>();
         // India
         for (String c : List.of("bangalore", "bengaluru", "hyderabad", "pune", "chennai",
-                "mumbai", "delhi", "gurgaon", "gurugram", "noida", "kolkata", "ahmedabad"))
+                "mumbai", "delhi", "new delhi", "gurgaon", "gurugram", "noida", "kolkata",
+                "ahmedabad", "kochi", "trivandrum", "coimbatore", "jaipur", "indore", "nagpur"))
             m.put(c, "India");
         // United States
-        for (String c : List.of("san francisco", "new york", "seattle", "austin", "boston",
-                "chicago", "los angeles", "denver", "atlanta"))
+        for (String c : List.of("san francisco", "new york", "nyc", "seattle", "austin", "boston",
+                "chicago", "los angeles", "denver", "atlanta", "dallas", "houston", "san jose",
+                "san diego", "washington", "miami", "philadelphia", "phoenix", "portland",
+                "san antonio", "palo alto", "mountain view", "sunnyvale", "redmond", "raleigh"))
             m.put(c, "United States");
         // United Kingdom
-        for (String c : List.of("london", "manchester", "edinburgh", "cambridge"))
+        for (String c : List.of("london", "manchester", "edinburgh", "cambridge", "birmingham",
+                "leeds", "glasgow", "bristol", "oxford", "reading", "cardiff", "belfast"))
             m.put(c, "United Kingdom");
-        // Germany / NL / others
-        m.put("berlin", "Germany");
-        m.put("munich", "Germany");
-        m.put("amsterdam", "Netherlands");
-        m.put("toronto", "Canada");
-        m.put("vancouver", "Canada");
-        m.put("sydney", "Australia");
-        m.put("melbourne", "Australia");
+        // Germany
+        for (String c : List.of("berlin", "munich", "münchen", "hamburg", "frankfurt", "cologne",
+                "köln", "stuttgart", "düsseldorf", "dusseldorf", "leipzig", "dresden", "nuremberg"))
+            m.put(c, "Germany");
+        // Canada
+        for (String c : List.of("toronto", "vancouver", "montreal", "montréal", "ottawa",
+                "calgary", "edmonton", "waterloo", "quebec"))
+            m.put(c, "Canada");
+        // Australia
+        for (String c : List.of("sydney", "melbourne", "brisbane", "perth", "canberra", "adelaide"))
+            m.put(c, "Australia");
+        // Netherlands
+        for (String c : List.of("amsterdam", "rotterdam", "the hague", "utrecht", "eindhoven"))
+            m.put(c, "Netherlands");
+        // Rest of Europe
+        m.put("paris", "France");
+        m.put("lyon", "France");
+        m.put("madrid", "Spain");
+        m.put("barcelona", "Spain");
+        m.put("lisbon", "Portugal");
+        m.put("porto", "Portugal");
+        m.put("milan", "Italy");
+        m.put("rome", "Italy");
+        m.put("dublin", "Ireland");
+        m.put("zurich", "Switzerland");
+        m.put("geneva", "Switzerland");
+        m.put("vienna", "Austria");
+        m.put("brussels", "Belgium");
+        m.put("stockholm", "Sweden");
+        m.put("oslo", "Norway");
+        m.put("copenhagen", "Denmark");
+        m.put("helsinki", "Finland");
+        m.put("warsaw", "Poland");
+        m.put("krakow", "Poland");
+        m.put("kraków", "Poland");
+        m.put("bucharest", "Romania");
+        m.put("prague", "Czech Republic");
+        m.put("athens", "Greece");
+        // Asia / Middle East / others
+        m.put("singapore", "Singapore");
         m.put("dubai", "United Arab Emirates");
         m.put("abu dhabi", "United Arab Emirates");
+        m.put("tel aviv", "Israel");
+        m.put("tokyo", "Japan");
+        m.put("shanghai", "China");
+        m.put("beijing", "China");
+        m.put("manila", "Philippines");
+        m.put("kuala lumpur", "Malaysia");
+        m.put("jakarta", "Indonesia");
+        m.put("são paulo", "Brazil");
+        m.put("sao paulo", "Brazil");
+        m.put("mexico city", "Mexico");
+        m.put("auckland", "New Zealand");
+        m.put("cape town", "South Africa");
+        m.put("johannesburg", "South Africa");
+        m.put("lagos", "Nigeria");
+        m.put("nairobi", "Kenya");
         return m;
     }
 }

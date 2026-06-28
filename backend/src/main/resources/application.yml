@@ -132,6 +132,23 @@ ai:
         base-url: ${OPENROUTER_BASE_URL:https://openrouter.ai/api/v1}
         timeout-ms: 25000
 
+  # ---- Embeddings: pgvector semantic search (Phase 2 Increment A) ----
+  # Gated DARK by default. When enabled, discovered jobs (post-ingest, capped) and resumes (on
+  # upload) get a Gemini text-embedding-004 vector (768-d, matching the vector(768) columns), and
+  # GET /api/jobs/search/semantic does a cosine nearest-neighbor read. Reuses the gemini API key
+  # from ai.gateway.providers.gemini — no separate key. Default off = zero new AI cost / no behavior
+  # change; instant rollback by flipping the flag.
+  embeddings:
+    enabled: ${EMBEDDINGS_ENABLED:false}
+    # gemini-embedding-001 supports outputDimensionality; we request 768 to match the vector(768)
+    # columns. (text-embedding-004 is not available on this API key — it 404s.)
+    model: ${EMBEDDINGS_MODEL:gemini-embedding-001}
+    dimensions: ${EMBEDDINGS_DIMENSIONS:768}
+    # Max characters of source text sent to the embedding API (cost + payload guard).
+    max-chars: ${EMBEDDINGS_MAX_CHARS:8000}
+    # Cap on how many missing-embedding jobs are embedded per discovery run (cost guard).
+    max-per-run: ${EMBEDDINGS_MAX_PER_RUN:200}
+
 # ---- Resilience4j: retry + circuit breaker per provider ----
 resilience4j:
   retry:
@@ -218,13 +235,35 @@ jobs:
   # legacy unthresholded behavior with no redeploy.
   enrich:
     enabled: ${JOB_ENRICH_ENABLED:true}          # keyword classification at ingest
+  # ---- Industry / job-family quality filter ----
+  # Excludes non-technical families (Marketing/Sales/HR/Recruiter/Support/Finance) from a tech
+  # candidate's recommendations. The candidate's own family is never excluded. Flag-gated for
+  # instant rollback: false = no family-based exclusion (legacy behavior).
+  industry:
+    filter-enabled: ${JOB_INDUSTRY_FILTER:true}
+  # ---- Candidate-signal source for job matching (Phase 1 single-source-of-truth) ----
+  # false (default) = matcher reads candidate signals from the legacy WorkflowRun snapshot +
+  # live candidate_preferences (pre-Phase-1 behavior, unchanged). true = matcher reads from the
+  # canonical CandidateProfile (resolved by CandidateSignalResolver), falling back to legacy only
+  # for users who have no profile row yet. Flip on AFTER profiles are backfilled; instant rollback.
+  matching:
+    profile-source-enabled: ${JOBS_MATCHING_PROFILE_SOURCE_ENABLED:false}
   recommendation:
     v2-enabled: ${JOB_RECO_V2_ENABLED:true}      # gate Recommended on score+confidence
-    threshold: ${JOB_RECO_THRESHOLD:75}          # min match score for Recommended
+    threshold: ${JOB_RECO_THRESHOLD:70}          # min match score for Recommended + Browse boundary (spec: 70)
+    # Full-spec Recommended gate: score >= gate-min-score AND >= 1 matched role family AND
+    # >= gate-min-skills matched skill families. false = legacy top-N-by-score (instant rollback).
+    strict-gate-enabled: ${JOB_RECO_STRICT_GATE:true}
+    gate-min-score: ${JOB_RECO_GATE_MIN_SCORE:70}
+    gate-min-skills: ${JOB_RECO_GATE_MIN_SKILLS:3}
   explain:
     enabled: ${JOB_EXPLAIN_ENABLED:true}         # "Why am I a match?" LLM endpoint
   discovery:
     enabled: ${JOB_DISCOVERY_ENABLED:true}
+    # When true, Domestic/International tabs derive their country set from the candidate's own
+    # profile (home country / preferred countries) instead of the client-supplied country param,
+    # and user-excluded roles are filtered out. Default off → legacy behavior, instant rollback.
+    scope-strict-enabled: ${JOBS_DISCOVERY_SCOPE_STRICT_ENABLED:false}
     # Daily at 06:00. Tighten to hourly later ("0 0 * * * *") with no code change.
     cron: ${JOB_DISCOVERY_CRON:0 0 6 * * *}
     user-agent: ${JOB_DISCOVERY_USER_AGENT:CareerPilotAI/1.0 (+https://careerpilot.ai)}
@@ -243,6 +282,21 @@ jobs:
         base-url: ${JOOBLE_BASE_URL:https://jooble.org}
         api-key: ${JOOBLE_API_KEY:}
         keywords: ${JOOBLE_KEYWORDS:software engineer,data engineer}
+
+# ---- Candidate Intelligence Profile (Phase 1) ----
+# Canonical AI-analyzed profile = resume intelligence merged with a snapshot of
+# candidate_preferences. Ships DARK: enabled=false → event listeners no-op and the
+# /api/candidate-profile endpoints return 404, so there is zero behavior change until
+# explicitly flipped on after validation. Not yet consumed by job matching.
+candidate:
+  profile:
+    enabled: ${CANDIDATE_PROFILE_ENABLED:false}
+    # Cap on resume characters sent to the LLM extraction (cost/latency guard).
+    max-resume-chars: ${CANDIDATE_PROFILE_MAX_RESUME_CHARS:12000}
+    backfill:
+      # Pause between LLM extractions during the one-time enablement backfill, so generating
+      # profiles for every existing user stays within the shared provider rate limits.
+      throttle-ms: ${CANDIDATE_PROFILE_BACKFILL_THROTTLE_MS:500}
 
 logging:
   level:

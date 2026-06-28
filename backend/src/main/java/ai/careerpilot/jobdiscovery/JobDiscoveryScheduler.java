@@ -17,11 +17,14 @@ public class JobDiscoveryScheduler {
     private static final Logger log = LoggerFactory.getLogger(JobDiscoveryScheduler.class);
 
     private final JobAggregationService aggregation;
+    private final JobEmbeddingService embeddings;
     private final boolean enabled;
 
     public JobDiscoveryScheduler(JobAggregationService aggregation,
+                                 JobEmbeddingService embeddings,
                                  @Value("${jobs.discovery.enabled:true}") boolean enabled) {
         this.aggregation = aggregation;
+        this.embeddings = embeddings;
         this.enabled = enabled;
     }
 
@@ -33,5 +36,12 @@ public class JobDiscoveryScheduler {
         }
         log.info("Scheduled job discovery starting");
         aggregation.discoverAll();
+        // Embed newly-discovered jobs (capped, idempotent). No-op unless embeddings are enabled;
+        // isolated so an embedding failure never affects the discovery run that just succeeded.
+        try {
+            embeddings.embedMissingJobs();
+        } catch (Exception e) {
+            log.warn("Post-discovery embedding pass failed: {}", e.toString());
+        }
     }
 }

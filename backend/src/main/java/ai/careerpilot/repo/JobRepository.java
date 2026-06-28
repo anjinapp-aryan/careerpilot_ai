@@ -4,6 +4,7 @@ import ai.careerpilot.domain.Job;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -29,27 +30,63 @@ public interface JobRepository extends JpaRepository<Job, UUID> {
     /** Dedup lookup for upsert during ingest. */
     Optional<Job> findBySourceAndExternalId(String source, String externalId);
 
-    /** Domestic tab: discovered jobs whose country matches (case-insensitive). */
+    /**
+     * Server-authoritative Domestic/International read: discovered jobs whose country is in the
+     * candidate-derived allow-list ({@code :countries}, already lower-cased), with the same optional
+     * facets + search as {@link #findDiscoveredFiltered}. Both scopes funnel through this one query —
+     * the scope only determines the country set (see {@code jobdiscovery.scope}). Unknown-country
+     * jobs are excluded by construction (NULL country never matches IN), so they fall to Browse.
+     * Callers must skip this when the country set is empty (SQL {@code IN ()} is invalid).
+     */
     @Query(value = "SELECT * FROM jobs WHERE org_id IS NULL AND external_id IS NOT NULL " +
-                   "AND LOWER(country) = LOWER(:country) ORDER BY posted_date DESC NULLS LAST",
-           countQuery = "SELECT COUNT(*) FROM jobs WHERE org_id IS NULL AND external_id IS NOT NULL " +
-                        "AND LOWER(country) = LOWER(:country)",
-           nativeQuery = true)
-    Page<Job> findDiscoveredByCountry(@Param("country") String country, Pageable pageable);
-
-    /** International tab: discovered jobs whose country differs (or is unknown). */
-    @Query(value = "SELECT * FROM jobs WHERE org_id IS NULL AND external_id IS NOT NULL " +
-                   "AND (country IS NULL OR LOWER(country) <> LOWER(:country)) " +
+                   "AND LOWER(country) IN (:countries) " +
+                   "AND (CAST(:remoteType AS text) IS NULL OR remote_type = CAST(:remoteType AS text)) " +
+                   "AND (CAST(:sponsorship AS boolean) IS NULL OR sponsorship_available = CAST(:sponsorship AS boolean)) " +
+                   "AND (CAST(:relocation AS boolean) IS NULL OR relocation_support = CAST(:relocation AS boolean)) " +
+                   "AND (CAST(:q AS text) IS NULL OR LOWER(title) LIKE LOWER(CONCAT('%', CAST(:q AS text), '%')) " +
+                   "     OR LOWER(company) LIKE LOWER(CONCAT('%', CAST(:q AS text), '%')) " +
+                   "     OR LOWER(COALESCE(country,'')) LIKE LOWER(CONCAT('%', CAST(:q AS text), '%'))) " +
                    "ORDER BY posted_date DESC NULLS LAST",
            countQuery = "SELECT COUNT(*) FROM jobs WHERE org_id IS NULL AND external_id IS NOT NULL " +
-                        "AND (country IS NULL OR LOWER(country) <> LOWER(:country))",
+                   "AND LOWER(country) IN (:countries) " +
+                   "AND (CAST(:remoteType AS text) IS NULL OR remote_type = CAST(:remoteType AS text)) " +
+                   "AND (CAST(:sponsorship AS boolean) IS NULL OR sponsorship_available = CAST(:sponsorship AS boolean)) " +
+                   "AND (CAST(:relocation AS boolean) IS NULL OR relocation_support = CAST(:relocation AS boolean)) " +
+                   "AND (CAST(:q AS text) IS NULL OR LOWER(title) LIKE LOWER(CONCAT('%', CAST(:q AS text), '%')) " +
+                   "     OR LOWER(company) LIKE LOWER(CONCAT('%', CAST(:q AS text), '%')) " +
+                   "     OR LOWER(COALESCE(country,'')) LIKE LOWER(CONCAT('%', CAST(:q AS text), '%')))",
            nativeQuery = true)
-    Page<Job> findDiscoveredExcludingCountry(@Param("country") String country, Pageable pageable);
+    Page<Job> findDiscoveredInCountries(@Param("countries") List<String> countries,
+                                        @Param("remoteType") String remoteType,
+                                        @Param("sponsorship") Boolean sponsorship,
+                                        @Param("relocation") Boolean relocation,
+                                        @Param("q") String q,
+                                        Pageable pageable);
 
     /** Whole discovered pool, used by the rule-based matcher. */
     @Query(value = "SELECT * FROM jobs WHERE org_id IS NULL AND external_id IS NOT NULL " +
                    "ORDER BY posted_date DESC NULLS LAST LIMIT :limit", nativeQuery = true)
     List<Job> findDiscoveredPool(@Param("limit") int limit);
+
+    // ── Embeddings / pgvector semantic search (Phase 2 Increment A) ──────────────────
+    // The vector(768) `embedding` column is not mapped on the Job entity (no pgvector Hibernate
+    // type on the classpath), so it is written/read here via native SQL with a `::vector` cast.
+
+    /** Newest discovered jobs that have no embedding yet — the work list for the capped embed pass. */
+    @Query(value = "SELECT * FROM jobs WHERE org_id IS NULL AND external_id IS NOT NULL " +
+                   "AND embedding IS NULL ORDER BY created_at DESC LIMIT :limit", nativeQuery = true)
+    List<Job> findDiscoveredMissingEmbedding(@Param("limit") int limit);
+
+    /** Set a job's embedding from a pgvector literal (e.g. "[0.1,-0.2,...]"). */
+    @Modifying
+    @Query(value = "UPDATE jobs SET embedding = CAST(:vec AS vector) WHERE id = :id", nativeQuery = true)
+    void updateEmbedding(@Param("id") UUID id, @Param("vec") String vec);
+
+    /** Cosine nearest-neighbor search over the embedded discovered pool (uses the HNSW index). */
+    @Query(value = "SELECT * FROM jobs WHERE org_id IS NULL AND external_id IS NOT NULL " +
+                   "AND embedding IS NOT NULL ORDER BY embedding <=> CAST(:vec AS vector) LIMIT :k",
+           nativeQuery = true)
+    List<Job> findNearestDiscovered(@Param("vec") String vec, @Param("k") int k);
 
     /**
      * Unified Domestic/International read with optional facets + country search. Booleans/strings

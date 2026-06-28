@@ -7,6 +7,7 @@ import ai.careerpilot.domain.Job;
 import ai.careerpilot.domain.JobFetchAudit;
 import ai.careerpilot.jobdiscovery.JobAggregationService;
 import ai.careerpilot.jobdiscovery.JobAggregationService.DiscoverySummary;
+import ai.careerpilot.jobdiscovery.JobEmbeddingService;
 import ai.careerpilot.repo.JobFetchAuditRepository;
 import ai.careerpilot.security.AuthenticatedUser;
 import ai.careerpilot.service.JobMatchExplanationService;
@@ -18,6 +19,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 @RestController
@@ -31,17 +33,20 @@ public class JobController {
     private final JobAggregationService aggregation;
     private final JobFetchAuditRepository audits;
     private final JobMatchExplanationService explanations;
+    private final JobEmbeddingService embeddings;
 
     public JobController(JobService jobs,
                          JobRecommendationService recommendations,
                          JobAggregationService aggregation,
                          JobFetchAuditRepository audits,
-                         JobMatchExplanationService explanations) {
+                         JobMatchExplanationService explanations,
+                         JobEmbeddingService embeddings) {
         this.jobs = jobs;
         this.recommendations = recommendations;
         this.aggregation = aggregation;
         this.audits = audits;
         this.explanations = explanations;
+        this.embeddings = embeddings;
     }
 
     @GetMapping
@@ -81,9 +86,10 @@ public class JobController {
     }
 
     /**
-     * Phase 2 Domestic/International tabs: read the global discovered-job pool.
-     * {@code scope=domestic} returns jobs in {@code country}; anything else returns
-     * everything outside it (incl. unknown-country jobs).
+     * Domestic/International tabs: read the global discovered-job pool. The {@code scope} selects the
+     * country set, which (when strict scope is enabled) is derived server-side from the authenticated
+     * candidate's profile — the {@code country} param is legacy-only and ignored in strict mode, so
+     * Domestic can never be widened by the client.
      */
     @GetMapping("/discovered")
     public Page<Job> discovered(AuthenticatedUser user,
@@ -95,7 +101,30 @@ public class JobController {
                                 @RequestParam(required = false) String q,
                                 @RequestParam(defaultValue = "0") int page,
                                 @RequestParam(defaultValue = "20") int size) {
-        return jobs.discovered(scope, country, remoteType, sponsorship, relocation, q, page, size);
+        return jobs.discovered(user.userId(), scope, country, remoteType, sponsorship, relocation, q, page, size);
+    }
+
+    /**
+     * Semantic search over the embedded discovered pool (Phase 2 Increment A): embeds {@code q} and
+     * returns the cosine nearest neighbors. Returns an empty list when embeddings are disabled or
+     * nothing is embedded yet — callers should fall back to the keyword {@code /discovered} search.
+     */
+    @GetMapping("/search/semantic")
+    public List<Job> semanticSearch(AuthenticatedUser user,
+                                    @RequestParam String q,
+                                    @RequestParam(defaultValue = "20") int k) {
+        return embeddings.semanticSearch(q, k);
+    }
+
+    /**
+     * Manually embed discovered jobs that have no embedding yet (capped per call). Idempotent and
+     * safe to re-run; a no-op when embeddings are disabled. Returns the number embedded.
+     */
+    @PostMapping("/embeddings/backfill")
+    public Map<String, Integer> backfillEmbeddings(AuthenticatedUser user,
+                                                   @RequestParam(required = false) Integer limit) {
+        int written = limit != null ? embeddings.embedMissingJobs(limit) : embeddings.embedMissingJobs();
+        return Map.of("embedded", written);
     }
 
     /**

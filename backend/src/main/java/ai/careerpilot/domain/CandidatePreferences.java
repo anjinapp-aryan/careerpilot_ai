@@ -22,9 +22,14 @@ public class CandidatePreferences {
     @Column(name = "user_id")
     private UUID userId;
 
+    /** Candidate's home country — the single source of truth for the Domestic discovery tab. */
+    @Column(name = "home_country") private String homeCountry;
+
     @Column(name = "preferred_countries", columnDefinition = "text") private String preferredCountries;
     @Column(name = "preferred_cities", columnDefinition = "text") private String preferredCities;
     @Column(name = "preferred_roles", columnDefinition = "text") private String preferredRoles;
+    /** Comma-joined role/family names the user never wants recommended (e.g. "Sales,Marketing"). */
+    @Column(name = "excluded_roles", columnDefinition = "text") private String excludedRoles;
 
     @Column(name = "remote_preference", nullable = false) private boolean remotePreference;
     @Column(name = "hybrid_preference", nullable = false) private boolean hybridPreference;

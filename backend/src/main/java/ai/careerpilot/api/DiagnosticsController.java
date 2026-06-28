@@ -2,6 +2,7 @@ package ai.careerpilot.api;
 
 import ai.careerpilot.ai.AiGatewayService;
 import ai.careerpilot.ai.AiGatewayProperties;
+import ai.careerpilot.service.profile.CandidateProfileMetrics;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -24,6 +25,7 @@ public class DiagnosticsController {
 
     private final AiGatewayService gateway;
     private final AiGatewayProperties props;
+    private final CandidateProfileMetrics candidateProfileMetrics;
 
     @Value("${GEMINI_API_KEY:}")
     private String geminiKey;
@@ -37,9 +39,14 @@ public class DiagnosticsController {
     @Value("${GROQ_API_KEY:}")
     private String groqKey;
 
-    public DiagnosticsController(AiGatewayService gateway, AiGatewayProperties props) {
+    @Value("${candidate.profile.enabled:false}")
+    private boolean candidateProfileEnabled;
+
+    public DiagnosticsController(AiGatewayService gateway, AiGatewayProperties props,
+                                 CandidateProfileMetrics candidateProfileMetrics) {
         this.gateway = gateway;
         this.props = props;
+        this.candidateProfileMetrics = candidateProfileMetrics;
     }
 
     @GetMapping("/ai")
@@ -86,6 +93,16 @@ public class DiagnosticsController {
         result.put("default_temperature", props.getDefaultTemperature());
 
         log.info("AI Diagnostics endpoint accessed");
+        return result;
+    }
+
+    /** Candidate Intelligence Profile generation metrics (counts/latency only — no PII). */
+    @GetMapping("/candidate-profile")
+    public Map<String, Object> candidateProfileDiagnostics() {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("enabled", candidateProfileEnabled);
+        result.putAll(candidateProfileMetrics.snapshot());
+        log.info("Candidate Profile Diagnostics endpoint accessed");
         return result;
     }
 

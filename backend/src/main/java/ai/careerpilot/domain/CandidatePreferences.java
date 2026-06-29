@@ -22,7 +22,12 @@ public class CandidatePreferences {
     @Column(name = "user_id")
     private UUID userId;
 
-    /** Candidate's home country — the single source of truth for the Domestic discovery tab. */
+    /**
+     * Candidate's home country — the editable source; snapshotted onto {@code CandidateProfile}
+     * on every regeneration. Domestic discovery resolves it via
+     * {@code CandidateSignalResolver#resolveLocationSignals}, which reads this column directly
+     * unless {@code candidate.profile.single-source-enabled} is on and a profile row exists.
+     */
     @Column(name = "home_country") private String homeCountry;
 
     @Column(name = "preferred_countries", columnDefinition = "text") private String preferredCountries;

@@ -149,6 +149,12 @@ export interface CandidateProfile {
   excludedRoles: string[];
   profileSummary?: string | null;
   confidenceScore?: number | null;
+  technologies: string[];
+  certifications: string[];
+  industries: string[];
+  leadershipExperience?: boolean | null;
+  cloudExpertise?: boolean | null;
+  careerGoals: string[];
   updatedAt?: string | null;
 }
 

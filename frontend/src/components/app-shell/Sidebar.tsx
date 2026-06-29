@@ -3,8 +3,11 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { PanelLeftClose, PanelLeft, Sparkles, Compass } from 'lucide-react';
 import { NAV_GROUPS } from './nav';
 import { useSidebar } from '@/hooks/useSidebar';
+import { useAuthStore } from '@/lib/auth';
 import { Tooltip } from '@/components/ui/tooltip';
 import { cn } from '@/lib/cn';
+
+const ADMIN_ROLES = new Set(['OWNER', 'ADMIN']);
 
 const EXPANDED = 280;
 const COLLAPSED = 80;
@@ -23,6 +26,7 @@ interface SidebarProps {
 export function Sidebar({ mobile = false, onNavigate }: SidebarProps) {
   const collapsed = useSidebar((s) => s.collapsed) && !mobile;
   const toggleCollapsed = useSidebar((s) => s.toggleCollapsed);
+  const isAdmin = ADMIN_ROLES.has(useAuthStore((s) => s.user?.role) ?? '');
 
   return (
     <motion.aside
@@ -58,7 +62,10 @@ export function Sidebar({ mobile = false, onNavigate }: SidebarProps) {
 
       {/* Nav groups */}
       <nav className="flex-1 space-y-6 overflow-y-auto scrollbar-none px-3 py-4">
-        {NAV_GROUPS.map((group) => (
+        {NAV_GROUPS.map((group) => {
+          const items = group.items.filter((item) => !item.adminOnly || isAdmin);
+          if (items.length === 0) return null;
+          return (
           <div key={group.label}>
             <AnimatePresence initial={false}>
               {!collapsed && (
@@ -73,7 +80,7 @@ export function Sidebar({ mobile = false, onNavigate }: SidebarProps) {
               )}
             </AnimatePresence>
             <ul className="space-y-1">
-              {group.items.map((item) => {
+              {items.map((item) => {
                 const Icon = item.icon;
                 const link = (
                   <NavLink
@@ -118,7 +125,8 @@ export function Sidebar({ mobile = false, onNavigate }: SidebarProps) {
               })}
             </ul>
           </div>
-        ))}
+          );
+        })}
       </nav>
 
       {/* Upgrade card + collapse toggle */}

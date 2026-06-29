@@ -4,6 +4,7 @@ import ai.careerpilot.ai.AiGatewayService;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.mock;
@@ -84,5 +85,37 @@ class CandidateProfileExtractorTest {
     @Test
     void extractRejectsEmptyResume() {
         assertThrows(ProfileExtractionException.class, () -> extractor.extract("   "));
+    }
+
+    @Test
+    void parsesExtendedFieldsWhenPresent() {
+        String extended = VALID.replace(
+                "\"confidenceScore\": 0.86",
+                """
+                "confidenceScore": 0.86,
+                  "technologies": ["Kafka", "Docker"],
+                  "certifications": ["PMP"],
+                  "industries": ["Financial Services"],
+                  "leadershipExperience": true,
+                  "cloudExpertise": false,
+                  "careerGoals": ["Engineering Manager"]""");
+        ResumeIntelligence ri = extractor.parseAndValidate(extended);
+        assertEquals(List.of("Kafka", "Docker"), ri.technologies());
+        assertEquals(List.of("PMP"), ri.certifications());
+        assertEquals(List.of("Financial Services"), ri.industries());
+        assertEquals(Boolean.TRUE, ri.leadershipExperience());
+        assertEquals(Boolean.FALSE, ri.cloudExpertise());
+        assertEquals(List.of("Engineering Manager"), ri.careerGoals());
+    }
+
+    @Test
+    void extendedFieldsDefaultToEmptyWhenAbsent() {
+        ResumeIntelligence ri = extractor.parseAndValidate(VALID);
+        assertTrue(ri.technologies().isEmpty());
+        assertTrue(ri.certifications().isEmpty());
+        assertTrue(ri.industries().isEmpty());
+        assertNull(ri.leadershipExperience());
+        assertNull(ri.cloudExpertise());
+        assertTrue(ri.careerGoals().isEmpty());
     }
 }

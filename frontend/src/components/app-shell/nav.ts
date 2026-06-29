@@ -4,6 +4,7 @@ import {
   Briefcase,
   KanbanSquare,
   Sparkles,
+  ShieldCheck,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -16,6 +17,8 @@ export interface NavItem {
   /** Searchable synonyms for the command palette. */
   keywords?: string[];
   description?: string;
+  /** Hidden from the sidebar/command-palette unless the current user has an OWNER/ADMIN role. */
+  adminOnly?: boolean;
 }
 
 export interface NavGroup {
@@ -72,6 +75,19 @@ export const NAV_GROUPS: NavGroup[] = [
         icon: Sparkles,
         keywords: ['agent', 'copilot', 'automation', 'pipeline'],
         description: 'Run the multi-agent career pipeline',
+      },
+    ],
+  },
+  {
+    label: 'Admin',
+    items: [
+      {
+        to: '/admin',
+        label: 'Admin Dashboard',
+        icon: ShieldCheck,
+        keywords: ['provider health', 'discovery', 'skills', 'salary', 'enrichment'],
+        description: 'Job discovery & AI enrichment ops',
+        adminOnly: true,
       },
     ],
   },

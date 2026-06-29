@@ -18,11 +18,17 @@ public record ResumeIntelligence(
         List<String> domains,
         List<String> languages,
         String profileSummary,
-        BigDecimal confidenceScore) {
+        BigDecimal confidenceScore,
+        List<String> technologies,
+        List<String> certifications,
+        List<String> industries,
+        Boolean leadershipExperience,
+        Boolean cloudExpertise,
+        List<String> careerGoals) {
 
     /** Empty/unknown intelligence — used as a safe fallback, never persisted as a "success". */
     public static ResumeIntelligence empty() {
         return new ResumeIntelligence(null, null, null, List.of(), List.of(), List.of(), List.of(),
-                null, BigDecimal.ZERO);
+                null, BigDecimal.ZERO, List.of(), List.of(), List.of(), null, null, List.of());
     }
 }

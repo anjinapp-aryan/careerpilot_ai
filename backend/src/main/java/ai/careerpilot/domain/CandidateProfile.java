@@ -19,7 +19,12 @@ import java.util.UUID;
  *
  * All list-shaped fields are JSONB on the wire and persisted as JSON strings via
  * {@code @JdbcTypeCode(SqlTypes.JSON)}, mirroring {@link Resume#getCandidateProfileJson()}.
- * Gated by {@code CANDIDATE_PROFILE_ENABLED}; not yet consumed by matching.
+ * Gated by {@code CANDIDATE_PROFILE_ENABLED}. Consumed by job matching/recommendation via
+ * {@code CandidateSignalResolver} when {@code JOBS_MATCHING_PROFILE_SOURCE_ENABLED} is on, and by
+ * Domestic/International discovery + excluded-role filtering when
+ * {@code PROFILE_SINGLE_SOURCE_ENABLED} is on (Phase 1.5) — both flag-gated, both fall back to
+ * the legacy {@code CandidatePreferences}/{@code WorkflowRun} sources when off or no profile row
+ * exists yet.
  */
 @Entity
 @Table(name = "candidate_profiles")
@@ -48,6 +53,17 @@ public class CandidateProfile {
 
     @Column(name = "profile_summary", columnDefinition = "text") private String profileSummary;
     @Column(name = "confidence_score") private BigDecimal confidenceScore;
+
+    @JdbcTypeCode(SqlTypes.JSON) @Column(name = "technologies", columnDefinition = "jsonb")
+    private String technologiesJson;
+    @JdbcTypeCode(SqlTypes.JSON) @Column(name = "certifications", columnDefinition = "jsonb")
+    private String certificationsJson;
+    @JdbcTypeCode(SqlTypes.JSON) @Column(name = "industries", columnDefinition = "jsonb")
+    private String industriesJson;
+    @Column(name = "leadership_experience") private Boolean leadershipExperience;
+    @Column(name = "cloud_expertise") private Boolean cloudExpertise;
+    @JdbcTypeCode(SqlTypes.JSON) @Column(name = "career_goals", columnDefinition = "jsonb")
+    private String careerGoalsJson;
 
     // ── Snapshot of candidate_preferences (editable source lives in that table) ──
     /** Snapshot of the candidate's home country — source of truth for the Domestic discovery tab. */

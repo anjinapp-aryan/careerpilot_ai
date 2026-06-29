@@ -34,7 +34,8 @@ import java.util.UUID;
  *
  * Every regeneration writes a before/after {@link CandidateProfileVersion} for audit/rollback.
  * Logging is content-free: only userId, resumeId, confidence, latency and counts — never resume
- * text or profile PII. This service produces the profile; it is NOT yet consumed by matching.
+ * text or profile PII. This service produces the profile, which is consumed by job
+ * matching/discovery via {@code CandidateSignalResolver} once the relevant feature flag is on.
  */
 @Service
 public class CandidateProfileService {
@@ -43,6 +44,7 @@ public class CandidateProfileService {
 
     public static final String REASON_PREFERENCES_UPDATED = "PREFERENCES_UPDATED";
     public static final String REASON_MANUAL_REBUILD = "MANUAL_REBUILD";
+    public static final String REASON_SCHEDULED_REBUILD = "SCHEDULED_REBUILD";
 
     private final CandidateProfileRepository profiles;
     private final CandidateProfileVersionRepository versions;
@@ -146,13 +148,21 @@ public class CandidateProfileService {
         return fp == null || !fp.equals(existing.getResumeFingerprint());
     }
 
-    /**
-     * Backfill one user idempotently: skip (no LLM) when the cached extraction already matches the
-     * latest resume, otherwise regenerate. Safe to re-run — re-running a backfill that already
-     * completed is all SKIPPED_CURRENT. Failure is isolated and reported, never thrown.
-     */
+    /** Backfill one user idempotently with the standard manual-rebuild reason. */
     @Transactional
     public BackfillOutcome backfillUser(UUID userId) {
+        return backfillUser(userId, REASON_MANUAL_REBUILD);
+    }
+
+    /**
+     * Backfill one user idempotently: skip (no LLM) when the cached extraction already matches the
+     * latest resume, otherwise regenerate with the given audit {@code reason} (e.g.
+     * {@link #REASON_MANUAL_REBUILD} for the admin one-time backfill, {@link #REASON_SCHEDULED_REBUILD}
+     * for the weekly catch-up job). Safe to re-run — re-running a backfill that already completed is
+     * all SKIPPED_CURRENT. Failure is isolated and reported, never thrown.
+     */
+    @Transactional
+    public BackfillOutcome backfillUser(UUID userId, String reason) {
         Resume resume = latestResume(userId);
         if (resume == null) return BackfillOutcome.SKIPPED_NO_RESUME;
         CandidateProfile existing = profiles.findByUserId(userId).orElse(null);
@@ -160,7 +170,7 @@ public class CandidateProfileService {
         if (existing != null && fp != null && fp.equals(existing.getResumeFingerprint())) {
             return BackfillOutcome.SKIPPED_CURRENT;   // idempotent: extraction already current
         }
-        return regenerateFromResume(userId, resume, REASON_MANUAL_REBUILD).isPresent()
+        return regenerateFromResume(userId, resume, reason).isPresent()
                 ? BackfillOutcome.GENERATED : BackfillOutcome.FAILED;
     }
 
@@ -211,6 +221,12 @@ public class CandidateProfileService {
         p.setLanguagesJson(JsonLists.toJson(ai.languages()));
         p.setProfileSummary(ai.profileSummary());
         p.setConfidenceScore(ai.confidenceScore());
+        p.setTechnologiesJson(JsonLists.toJson(ai.technologies()));
+        p.setCertificationsJson(JsonLists.toJson(ai.certifications()));
+        p.setIndustriesJson(JsonLists.toJson(ai.industries()));
+        p.setLeadershipExperience(ai.leadershipExperience());
+        p.setCloudExpertise(ai.cloudExpertise());
+        p.setCareerGoalsJson(JsonLists.toJson(ai.careerGoals()));
 
         // target_roles is canonical: user-specified preferred roles first, then AI-inferred.
         p.setTargetRolesJson(JsonLists.toJson(union(prefs.preferredRolesOrEmpty(), ai.targetRoles())));
@@ -250,7 +266,13 @@ public class CandidateProfileService {
                 JsonLists.toList(p.getDomainsJson()),
                 JsonLists.toList(p.getLanguagesJson()),
                 p.getProfileSummary(),
-                p.getConfidenceScore() == null ? BigDecimal.ZERO : p.getConfidenceScore());
+                p.getConfidenceScore() == null ? BigDecimal.ZERO : p.getConfidenceScore(),
+                JsonLists.toList(p.getTechnologiesJson()),
+                JsonLists.toList(p.getCertificationsJson()),
+                JsonLists.toList(p.getIndustriesJson()),
+                p.getLeadershipExperience(),
+                p.getCloudExpertise(),
+                JsonLists.toList(p.getCareerGoalsJson()));
     }
 
     private Resume latestResume(UUID userId) {

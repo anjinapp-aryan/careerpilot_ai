@@ -96,18 +96,30 @@ public class JobScoring {
      * 7-field shape (API contract) even though salary/visa/workMode now carry little weight.
      */
     public ScoreResultV2 scoreV2(Job job, CandidateContext ctx, PreferenceContext prefs) {
+        return scoreV2(job, job.getSkills(), ctx, prefs);
+    }
+
+    /**
+     * Score a job against a candidate, reading the job's skill signal from {@code effectiveSkills}
+     * (a comma-joined skills string) instead of {@code job.getSkills()}. Callers pass the AI-enriched
+     * {@code normalized_skills} here when available (see {@code jobs.matching.use-enrichment}); the
+     * raw {@code job.getSkills()} when not. Title/description/location/salary still come from the job
+     * entity — only the skill signal is overridable.
+     */
+    public ScoreResultV2 scoreV2(Job job, String effectiveSkills, CandidateContext ctx, PreferenceContext prefs) {
         PreferenceContext p = prefs == null ? PreferenceContext.empty() : prefs;
         String haystack = ((job.getTitle() == null ? "" : job.getTitle()) + " "
-                + (job.getDescription() == null ? "" : job.getDescription())).toLowerCase();
+                + (job.getDescription() == null ? "" : job.getDescription()) + " "
+                + (effectiveSkills == null ? "" : effectiveSkills)).toLowerCase();
 
         int signals = 0;
 
         // ── Skills (40%) — normalized skill families, with a denominator floor ──────────
         Set<String> candFamilies = taxonomy.skillFamilies(ctx.skills());
         Set<String> jobSkillFamilies = new HashSet<>(taxonomy.skillFamiliesInText(haystack));
-        if (job.getSkills() != null) {
+        if (effectiveSkills != null) {
             jobSkillFamilies.addAll(taxonomy.skillFamilies(
-                    Arrays.asList(job.getSkills().toLowerCase().split("\\s*,\\s*"))));
+                    Arrays.asList(effectiveSkills.toLowerCase().split("\\s*,\\s*"))));
         }
         Set<String> matchedFamilies = new HashSet<>(candFamilies);
         matchedFamilies.retainAll(jobSkillFamilies);
@@ -242,14 +254,23 @@ public class JobScoring {
      * scores ~0 (→ rejected by the relevance gate) while "Java Developer" vs "Java Architect" stays high.
      */
     public int roleSimilarity(Job job, List<String> candidateSkills, String targetRole) {
+        return roleSimilarity(job, job.getSkills(), candidateSkills, targetRole);
+    }
+
+    /**
+     * As {@link #roleSimilarity(Job, List, String)} but with the job's skill signal supplied via
+     * {@code effectiveSkills} (AI-enriched normalized skills when available — see
+     * {@code jobs.matching.use-enrichment}). Title/description still come from the job entity.
+     */
+    public int roleSimilarity(Job job, String effectiveSkills, List<String> candidateSkills, String targetRole) {
         Set<String> candTerms = new java.util.HashSet<>(roleTokens(targetRole));
         if (candidateSkills != null) candidateSkills.forEach(s -> { if (s != null) candTerms.add(s.toLowerCase().trim()); });
 
         Set<String> jobTerms = new java.util.HashSet<>(roleTokens(job.getTitle()));
         jobTerms.addAll(extractSkills((job.getTitle() == null ? "" : job.getTitle()) + " "
                 + (job.getDescription() == null ? "" : job.getDescription())));
-        if (job.getSkills() != null) {
-            Arrays.stream(job.getSkills().split(",")).map(String::trim).map(String::toLowerCase)
+        if (effectiveSkills != null) {
+            Arrays.stream(effectiveSkills.split(",")).map(String::trim).map(String::toLowerCase)
                     .filter(s -> !s.isEmpty()).forEach(jobTerms::add);
         }
 

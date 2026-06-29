@@ -1,8 +1,11 @@
 package ai.careerpilot.jobdiscovery;
 
 import ai.careerpilot.domain.Job;
+import ai.careerpilot.repo.CandidateProfileVersionRepository;
+import ai.careerpilot.repo.JobAiEnrichmentRepository;
 import ai.careerpilot.repo.JobRecommendationRepository;
 import ai.careerpilot.repo.JobRepository;
+import ai.careerpilot.repo.RecommendationAuditRepository;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -23,7 +26,9 @@ class JobMatchingExclusionTest {
             mock(CandidateSignalResolver.class), mock(JobRepository.class),
             mock(JobRecommendationRepository.class), new JobScoring(taxonomy), taxonomy,
             new RoleExclusionFilter(taxonomy),
-            true, 70, 3, true);
+            mock(CandidateProfileVersionRepository.class), mock(RecommendationAuditRepository.class),
+            mock(JobAiEnrichmentRepository.class),
+            true, 70, 3, true, false, false);
 
     private static Job job(String title, String description) {
         return Job.builder().title(title).description(description).build();

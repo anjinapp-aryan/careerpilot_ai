@@ -60,7 +60,9 @@ class CandidateProfileServiceTest {
     private ResumeIntelligence intelligence() {
         return new ResumeIntelligence(12, "Senior Java Developer", "Architect",
                 List.of("Java", "Spring Boot"), List.of("Solution Architect"),
-                List.of("Finance"), List.of("English"), "Summary.", BigDecimal.valueOf(0.9));
+                List.of("Finance"), List.of("English"), "Summary.", BigDecimal.valueOf(0.9),
+                List.of("Kubernetes", "AWS"), List.of("AWS Certified Solutions Architect"),
+                List.of("Financial Services"), true, true, List.of("Engineering Manager"));
     }
 
     private Resume resume(UUID id) {
@@ -79,6 +81,12 @@ class CandidateProfileServiceTest {
 
         assertTrue(result.isPresent());
         assertEquals("Senior Java Developer", result.get().currentRole());
+        assertEquals(List.of("Kubernetes", "AWS"), result.get().technologies());
+        assertEquals(List.of("AWS Certified Solutions Architect"), result.get().certifications());
+        assertEquals(List.of("Financial Services"), result.get().industries());
+        assertEquals(Boolean.TRUE, result.get().leadershipExperience());
+        assertEquals(Boolean.TRUE, result.get().cloudExpertise());
+        assertEquals(List.of("Engineering Manager"), result.get().careerGoals());
         verify(extractor, times(1)).extract(anyString());
         verify(profiles, times(1)).save(any());
 
@@ -164,6 +172,22 @@ class CandidateProfileServiceTest {
                 service.backfillUser(userId));
         verify(extractor, never()).extract(anyString());
         verify(profiles, never()).save(any());
+    }
+
+    @Test
+    void backfillUserWithReasonRecordsThatReasonOnTheVersion() {
+        UUID resumeId = UUID.randomUUID();
+        when(resumes.findByUserIdOrderByCreatedAtDesc(userId)).thenReturn(List.of(resume(resumeId)));
+        when(profiles.findByUserId(userId)).thenReturn(Optional.empty());
+        when(extractor.extract(anyString())).thenReturn(intelligence());
+
+        assertEquals(CandidateProfileService.BackfillOutcome.GENERATED,
+                service.backfillUser(userId, CandidateProfileService.REASON_SCHEDULED_REBUILD));
+
+        org.mockito.ArgumentCaptor<CandidateProfileVersion> ver =
+                org.mockito.ArgumentCaptor.forClass(CandidateProfileVersion.class);
+        verify(versions).save(ver.capture());
+        assertEquals("SCHEDULED_REBUILD", ver.getValue().getReason());
     }
 
     @Test

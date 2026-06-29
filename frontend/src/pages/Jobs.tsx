@@ -5,6 +5,7 @@ import {
   Bookmark,
   Building2,
   CalendarDays,
+  ChevronDown,
   DollarSign,
   ExternalLink,
   Filter,
@@ -12,6 +13,7 @@ import {
   Plus,
   Search,
   Send,
+  Sparkles,
   SlidersHorizontal,
   Settings2,
 } from 'lucide-react';
@@ -65,6 +67,7 @@ export default function Jobs() {
   const qc = useQueryClient();
   const { toast } = useToast();
   const [q, setQ] = useState('');
+  const [smartSearch, setSmartSearch] = useState(false);
   const [location, setLocation] = useState('');
   const [remoteOnly, setRemoteOnly] = useState(false);
   const [company, setCompany] = useState('');
@@ -83,7 +86,16 @@ export default function Jobs() {
   const { data, isLoading } = useQuery<JobsPage>({
     queryKey: ['jobs', q],
     queryFn: async () => (await api.get('/api/jobs', { params: { q } })).data,
-    enabled: tab === 'browse',
+    enabled: tab === 'browse' && !smartSearch,
+  });
+
+  // AI semantic search (Phase 2 Increment A): same Browse search box, embeds the query and ranks
+  // discovered jobs by cosine similarity instead of a title/company substring match. Only fires
+  // once the user has typed something — an empty query has no embedding to search with.
+  const { data: semanticResults, isLoading: semanticLoading } = useQuery<Job[]>({
+    queryKey: ['jobs', 'semantic', q],
+    queryFn: async () => (await api.get('/api/jobs/search/semantic', { params: { q, k: 20 } })).data,
+    enabled: tab === 'browse' && smartSearch && q.trim().length > 0,
   });
 
   const isDiscoverTab = tab === 'domestic' || tab === 'international';
@@ -200,7 +212,8 @@ export default function Jobs() {
     track.mutate({ jobId, status: 'SAVED' });
   };
 
-  const jobs = data?.content ?? [];
+  const jobs = smartSearch ? semanticResults ?? [] : data?.content ?? [];
+  const browseLoading = smartSearch ? semanticLoading : isLoading;
   const filtered = useMemo(
     () =>
       jobs.filter((j) => {
@@ -478,16 +491,35 @@ export default function Jobs() {
             <Input
               value={q}
               onChange={(e) => setQ(e.target.value)}
-              placeholder="Search by title or company…"
+              placeholder={smartSearch ? 'Describe the role you want (e.g. "remote react frontend")…' : 'Search by title or company…'}
               className="h-11 pl-9"
             />
           </div>
 
+          <label className="flex w-fit cursor-pointer items-center gap-2 text-sm text-muted-foreground">
+            <button
+              type="button"
+              role="switch"
+              aria-checked={smartSearch}
+              onClick={() => setSmartSearch((v) => !v)}
+              className={cn('relative h-5 w-9 rounded-full transition-colors', smartSearch ? 'bg-primary' : 'bg-muted')}
+            >
+              <span
+                className={cn(
+                  'absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform',
+                  smartSearch ? 'translate-x-4' : 'translate-x-0.5',
+                )}
+              />
+            </button>
+            <span className={cn('font-medium', smartSearch && 'text-foreground')}>✨ Smart search</span>
+            <span className="text-xs">(AI-ranked by meaning, not just keywords)</span>
+          </label>
+
           <p className="text-sm text-muted-foreground">
-            {isLoading ? 'Searching…' : `${filtered.length} role${filtered.length === 1 ? '' : 's'} found`}
+            {browseLoading ? 'Searching…' : `${filtered.length} role${filtered.length === 1 ? '' : 's'} found`}
           </p>
 
-          {isLoading ? (
+          {browseLoading ? (
             <div className="space-y-4">
               {Array.from({ length: 4 }).map((_, i) => (
                 <Skeleton key={i} className="h-36 rounded-xl" />
@@ -607,8 +639,40 @@ interface JobCardProps {
   busy: boolean;
 }
 
+/** Raw shape of GET /api/jobs/{id}/enrichment — the JPA entity, with JSON-array columns still
+ *  serialized as strings (not yet parsed into real arrays). Phase 2 Increment D. */
+interface JobAiEnrichmentRaw {
+  seniorityLevel: string | null;
+  normalizedSkillsJson: string | null;
+  domainsJson: string | null;
+  employmentType: string | null;
+  salaryBandMin: number | null;
+  salaryBandMax: number | null;
+  salaryCurrency: string | null;
+  salaryEstimated: boolean | null;
+  summary: string | null;
+  confidenceScore: number | null;
+}
+
+function parseJsonArray(raw: string | null): string[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
 function JobCard({ job, index, onSave, onApply, busy }: JobCardProps) {
   const isRemote = /remote/i.test(`${job.location ?? ''} ${job.title}`);
+  const [showInsights, setShowInsights] = useState(false);
+  const { data: enrichment, isLoading: enrichmentLoading, isError: enrichmentError } = useQuery<JobAiEnrichmentRaw>({
+    queryKey: ['job-enrichment', job.id],
+    queryFn: async () => (await api.get(`/api/jobs/${job.id}/enrichment`)).data,
+    enabled: showInsights,
+    retry: false,
+  });
   return (
     <motion.div
       initial={{ opacity: 0, y: 10 }}
@@ -677,7 +741,51 @@ function JobCard({ job, index, onSave, onApply, busy }: JobCardProps) {
                   </Button>
                 </a>
               )}
+              <Button size="sm" variant="ghost" onClick={() => setShowInsights((v) => !v)} className="ml-auto">
+                <Sparkles className="h-3.5 w-3.5" /> AI Insights
+                <ChevronDown className={cn('h-3.5 w-3.5 transition-transform', showInsights && 'rotate-180')} />
+              </Button>
             </div>
+
+            {showInsights && (
+              <div className="mt-3 rounded-lg border border-border bg-muted/30 p-3 text-sm">
+                {enrichmentLoading ? (
+                  <Skeleton className="h-16 w-full" />
+                ) : enrichmentError || !enrichment ? (
+                  <p className="text-xs text-muted-foreground">
+                    No AI insights available for this role yet.
+                  </p>
+                ) : (
+                  <div className="space-y-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      {enrichment.seniorityLevel && <Badge tone="primary">{enrichment.seniorityLevel}</Badge>}
+                      {enrichment.employmentType && <Badge tone="neutral">{enrichment.employmentType}</Badge>}
+                      {(enrichment.salaryBandMin || enrichment.salaryBandMax) && (
+                        <Badge tone="info">
+                          {enrichment.salaryBandMin?.toLocaleString()}–{enrichment.salaryBandMax?.toLocaleString()}{' '}
+                          {enrichment.salaryCurrency}
+                          {enrichment.salaryEstimated ? ' (estimated)' : ''}
+                        </Badge>
+                      )}
+                    </div>
+                    {enrichment.summary && (
+                      <p className="text-xs text-muted-foreground">{enrichment.summary}</p>
+                    )}
+                    {parseJsonArray(enrichment.normalizedSkillsJson).length > 0 && (
+                      <div className="flex flex-wrap gap-1.5">
+                        {parseJsonArray(enrichment.normalizedSkillsJson)
+                          .slice(0, 10)
+                          .map((skill) => (
+                            <span key={skill} className="rounded-full bg-secondary/10 px-2 py-0.5 text-xs text-secondary">
+                              {skill}
+                            </span>
+                          ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </div>
       </Card>

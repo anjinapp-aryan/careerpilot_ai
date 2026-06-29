@@ -19,7 +19,10 @@ import java.util.List;
  * 404 so the feature ships dark, while preference persistence keeps working via the existing
  * {@link CandidatePreferencesService}.
  *
- * This phase only produces/serves the profile — it is not yet consumed by job matching.
+ * The served profile is consumed downstream by job matching (Recommended tab, via
+ * {@code CandidateSignalResolver}, gated by {@code JOBS_MATCHING_PROFILE_SOURCE_ENABLED}) and by
+ * Domestic/International discovery + excluded-role filtering (gated by
+ * {@code PROFILE_SINGLE_SOURCE_ENABLED}, Phase 1.5) — both fall back to legacy sources when off.
  */
 @RestController
 @RequestMapping("/api/candidate-profile")

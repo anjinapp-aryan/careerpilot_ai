@@ -72,8 +72,18 @@ export function CandidateProfileCard() {
 
       <ChipRow label="Target roles" items={profile.targetRoles} />
       <ChipRow label="Top skills" items={profile.skills.slice(0, 12)} />
+      <ChipRow label="Technologies" items={profile.technologies?.slice(0, 12) ?? []} />
+      <ChipRow label="Certifications" items={profile.certifications ?? []} />
+      <ChipRow label="Industries" items={profile.industries ?? []} />
       <ChipRow label="Preferred locations" items={[...profile.preferredCountries, ...profile.preferredCities]} />
       <ChipRow label="Work modes" items={profile.workModes} />
+      <ChipRow label="Career goals" items={profile.careerGoals ?? []} />
+      {(profile.leadershipExperience || profile.cloudExpertise) && (
+        <div className="mt-3 flex flex-wrap gap-1.5">
+          {profile.leadershipExperience && <Badge tone="neutral">Leadership experience</Badge>}
+          {profile.cloudExpertise && <Badge tone="neutral">Cloud expertise</Badge>}
+        </div>
+      )}
     </Card>
   );
 }

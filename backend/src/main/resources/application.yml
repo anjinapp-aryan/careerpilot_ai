@@ -249,6 +249,19 @@ jobs:
       # (gemini flash) over the default deepseek reasoning model (~68s/job → a few seconds). Still
       # falls back to the rest of the gateway chain on failure. Comma-separated; first configured wins.
       providers: ${JOBS_ENRICH_AI_PROVIDERS:gemini}
+  # ---- Fuzzy job deduplication (Phase 2 Increment C) ----
+  # Detects cross-source duplicate postings (same job on RemoteOK and Arbeitnow, say) via embedding
+  # cosine similarity (Increment A) confirmed by title/company text match. Stored in job_duplicates;
+  # produced-but-not-consumed in v1 — Browse/Recommended/Discovered do NOT filter on this yet.
+  # Gated DARK by default → no rows written until explicitly flipped on.
+  dedup:
+    enabled: ${JOBS_DEDUP_ENABLED:false}
+    # Cap on how many unchecked jobs are duplicate-checked per run (scheduler + backfill).
+    max-per-run: ${JOBS_DEDUP_MAX_PER_RUN:200}
+    # Minimum cosine similarity (1 - distance) for a neighbor to even be considered a candidate.
+    embedding-threshold: ${JOBS_DEDUP_EMBEDDING_THRESHOLD:0.92}
+    # Minimum title-token Jaccard similarity required when company names don't match exactly.
+    title-jaccard-threshold: ${JOBS_DEDUP_TITLE_JACCARD_THRESHOLD:0.55}
   # ---- Industry / job-family quality filter ----
   # Excludes non-technical families (Marketing/Sales/HR/Recruiter/Support/Finance) from a tech
   # candidate's recommendations. The candidate's own family is never excluded. Flag-gated for
@@ -262,6 +275,12 @@ jobs:
   # for users who have no profile row yet. Flip on AFTER profiles are backfilled; instant rollback.
   matching:
     profile-source-enabled: ${JOBS_MATCHING_PROFILE_SOURCE_ENABLED:false}
+    # When true, the matcher scores against the AI-enriched normalized_skills (job_ai_enrichment)
+    # instead of the raw, often-generic provider jobs.skills column, for any job that has an
+    # enrichment row — so prose-only listings match a candidate on their real tech stack. Falls back
+    # to the raw skills for unenriched jobs. Requires JOBS_ENRICH_AI_ENABLED to have populated
+    # enrichment. Default off; instant rollback.
+    use-enrichment: ${JOBS_MATCHING_USE_ENRICHMENT:false}
   recommendation:
     v2-enabled: ${JOB_RECO_V2_ENABLED:true}      # gate Recommended on score+confidence
     threshold: ${JOB_RECO_THRESHOLD:70}          # min match score for Recommended + Browse boundary (spec: 70)
@@ -301,7 +320,9 @@ jobs:
 # Canonical AI-analyzed profile = resume intelligence merged with a snapshot of
 # candidate_preferences. Ships DARK: enabled=false → event listeners no-op and the
 # /api/candidate-profile endpoints return 404, so there is zero behavior change until
-# explicitly flipped on after validation. Not yet consumed by job matching.
+# explicitly flipped on after validation. Consumed by job matching/discovery once the relevant
+# downstream flag (jobs.matching.profile-source-enabled / candidate.profile.single-source-enabled)
+# is also on.
 candidate:
   profile:
     enabled: ${CANDIDATE_PROFILE_ENABLED:false}
@@ -311,6 +332,25 @@ candidate:
       # Pause between LLM extractions during the one-time enablement backfill, so generating
       # profiles for every existing user stays within the shared provider rate limits.
       throttle-ms: ${CANDIDATE_PROFILE_BACKFILL_THROTTLE_MS:500}
+    # Phase 1.5 — when true, Domestic/International discovery and excluded-role filtering read the
+    # canonical CandidateProfile (via CandidateSignalResolver.resolveLocationSignals), falling back
+    # to live candidate_preferences for users with no profile row yet. Independent of
+    # jobs.matching.profile-source-enabled (which only gates the Recommended-tab matcher) so the two
+    # consumer groups can be migrated on separate schedules. Default off; instant rollback.
+    single-source-enabled: ${PROFILE_SINGLE_SOURCE_ENABLED:false}
+    rebuild:
+      # Phase 1.5 — weekly catch-up rebuild for users whose cached extraction has drifted from their
+      # latest resume (e.g. after a prompt/schema change). Reuses the same idempotent
+      # needsBackfill/backfillUser fingerprint check as the one-time enablement backfill, so a
+      # crashed run simply re-evaluates staleness next time. Default off; instant rollback.
+      enabled: ${CANDIDATE_PROFILE_REBUILD_ENABLED:false}
+      cron: ${CANDIDATE_PROFILE_REBUILD_CRON:0 0 2 ? * SUN}
+      max-per-run: ${CANDIDATE_PROFILE_REBUILD_MAX_PER_RUN:200}
+  recommendation:
+    # Phase 1.5 — persists the per-job scoring breakdown (skill/role/preference/location/visa/salary/
+    # final) from JobScoring.scoreV2 into recommendation_audit, for explainability. Purely additive
+    # side effect after scoring; never affects the returned recommendation. Default off.
+    audit-enabled: ${CANDIDATE_RECOMMENDATION_AUDIT_ENABLED:false}
 
 logging:
   level:

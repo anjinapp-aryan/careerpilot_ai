@@ -1,6 +1,7 @@
 package ai.careerpilot.service;
 
 import ai.careerpilot.domain.Job;
+import ai.careerpilot.jobdiscovery.CandidateSignalResolver;
 import ai.careerpilot.jobdiscovery.RoleExclusionFilter;
 import ai.careerpilot.jobdiscovery.scope.JobScopeStrategyResolver;
 import ai.careerpilot.repo.JobRepository;
@@ -23,7 +24,7 @@ public class JobService {
 
     private final JobScopeStrategyResolver scopeResolver;
     private final RoleExclusionFilter roleExclusion;
-    private final CandidatePreferencesService preferences;
+    private final CandidateSignalResolver signalResolver;
     /**
      * When true, Domestic/International are derived strictly from the candidate's own profile
      * (home country / preferred countries) and excluded roles are filtered out. When false, the
@@ -34,13 +35,13 @@ public class JobService {
     public JobService(JobRepository jobs,
                       JobScopeStrategyResolver scopeResolver,
                       RoleExclusionFilter roleExclusion,
-                      CandidatePreferencesService preferences,
+                      CandidateSignalResolver signalResolver,
                       @Value("${jobs.recommendation.threshold:75}") int recommendThreshold,
                       @Value("${jobs.discovery.scope-strict-enabled:false}") boolean scopeStrictEnabled) {
         this.jobs = jobs;
         this.scopeResolver = scopeResolver;
         this.roleExclusion = roleExclusion;
-        this.preferences = preferences;
+        this.signalResolver = signalResolver;
         this.recommendThreshold = recommendThreshold;
         this.scopeStrictEnabled = scopeStrictEnabled;
     }
@@ -81,9 +82,14 @@ public class JobService {
                 blankToNull(remoteType), sponsorship, relocation, blankToNull(q), pageable);
     }
 
-    /** Drop user-excluded roles from a discovered page (shared logic with the recommendation matcher). */
+    /**
+     * Drop user-excluded roles from a discovered page (shared logic with the recommendation
+     * matcher). Excluded roles come from {@link CandidateSignalResolver#resolveLocationSignals},
+     * which reads the canonical profile when {@code candidate.profile.single-source-enabled} is on
+     * and a profile row exists, falling back to live {@code candidate_preferences} otherwise.
+     */
     private Page<Job> applyRoleExclusion(UUID userId, Page<Job> page, Pageable pageable) {
-        List<String> excluded = preferences.get(userId).excludedRolesOrEmpty();
+        List<String> excluded = signalResolver.resolveLocationSignals(userId).excludedRoles();
         if (excluded.isEmpty()) return page;
         List<Job> kept = page.getContent().stream()
                 .filter(j -> !roleExclusion.isExcluded(j, excluded))

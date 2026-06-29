@@ -9,6 +9,7 @@ import ai.careerpilot.jobdiscovery.JobAggregationService;
 import ai.careerpilot.jobdiscovery.JobAggregationService.DiscoverySummary;
 import ai.careerpilot.jobdiscovery.JobEmbeddingService;
 import ai.careerpilot.jobdiscovery.enrich.JobAiEnrichmentService;
+import ai.careerpilot.jobdiscovery.dedup.JobDuplicateDetectionService;
 import ai.careerpilot.domain.JobAiEnrichment;
 import ai.careerpilot.repo.JobFetchAuditRepository;
 import ai.careerpilot.security.AuthenticatedUser;
@@ -37,6 +38,7 @@ public class JobController {
     private final JobMatchExplanationService explanations;
     private final JobEmbeddingService embeddings;
     private final JobAiEnrichmentService enrichment;
+    private final JobDuplicateDetectionService dedup;
 
     public JobController(JobService jobs,
                          JobRecommendationService recommendations,
@@ -44,7 +46,8 @@ public class JobController {
                          JobFetchAuditRepository audits,
                          JobMatchExplanationService explanations,
                          JobEmbeddingService embeddings,
-                         JobAiEnrichmentService enrichment) {
+                         JobAiEnrichmentService enrichment,
+                         JobDuplicateDetectionService dedup) {
         this.jobs = jobs;
         this.recommendations = recommendations;
         this.aggregation = aggregation;
@@ -52,6 +55,7 @@ public class JobController {
         this.explanations = explanations;
         this.embeddings = embeddings;
         this.enrichment = enrichment;
+        this.dedup = dedup;
     }
 
     @GetMapping
@@ -154,6 +158,31 @@ public class JobController {
                 .orElseThrow(() -> new org.springframework.web.server.ResponseStatusException(
                         org.springframework.http.HttpStatus.NOT_FOUND,
                         "enrichment unavailable (disabled, unknown job, or extraction failed)"));
+    }
+
+    /**
+     * Read-only lookup for the Jobs UI's "AI Insights" expander (Phase 2 Increment D) — returns the
+     * already-stored enrichment row, no LLM call. 404 when the job hasn't been enriched yet (the UI
+     * should treat that as "no insights available", not an error).
+     */
+    @GetMapping("/{id}/enrichment")
+    public JobAiEnrichment getEnrichment(AuthenticatedUser user, @PathVariable UUID id) {
+        return enrichment.getEnrichment(id)
+                .orElseThrow(() -> new org.springframework.web.server.ResponseStatusException(
+                        org.springframework.http.HttpStatus.NOT_FOUND, "no enrichment available for this job"));
+    }
+
+    /**
+     * Detect cross-source duplicates among embedded jobs that haven't been duplicate-checked yet
+     * (capped per call). Idempotent and safe to re-run; a no-op when dedup is disabled. Returns the
+     * number of jobs checked (not the number found duplicate — see GET /api/admin/stats/duplicates
+     * for cluster counts). The "on-demand batch" half of Increment C (the scheduler runs this nightly).
+     */
+    @PostMapping("/dedup/backfill")
+    public Map<String, Integer> backfillDedup(AuthenticatedUser user,
+                                              @RequestParam(required = false) Integer limit) {
+        int checked = limit != null ? dedup.detectDuplicates(limit) : dedup.detectDuplicates();
+        return Map.of("checked", checked);
     }
 
     /**

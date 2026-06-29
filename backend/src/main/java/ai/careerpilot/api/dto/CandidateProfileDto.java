@@ -34,6 +34,12 @@ public record CandidateProfileDto(
         List<String> excludedRoles,
         String profileSummary,
         BigDecimal confidenceScore,
+        List<String> technologies,
+        List<String> certifications,
+        List<String> industries,
+        Boolean leadershipExperience,
+        Boolean cloudExpertise,
+        List<String> careerGoals,
         Instant updatedAt) {
 
     public static CandidateProfileDto from(CandidateProfile p) {
@@ -57,6 +63,12 @@ public record CandidateProfileDto(
                 JsonLists.toList(p.getExcludedRolesJson()),
                 p.getProfileSummary(),
                 p.getConfidenceScore(),
+                JsonLists.toList(p.getTechnologiesJson()),
+                JsonLists.toList(p.getCertificationsJson()),
+                JsonLists.toList(p.getIndustriesJson()),
+                p.getLeadershipExperience(),
+                p.getCloudExpertise(),
+                JsonLists.toList(p.getCareerGoalsJson()),
                 p.getUpdatedAt());
     }
 }

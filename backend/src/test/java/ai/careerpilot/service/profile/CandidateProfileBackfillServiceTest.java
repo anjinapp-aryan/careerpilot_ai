@@ -76,4 +76,47 @@ class CandidateProfileBackfillServiceTest {
         assertEquals(1, report.failed());
         assertEquals(0, report.generated());
     }
+
+    // ── Phase 1.5: runCapped (weekly scheduled rebuild) ─────────────────────────
+
+    @Test
+    void runCappedUsesScheduledRebuildReason() {
+        UUID u1 = UUID.randomUUID();
+        when(resumes.findDistinctUserIds()).thenReturn(List.of(u1));
+        when(profileService.backfillUser(u1, CandidateProfileService.REASON_SCHEDULED_REBUILD))
+                .thenReturn(BackfillOutcome.GENERATED);
+
+        BackfillReport report = backfill.runCapped(10);
+
+        assertEquals(1, report.generated());
+        verify(profileService, never()).backfillUser(u1);   // never the manual-reason overload
+    }
+
+    @Test
+    void runCappedStopsScanningOnceCapIsHit() {
+        UUID u1 = UUID.randomUUID(), u2 = UUID.randomUUID(), u3 = UUID.randomUUID();
+        when(resumes.findDistinctUserIds()).thenReturn(List.of(u1, u2, u3));
+        when(profileService.backfillUser(any(), eq(CandidateProfileService.REASON_SCHEDULED_REBUILD)))
+                .thenReturn(BackfillOutcome.GENERATED);
+
+        BackfillReport report = backfill.runCapped(2);
+
+        assertEquals(2, report.generated(), "stops at the cap, leaving the rest for next week's run");
+        verify(profileService, times(2)).backfillUser(any(), eq(CandidateProfileService.REASON_SCHEDULED_REBUILD));
+    }
+
+    @Test
+    void runCappedSkippedUsersDoNotCountAgainstTheCap() {
+        UUID u1 = UUID.randomUUID(), u2 = UUID.randomUUID();
+        when(resumes.findDistinctUserIds()).thenReturn(List.of(u1, u2));
+        when(profileService.backfillUser(u1, CandidateProfileService.REASON_SCHEDULED_REBUILD))
+                .thenReturn(BackfillOutcome.SKIPPED_CURRENT);
+        when(profileService.backfillUser(u2, CandidateProfileService.REASON_SCHEDULED_REBUILD))
+                .thenReturn(BackfillOutcome.GENERATED);
+
+        BackfillReport report = backfill.runCapped(1);
+
+        assertEquals(1, report.skippedCurrent());
+        assertEquals(1, report.generated());
+    }
 }

@@ -1,5 +1,6 @@
 package ai.careerpilot.jobdiscovery;
 
+import ai.careerpilot.api.dto.CandidatePreferencesDto;
 import ai.careerpilot.domain.CandidateProfile;
 import ai.careerpilot.domain.WorkflowRun;
 import ai.careerpilot.repo.CandidateProfileRepository;
@@ -37,6 +38,11 @@ import java.util.UUID;
  * <p>Excluded roles are surfaced in <i>both</i> modes (the legacy path reads them straight from
  * preferences), so the exclusion filter works regardless of the source flag — an empty list is a
  * no-op, which is why it is safe to ship active.
+ *
+ * <p>{@link #resolveLocationSignals} is the Phase 1.5 counterpart for Domestic/International
+ * discovery: a smaller, location-only signal set with its own independent flag
+ * ({@code candidate.profile.single-source-enabled}) so the two consumer groups (full matching vs.
+ * discovery scoping) can be migrated to the profile on separate schedules without coupling them.
  */
 @Component
 public class CandidateSignalResolver {
@@ -48,15 +54,18 @@ public class CandidateSignalResolver {
     private final CandidatePreferencesService preferences;
     private final ObjectMapper mapper = new ObjectMapper();
     private final boolean profileSourceEnabled;
+    private final boolean singleSourceEnabled;
 
     public CandidateSignalResolver(WorkflowRunRepository runs,
                                    CandidateProfileRepository profiles,
                                    CandidatePreferencesService preferences,
-                                   @Value("${jobs.matching.profile-source-enabled:false}") boolean profileSourceEnabled) {
+                                   @Value("${jobs.matching.profile-source-enabled:false}") boolean profileSourceEnabled,
+                                   @Value("${candidate.profile.single-source-enabled:false}") boolean singleSourceEnabled) {
         this.runs = runs;
         this.profiles = profiles;
         this.preferences = preferences;
         this.profileSourceEnabled = profileSourceEnabled;
+        this.singleSourceEnabled = singleSourceEnabled;
     }
 
     /** Candidate signals for the matcher, plus provenance for observability. */
@@ -64,6 +73,10 @@ public class CandidateSignalResolver {
                                         List<String> targetLocations, Integer yearsExperience,
                                         Integer atsScore, JobScoring.PreferenceContext preferences,
                                         List<String> excludedRoles, UUID resumeId, String source) {}
+
+    /** Location-only signals for Domestic/International discovery and excluded-role filtering. */
+    public record CandidateLocationSignals(String homeCountry, List<String> preferredCountries,
+                                           List<String> excludedRoles, String source) {}
 
     /**
      * Resolve signals for a user, or empty when there is nothing to score against (no profile and
@@ -79,6 +92,31 @@ public class CandidateSignalResolver {
             log.debug("RECO_SIGNALS user={} profile-source on but no profile row; using legacy fallback", userId);
         }
         return fromWorkflow(userId);
+    }
+
+    /**
+     * Location + excluded-role signals for Domestic/International discovery, gated independently
+     * by {@code candidate.profile.single-source-enabled} (Phase 1.5). When on and a profile row
+     * exists, reads the profile's home-country/preferred-countries/excluded-roles snapshot; when
+     * off, or the user has no profile yet, falls back to live {@code candidate_preferences} —
+     * byte-for-byte the behavior that shipped before Phase 1.5.
+     */
+    public CandidateLocationSignals resolveLocationSignals(UUID userId) {
+        if (singleSourceEnabled) {
+            Optional<CandidateProfile> profile = profiles.findByUserId(userId);
+            if (profile.isPresent()) {
+                CandidateProfile p = profile.get();
+                return new CandidateLocationSignals(
+                        p.getHomeCountry(),
+                        JsonLists.toList(p.getPreferredCountriesJson()),
+                        JsonLists.toList(p.getExcludedRolesJson()),
+                        "PROFILE");
+            }
+            log.debug("DISCOVERY_SIGNALS user={} single-source on but no profile row; using legacy fallback", userId);
+        }
+        CandidatePreferencesDto prefs = preferences.get(userId);
+        return new CandidateLocationSignals(
+                prefs.homeCountry(), prefs.preferredCountries(), prefs.excludedRolesOrEmpty(), "PREFERENCES");
     }
 
     // ── Authoritative source: the canonical Candidate Profile ────────────────────────────

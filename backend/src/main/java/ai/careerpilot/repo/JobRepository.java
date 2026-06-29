@@ -8,6 +8,7 @@ import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -68,6 +69,31 @@ public interface JobRepository extends JpaRepository<Job, UUID> {
                    "ORDER BY posted_date DESC NULLS LAST LIMIT :limit", nativeQuery = true)
     List<Job> findDiscoveredPool(@Param("limit") int limit);
 
+    // ── Admin Dashboard aggregations (Phase 2 Increment D) ───────────────────────
+
+    @Query(value = "SELECT count(*) FROM jobs WHERE org_id IS NULL AND external_id IS NOT NULL", nativeQuery = true)
+    long countDiscovered();
+
+    @Query(value = "SELECT count(*) FROM jobs WHERE org_id IS NULL AND external_id IS NOT NULL " +
+                   "AND embedding IS NOT NULL", nativeQuery = true)
+    long countDiscoveredEmbedded();
+
+    /** Row shape for {@link #countByCountry} / {@link #countBySource}: a group label and its count. */
+    interface NamedCount {
+        String getLabel();
+        Long getCnt();
+    }
+
+    @Query(value = "SELECT COALESCE(country, 'Unknown') AS label, count(*) AS cnt FROM jobs " +
+                   "WHERE org_id IS NULL AND external_id IS NOT NULL " +
+                   "GROUP BY label ORDER BY cnt DESC LIMIT :limit", nativeQuery = true)
+    List<NamedCount> countByCountry(@Param("limit") int limit);
+
+    @Query(value = "SELECT source AS label, count(*) AS cnt FROM jobs " +
+                   "WHERE org_id IS NULL AND external_id IS NOT NULL " +
+                   "GROUP BY source ORDER BY cnt DESC", nativeQuery = true)
+    List<NamedCount> countBySource();
+
     // ── Embeddings / pgvector semantic search (Phase 2 Increment A) ──────────────────
     // The vector(768) `embedding` column is not mapped on the Job entity (no pgvector Hibernate
     // type on the classpath), so it is written/read here via native SQL with a `::vector` cast.
@@ -76,6 +102,44 @@ public interface JobRepository extends JpaRepository<Job, UUID> {
     @Query(value = "SELECT * FROM jobs WHERE org_id IS NULL AND external_id IS NOT NULL " +
                    "AND embedding IS NULL ORDER BY created_at DESC LIMIT :limit", nativeQuery = true)
     List<Job> findDiscoveredMissingEmbedding(@Param("limit") int limit);
+
+    // ── Fuzzy deduplication (Phase 2 Increment C) ─────────────────────────────────────
+    // Reuses the embeddings from Increment A as the primary duplicate-candidate signal (cosine
+    // nearest-neighbor), confirmed with a title/company text check in DuplicateScoring.
+
+    /** Newest embedded jobs with no duplicate-check row yet — the work list for the capped dedup pass. */
+    @Query(value = "SELECT j.* FROM jobs j LEFT JOIN job_duplicates d ON d.job_id = j.id " +
+                   "WHERE j.org_id IS NULL AND j.external_id IS NOT NULL AND j.embedding IS NOT NULL " +
+                   "AND d.id IS NULL ORDER BY j.created_at DESC LIMIT :limit", nativeQuery = true)
+    List<Job> findDiscoveredMissingDuplicateCheck(@Param("limit") int limit);
+
+    /** A job's own embedding as a pgvector text literal (e.g. "[0.1,-0.2,...]"), for use as a query vector. */
+    @Query(value = "SELECT embedding::text FROM jobs WHERE id = :id", nativeQuery = true)
+    Optional<String> findEmbeddingVectorText(@Param("id") UUID id);
+
+    /** Row shape for {@link #findNearestCrossSource}: a candidate job plus its cosine distance (0=identical). */
+    interface DuplicateCandidate {
+        UUID getId();
+        String getTitle();
+        String getCompany();
+        Instant getCreatedAt();
+        Double getDistance();
+    }
+
+    /**
+     * Nearest embedded neighbor(s) to {@code vec}, excluding the job itself and anything from the
+     * same source (same-source duplicates are already caught by the {@code (source, external_id)}
+     * dedup key at ingest — this is purely for cross-source duplicate detection).
+     */
+    @Query(value = "SELECT id, title, company, created_at AS createdAt, " +
+                   "embedding <=> CAST(:vec AS vector) AS distance " +
+                   "FROM jobs WHERE org_id IS NULL AND external_id IS NOT NULL AND embedding IS NOT NULL " +
+                   "AND id <> :excludeId AND source <> :excludeSource " +
+                   "ORDER BY embedding <=> CAST(:vec AS vector) LIMIT :k", nativeQuery = true)
+    List<DuplicateCandidate> findNearestCrossSource(@Param("vec") String vec,
+                                                     @Param("excludeId") UUID excludeId,
+                                                     @Param("excludeSource") String excludeSource,
+                                                     @Param("k") int k);
 
     /** Set a job's embedding from a pgvector literal (e.g. "[0.1,-0.2,...]"). */
     @Modifying

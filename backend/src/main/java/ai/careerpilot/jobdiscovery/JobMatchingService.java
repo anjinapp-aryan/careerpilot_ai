@@ -1,10 +1,16 @@
 package ai.careerpilot.jobdiscovery;
 
 import ai.careerpilot.domain.Job;
+import ai.careerpilot.domain.JobAiEnrichment;
 import ai.careerpilot.domain.JobRecommendation;
+import ai.careerpilot.domain.RecommendationAudit;
 import ai.careerpilot.jobdiscovery.CandidateSignalResolver.CandidateMatchSignals;
+import ai.careerpilot.repo.CandidateProfileVersionRepository;
+import ai.careerpilot.repo.JobAiEnrichmentRepository;
 import ai.careerpilot.repo.JobRecommendationRepository;
 import ai.careerpilot.repo.JobRepository;
+import ai.careerpilot.repo.RecommendationAuditRepository;
+import ai.careerpilot.service.profile.JsonLists;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -39,6 +45,9 @@ public class JobMatchingService {
     private final JobScoring scoring;
     private final JobTaxonomy taxonomy;
     private final RoleExclusionFilter roleExclusion;
+    private final CandidateProfileVersionRepository profileVersions;
+    private final RecommendationAuditRepository recommendationAudit;
+    private final JobAiEnrichmentRepository enrichment;
     private final ObjectMapper mapper = new ObjectMapper();
 
     /** Full-spec Recommended gate: score >= minScore AND >= 1 role family AND >= 3 skill families. */
@@ -47,6 +56,20 @@ public class JobMatchingService {
     private final int gateMinSkillFamilies;
     /** Exclude non-technical job families (Marketing/Sales/HR/…) from a tech candidate's matches. */
     private final boolean industryFilterEnabled;
+    /**
+     * Phase 1.5 — persist the per-job scoring breakdown into {@code recommendation_audit} for
+     * future explainability. Purely additive after scoring; never affects the returned
+     * recommendation. Default off.
+     */
+    private final boolean recommendationAuditEnabled;
+    /**
+     * When true, the matcher scores against the AI-enriched {@code normalized_skills} from
+     * {@code job_ai_enrichment} (when a job has an enrichment row) instead of the raw, often-thin
+     * provider {@code jobs.skills} column. This lets prose-only listings (where the skills column is
+     * a generic placeholder) match a candidate on their real tech stack. Falls back to the raw
+     * skills for any job without enrichment. Default off; instant rollback.
+     */
+    private final boolean useEnrichment;
 
     public JobMatchingService(CandidateSignalResolver signalResolver,
                               JobRepository jobs,
@@ -54,20 +77,30 @@ public class JobMatchingService {
                               JobScoring scoring,
                               JobTaxonomy taxonomy,
                               RoleExclusionFilter roleExclusion,
+                              CandidateProfileVersionRepository profileVersions,
+                              RecommendationAuditRepository recommendationAudit,
+                              JobAiEnrichmentRepository enrichment,
                               @Value("${jobs.recommendation.strict-gate-enabled:true}") boolean strictGateEnabled,
                               @Value("${jobs.recommendation.gate-min-score:70}") int gateMinScore,
                               @Value("${jobs.recommendation.gate-min-skills:3}") int gateMinSkillFamilies,
-                              @Value("${jobs.industry.filter-enabled:true}") boolean industryFilterEnabled) {
+                              @Value("${jobs.industry.filter-enabled:true}") boolean industryFilterEnabled,
+                              @Value("${candidate.recommendation.audit-enabled:false}") boolean recommendationAuditEnabled,
+                              @Value("${jobs.matching.use-enrichment:false}") boolean useEnrichment) {
         this.signalResolver = signalResolver;
         this.jobs = jobs;
         this.recommendations = recommendations;
         this.scoring = scoring;
         this.taxonomy = taxonomy;
         this.roleExclusion = roleExclusion;
+        this.profileVersions = profileVersions;
+        this.recommendationAudit = recommendationAudit;
+        this.enrichment = enrichment;
         this.strictGateEnabled = strictGateEnabled;
         this.gateMinScore = gateMinScore;
         this.gateMinSkillFamilies = gateMinSkillFamilies;
         this.industryFilterEnabled = industryFilterEnabled;
+        this.recommendationAuditEnabled = recommendationAuditEnabled;
+        this.useEnrichment = useEnrichment;
     }
 
     /**
@@ -97,6 +130,11 @@ public class JobMatchingService {
         // candidate who actually targets Sales/Marketing still sees those roles.
         String candidateFamily = taxonomy.classifyFamily(targetRole, null);
 
+        // AI-enriched skill signal per job (one query for the whole pool), used in place of the raw,
+        // often-generic provider skills column when jobs.matching.use-enrichment is on. Empty map when
+        // the flag is off or no pool job is enriched → every effectiveSkills() falls back to the raw.
+        Map<UUID, String> enrichedSkills = loadEnrichedSkills(pool);
+
         // 1) Quality filtering: drop user-excluded roles (hard filter), then non-technical families
         //    (industry filter), then clearly role-irrelevant jobs (relevance pre-gate). 2) Score what
         //    survives. 3) Apply the full Recommended gate (score + role + skills). 4) Rank, keep top N.
@@ -106,10 +144,10 @@ public class JobMatchingService {
                 .filter(j -> !isRoleExcluded(j, excludedRoles))
                 .filter(j -> !isIndustryExcluded(j, candidateFamily))
                 .filter(j -> {
-                    int rs = scoring.roleSimilarity(j, skills, targetRole);
+                    int rs = scoring.roleSimilarity(j, effectiveSkills(j, enrichedSkills), skills, targetRole);
                     return rs < 0 || rs >= ROLE_RELEVANCE_MIN;
                 })
-                .map(j -> new Scored(j, scoring.scoreV2(j, ctx, prefs)))
+                .map(j -> new Scored(j, scoring.scoreV2(j, effectiveSkills(j, enrichedSkills), ctx, prefs)))
                 .filter(s -> passesGate(s.result()))
                 .toList();
         List<Scored> ranked = scored.stream()
@@ -125,6 +163,13 @@ public class JobMatchingService {
         Map<UUID, JobRecommendation> existing = recommendations.findByUserIdOrderByMatchScoreDesc(userId)
                 .stream().collect(HashMap::new, (m, r) -> m.put(r.getJobId(), r), HashMap::putAll);
         Set<UUID> keptJobIds = new HashSet<>();
+
+        // Resolved once per refresh, not per job — the audit FK to the profile version that
+        // produced these signals (only meaningful when the source is the canonical profile).
+        UUID profileVersionId = recommendationAuditEnabled && "PROFILE".equals(signals.source())
+                ? profileVersions.findByUserIdOrderByCreatedAtDesc(userId).stream()
+                        .findFirst().map(v -> v.getId()).orElse(null)
+                : null;
 
         int written = 0;
         for (Scored s : ranked) {
@@ -142,6 +187,10 @@ public class JobMatchingService {
             recommendations.save(rec);
             keptJobIds.add(job.getId());
             written++;
+
+            if (recommendationAuditEnabled) {
+                writeRecommendationAudit(userId, job.getId(), profileVersionId, signals.source(), r);
+            }
         }
         // Drop previously-persisted recommendations that no longer pass the gate (e.g. tightened
         // rules, or the job's enrichment changed), so Recommended stays consistent with the gate.
@@ -152,6 +201,28 @@ public class JobMatchingService {
 
         log.debug("Matcher persisted {} recommendations ({} removed) for user {}", written, stale.size(), userId);
         return written;
+    }
+
+    /**
+     * Batch-load the AI-enriched skill signal for the scored pool: {@code jobId -> comma-joined
+     * normalized_skills}. Empty when {@code jobs.matching.use-enrichment} is off, so the matcher
+     * falls back to raw {@code jobs.skills} for every job (today's behavior). One query for the pool.
+     */
+    private Map<UUID, String> loadEnrichedSkills(List<Job> pool) {
+        if (!useEnrichment || pool.isEmpty()) return Map.of();
+        List<UUID> ids = pool.stream().map(Job::getId).toList();
+        Map<UUID, String> out = new HashMap<>();
+        for (JobAiEnrichment e : enrichment.findByJobIdIn(ids)) {
+            List<String> sk = JsonLists.toList(e.getNormalizedSkillsJson());
+            if (!sk.isEmpty()) out.put(e.getJobId(), String.join(",", sk));
+        }
+        return out;
+    }
+
+    /** The skill signal to score a job against: enriched normalized_skills when present, else the raw column. */
+    private String effectiveSkills(Job job, Map<UUID, String> enrichedSkills) {
+        String enriched = enrichedSkills.get(job.getId());
+        return enriched != null ? enriched : job.getSkills();
     }
 
     /** Industry/quality filter — drop excluded non-tech families unless they are the candidate's own. */
@@ -176,6 +247,35 @@ public class JobMatchingService {
         return r.matchScore() >= gateMinScore
                 && r.matchedRoleCount() >= 1
                 && r.matchedSkillFamilyCount() >= gateMinSkillFamilies;
+    }
+
+    /**
+     * Persist one {@code recommendation_audit} row for a scored job. Score-component mapping from
+     * {@link JobScoring.ScoreBreakdown}: skill_score=skills, role_score=role, location_score=location,
+     * visa_score=visa, salary_score=salary, preference_score=workMode (closest existing analog — there
+     * is no separate "preference" component in {@code scoreV2}), final_score=matchScore. Never throws:
+     * an audit-write failure must not affect the recommendation that was already persisted.
+     */
+    private void writeRecommendationAudit(UUID userId, UUID jobId, UUID profileVersionId,
+                                          String profileSource, JobScoring.ScoreResultV2 r) {
+        try {
+            JobScoring.ScoreBreakdown b = r.breakdown();
+            recommendationAudit.save(RecommendationAudit.builder()
+                    .userId(userId)
+                    .jobId(jobId)
+                    .profileVersion(profileVersionId)
+                    .profileSource(profileSource)
+                    .skillScore(b.skills())
+                    .roleScore(b.role())
+                    .preferenceScore(b.workMode())
+                    .locationScore(b.location())
+                    .visaScore(b.visa())
+                    .salaryScore(b.salary())
+                    .finalScore(r.matchScore())
+                    .build());
+        } catch (Exception e) {
+            log.warn("Recommendation audit write failed for user={} job={}: {}", userId, jobId, e.toString());
+        }
     }
 
     private String writeJson(JobScoring.ScoreBreakdown b) {

@@ -96,7 +96,14 @@ services:
       # Phase 1 Candidate Intelligence Profile — default DARK (no behavior change).
       CANDIDATE_PROFILE_ENABLED: ${CANDIDATE_PROFILE_ENABLED:-false}
       JOBS_MATCHING_PROFILE_SOURCE_ENABLED: ${JOBS_MATCHING_PROFILE_SOURCE_ENABLED:-false}
+      JOBS_MATCHING_USE_ENRICHMENT: ${JOBS_MATCHING_USE_ENRICHMENT:-false}
       CANDIDATE_PROFILE_BACKFILL_THROTTLE_MS: ${CANDIDATE_PROFILE_BACKFILL_THROTTLE_MS:-500}
+      # Phase 1.5 — single source of truth hardening. All default DARK (no behavior change).
+      PROFILE_SINGLE_SOURCE_ENABLED: ${PROFILE_SINGLE_SOURCE_ENABLED:-false}
+      CANDIDATE_PROFILE_REBUILD_ENABLED: ${CANDIDATE_PROFILE_REBUILD_ENABLED:-false}
+      CANDIDATE_PROFILE_REBUILD_CRON: "${CANDIDATE_PROFILE_REBUILD_CRON:-0 0 2 ? * SUN}"
+      CANDIDATE_PROFILE_REBUILD_MAX_PER_RUN: ${CANDIDATE_PROFILE_REBUILD_MAX_PER_RUN:-200}
+      CANDIDATE_RECOMMENDATION_AUDIT_ENABLED: ${CANDIDATE_RECOMMENDATION_AUDIT_ENABLED:-false}
       # Domestic/International scope derived server-side from the candidate (home/preferred countries).
       JOBS_DISCOVERY_SCOPE_STRICT_ENABLED: ${JOBS_DISCOVERY_SCOPE_STRICT_ENABLED:-false}
       # Phase 2 Increment A — pgvector semantic embeddings (reuses GEMINI_API_KEY). Default off.
@@ -105,6 +112,9 @@ services:
       # Phase 2 Increment B — LLM job enrichment (reuses the AI Gateway). Default off (ships dark).
       JOBS_ENRICH_AI_ENABLED: ${JOBS_ENRICH_AI_ENABLED:-false}
       JOBS_ENRICH_AI_MAX_PER_RUN: ${JOBS_ENRICH_AI_MAX_PER_RUN:-200}
+      # Phase 2 Increment C — fuzzy job deduplication (reuses embeddings). Default off (ships dark).
+      JOBS_DEDUP_ENABLED: ${JOBS_DEDUP_ENABLED:-false}
+      JOBS_DEDUP_MAX_PER_RUN: ${JOBS_DEDUP_MAX_PER_RUN:-200}
       AGENT_SERVICE_URL: ${AGENT_SERVICE_URL}
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:5173}
       MINIO_ENDPOINT: ${S3_ENDPOINT}

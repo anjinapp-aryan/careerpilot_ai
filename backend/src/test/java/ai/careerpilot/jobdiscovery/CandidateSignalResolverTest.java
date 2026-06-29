@@ -61,7 +61,7 @@ class CandidateSignalResolverTest {
     @Test
     void profileSourceOnReadsFromProfileOnly() {
         when(profiles.findByUserId(userId)).thenReturn(Optional.of(profile()));
-        var resolver = new CandidateSignalResolver(runs, profiles, preferences, true);
+        var resolver = new CandidateSignalResolver(runs, profiles, preferences, true, false);
 
         CandidateMatchSignals s = resolver.resolve(userId).orElseThrow();
 
@@ -81,7 +81,7 @@ class CandidateSignalResolverTest {
         when(preferences.get(userId)).thenReturn(new CandidatePreferencesDto(
                 List.of(), List.of(), List.of("Tech Lead"), List.of("Marketing"),
                 false, false, false, false, false, null, null, null, null));
-        var resolver = new CandidateSignalResolver(runs, profiles, preferences, false);
+        var resolver = new CandidateSignalResolver(runs, profiles, preferences, false, false);
 
         CandidateMatchSignals s = resolver.resolve(userId).orElseThrow();
 
@@ -99,7 +99,7 @@ class CandidateSignalResolverTest {
         when(profiles.findByUserId(userId)).thenReturn(Optional.empty());
         when(runs.findTop20ByUserIdOrderByCreatedAtDesc(userId)).thenReturn(List.of(workflowRun()));
         when(preferences.get(userId)).thenReturn(CandidatePreferencesDto.defaults());
-        var resolver = new CandidateSignalResolver(runs, profiles, preferences, true);
+        var resolver = new CandidateSignalResolver(runs, profiles, preferences, true, false);
 
         CandidateMatchSignals s = resolver.resolve(userId).orElseThrow();
 
@@ -110,8 +110,49 @@ class CandidateSignalResolverTest {
     void noProfileAndNoWorkflowReturnsEmpty() {
         when(profiles.findByUserId(userId)).thenReturn(Optional.empty());
         when(runs.findTop20ByUserIdOrderByCreatedAtDesc(userId)).thenReturn(List.of());
-        var resolver = new CandidateSignalResolver(runs, profiles, preferences, true);
+        var resolver = new CandidateSignalResolver(runs, profiles, preferences, true, false);
 
         assertTrue(resolver.resolve(userId).isEmpty());
+    }
+
+    // ── Phase 1.5: resolveLocationSignals (Domestic/International + excluded-role filtering) ──
+
+    @Test
+    void singleSourceOnReadsLocationSignalsFromProfileOnly() {
+        when(profiles.findByUserId(userId)).thenReturn(Optional.of(profile()));
+        var resolver = new CandidateSignalResolver(runs, profiles, preferences, false, true);
+
+        var s = resolver.resolveLocationSignals(userId);
+
+        assertEquals("PROFILE", s.source());
+        assertEquals(List.of("Germany"), s.preferredCountries());
+        assertEquals(List.of("Sales"), s.excludedRoles());
+        verifyNoInteractions(preferences);   // the profile is the SOLE source
+    }
+
+    @Test
+    void singleSourceOffUsesLegacyPreferences() {
+        when(preferences.get(userId)).thenReturn(new CandidatePreferencesDto(
+                List.of("Germany"), List.of(), List.of(), List.of("Marketing"),
+                false, false, false, false, false, null, null, null, "France"));
+        var resolver = new CandidateSignalResolver(runs, profiles, preferences, false, false);
+
+        var s = resolver.resolveLocationSignals(userId);
+
+        assertEquals("PREFERENCES", s.source());
+        assertEquals("France", s.homeCountry());
+        assertEquals(List.of("Marketing"), s.excludedRoles());
+        verifyNoInteractions(profiles);
+    }
+
+    @Test
+    void singleSourceOnButNoProfileFallsBackToLegacyPreferences() {
+        when(profiles.findByUserId(userId)).thenReturn(Optional.empty());
+        when(preferences.get(userId)).thenReturn(CandidatePreferencesDto.defaults());
+        var resolver = new CandidateSignalResolver(runs, profiles, preferences, false, true);
+
+        var s = resolver.resolveLocationSignals(userId);
+
+        assertEquals("PREFERENCES", s.source(), "no profile yet → safe legacy fallback");
     }
 }

@@ -31,7 +31,8 @@ class CandidateProfileControllerTest {
     private CandidateProfileDto sampleProfile() {
         return new CandidateProfileDto(UUID.randomUUID(), 12, "Senior Java Developer", "Architect",
                 List.of("Java"), List.of("Architect"), List.of(), List.of(), "India", List.of(), List.of(),
-                List.of(), false, null, null, null, List.of(), "summary", null, Instant.now());
+                List.of(), false, null, null, null, List.of(), "summary", null,
+                List.of(), List.of(), List.of(), null, null, List.of(), Instant.now());
     }
 
     // ── Disabled: profile endpoints 404, but preferences still persist ──────────

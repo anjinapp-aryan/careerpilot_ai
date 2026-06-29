@@ -77,6 +77,42 @@ public class CandidateProfileBackfillService {
         return new BackfillReport(false, total, candidates, generated, skippedCurrent, skippedNoResume, failed);
     }
 
+    /**
+     * Weekly scheduled catch-up rebuild (Phase 1.5): same idempotent skip-if-current logic as
+     * {@link #run}, but bounded to at most {@code maxGenerated} real LLM extractions per run so a
+     * large user base can't turn one run into an unbounded batch. Stops scanning once the cap is
+     * hit — any remaining stale users are simply picked up by next week's run (the fingerprint
+     * check makes this resumable across runs with no extra state). Records {@link
+     * CandidateProfileService#REASON_SCHEDULED_REBUILD} instead of {@code MANUAL_REBUILD} so the
+     * version history can distinguish scheduled catch-up from an explicit user/admin action.
+     */
+    public BackfillReport runCapped(int maxGenerated) {
+        List<UUID> userIds = resumes.findDistinctUserIds();
+        int total = userIds.size();
+
+        int generated = 0, skippedCurrent = 0, skippedNoResume = 0, failed = 0;
+        for (UUID userId : userIds) {
+            if (generated >= maxGenerated) break;
+            CandidateProfileService.BackfillOutcome outcome;
+            try {
+                outcome = profileService.backfillUser(userId, CandidateProfileService.REASON_SCHEDULED_REBUILD);
+            } catch (Exception e) {                       // defence-in-depth; service already isolates
+                log.warn("PROFILE_SCHEDULED_REBUILD user={} unexpected error: {}", userId, e.toString());
+                outcome = CandidateProfileService.BackfillOutcome.FAILED;
+            }
+            switch (outcome) {
+                case GENERATED -> { generated++; throttle(); }   // only sleep after a real LLM call
+                case SKIPPED_CURRENT -> skippedCurrent++;
+                case SKIPPED_NO_RESUME -> skippedNoResume++;
+                case FAILED -> failed++;
+            }
+        }
+        int candidates = generated + failed;
+        log.info("PROFILE_SCHEDULED_REBUILD done usersWithResume={} generated={} skippedCurrent={} skippedNoResume={} failed={} cap={}",
+                total, generated, skippedCurrent, skippedNoResume, failed, maxGenerated);
+        return new BackfillReport(false, total, candidates, generated, skippedCurrent, skippedNoResume, failed);
+    }
+
     private void throttle() {
         if (throttleMs <= 0) return;
         try {

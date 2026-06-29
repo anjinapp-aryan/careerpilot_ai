@@ -36,11 +36,17 @@ public class CandidateProfileExtractor {
               "domains": [<industry domains, e.g. "Finance","Retail","Healthcare">],
               "languages": [<spoken/written human languages>],
               "profileSummary": <2-3 sentence neutral professional summary>,
-              "confidenceScore": <number 0.0-1.0, your confidence in this extraction>
+              "confidenceScore": <number 0.0-1.0, your confidence in this extraction>,
+              "technologies": [<specific tools, languages, frameworks, platforms — distinct from soft/professional skills>],
+              "certifications": [<professional certifications, e.g. "AWS Certified Solutions Architect","PMP">],
+              "industries": [<vertical industries the candidate has worked in, distinct from domains>],
+              "leadershipExperience": <true if the resume shows people/team management or technical leadership, else false>,
+              "cloudExpertise": <true if the resume shows hands-on cloud platform experience (AWS/Azure/GCP/etc.), else false>,
+              "careerGoals": [<short phrases describing the candidate's apparent next-career-step aspirations>]
             }
 
             Infer seniority and targetRoles from experience and scope, not just the title.
-            If a field is unknown, use an empty array or null. Do not invent employers or PII.
+            If a field is unknown, use an empty array, false, or null. Do not invent employers or PII.
             """;
 
     private final AiGatewayService gateway;
@@ -92,7 +98,13 @@ public class CandidateProfileExtractor {
                 stringArray(n.get("domains")),
                 stringArray(n.get("languages")),
                 textOrNull(n.get("profileSummary")),
-                clampConfidence(n.get("confidenceScore")));
+                clampConfidence(n.get("confidenceScore")),
+                stringArray(n.get("technologies")),
+                stringArray(n.get("certifications")),
+                stringArray(n.get("industries")),
+                boolOrNull(n.get("leadershipExperience")),
+                boolOrNull(n.get("cloudExpertise")),
+                stringArray(n.get("careerGoals")));
 
         // Minimum viability: a profile with no role and no skills is not a usable extraction.
         if ((ri.currentRole() == null || ri.currentRole().isBlank()) && ri.skills().isEmpty()) {
@@ -135,6 +147,15 @@ public class CandidateProfileExtractor {
         } catch (Exception e) {
             return null;
         }
+    }
+
+    private static Boolean boolOrNull(JsonNode node) {
+        if (node == null || node.isNull()) return null;
+        if (node.isBoolean()) return node.asBoolean();
+        String t = node.asText("").trim().toLowerCase();
+        if (t.equals("true")) return Boolean.TRUE;
+        if (t.equals("false")) return Boolean.FALSE;
+        return null;
     }
 
     private static List<String> stringArray(JsonNode node) {

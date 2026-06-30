@@ -281,6 +281,16 @@ jobs:
     # to the raw skills for unenriched jobs. Requires JOBS_ENRICH_AI_ENABLED to have populated
     # enrichment. Default off; instant rollback.
     use-enrichment: ${JOBS_MATCHING_USE_ENRICHMENT:false}
+    # Pre-gate: reject a job before full scoring if role similarity is below this (0-100).
+    # Lowered from 40 → 10: a candidate with many skills needs fewer to appear in the job
+    # description to clear the pre-gate; the 3-factor strict gate is the real quality filter.
+    role-relevance-min: ${JOBS_MATCHING_ROLE_RELEVANCE_MIN:10}
+    # Upper bound for the skill-ratio denominator. A thorough JD names many skill families;
+    # without a cap, matched/allJobFamilies shrinks the more detailed the posting is, so strong
+    # overlap on a rich JD scored LOWER than weak overlap on a thin one (real, relevant roles
+    # landed at 68-69, just under the 70 gate). Cap treats a job as needing at most N core
+    # families. Set very high (e.g. 999) to restore the old uncapped behavior (instant rollback).
+    skill-denom-cap: ${JOBS_MATCHING_SKILL_DENOM_CAP:8}
   recommendation:
     v2-enabled: ${JOB_RECO_V2_ENABLED:true}      # gate Recommended on score+confidence
     threshold: ${JOB_RECO_THRESHOLD:70}          # min match score for Recommended + Browse boundary (spec: 70)

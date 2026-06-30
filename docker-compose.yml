@@ -97,6 +97,11 @@ services:
       CANDIDATE_PROFILE_ENABLED: ${CANDIDATE_PROFILE_ENABLED:-false}
       JOBS_MATCHING_PROFILE_SOURCE_ENABLED: ${JOBS_MATCHING_PROFILE_SOURCE_ENABLED:-false}
       JOBS_MATCHING_USE_ENRICHMENT: ${JOBS_MATCHING_USE_ENRICHMENT:-false}
+      JOBS_MATCHING_ROLE_RELEVANCE_MIN: ${JOBS_MATCHING_ROLE_RELEVANCE_MIN:-10}
+      JOBS_MATCHING_SKILL_DENOM_CAP: ${JOBS_MATCHING_SKILL_DENOM_CAP:-8}
+      JOB_RECO_GATE_MIN_SKILLS: ${JOB_RECO_GATE_MIN_SKILLS:-2}
+      # Recommended-gate score floor (0-100). 70 = strict curated list; lower → more breadth.
+      JOB_RECO_GATE_MIN_SCORE: ${JOB_RECO_GATE_MIN_SCORE:-70}
       CANDIDATE_PROFILE_BACKFILL_THROTTLE_MS: ${CANDIDATE_PROFILE_BACKFILL_THROTTLE_MS:-500}
       # Phase 1.5 — single source of truth hardening. All default DARK (no behavior change).
       PROFILE_SINGLE_SOURCE_ENABLED: ${PROFILE_SINGLE_SOURCE_ENABLED:-false}
@@ -106,6 +111,12 @@ services:
       CANDIDATE_RECOMMENDATION_AUDIT_ENABLED: ${CANDIDATE_RECOMMENDATION_AUDIT_ENABLED:-false}
       # Domestic/International scope derived server-side from the candidate (home/preferred countries).
       JOBS_DISCOVERY_SCOPE_STRICT_ENABLED: ${JOBS_DISCOVERY_SCOPE_STRICT_ENABLED:-false}
+      # Adzuna keyed provider — sources jobs PER COUNTRY (incl. India 'in'). Empty keys = provider
+      # skipped (isConfigured()=false), so this stays dormant until real keys are set in .env.
+      ADZUNA_APP_ID: ${ADZUNA_APP_ID:-}
+      ADZUNA_APP_KEY: ${ADZUNA_APP_KEY:-}
+      ADZUNA_COUNTRIES: ${ADZUNA_COUNTRIES:-in,us,gb}
+      JOOBLE_API_KEY: ${JOOBLE_API_KEY:-}
       # Phase 2 Increment A — pgvector semantic embeddings (reuses GEMINI_API_KEY). Default off.
       EMBEDDINGS_ENABLED: ${EMBEDDINGS_ENABLED:-false}
       EMBEDDINGS_MAX_PER_RUN: ${EMBEDDINGS_MAX_PER_RUN:-200}

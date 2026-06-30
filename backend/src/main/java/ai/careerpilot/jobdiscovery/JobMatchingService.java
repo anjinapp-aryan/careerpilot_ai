@@ -35,9 +35,11 @@ public class JobMatchingService {
 
     private static final Logger log = LoggerFactory.getLogger(JobMatchingService.class);
 
-    private static final int POOL_LIMIT = 200;   // discovered jobs scored per refresh
+    // Scored entirely in-memory (rule-based, no LLM), so this is cheap. Kept well above the current
+    // discovered-pool size so every listing is considered — a 200-cap ordered by posted_date let the
+    // freshest provider (German Arbeitnow) crowd out older, highly-relevant RemoteOK roles entirely.
+    private static final int POOL_LIMIT = 1000;  // discovered jobs scored per refresh
     private static final int KEEP_TOP = 50;      // recommendations persisted per user
-    private static final int ROLE_RELEVANCE_MIN = 40; // reject jobs whose role similarity < 40%
 
     private final CandidateSignalResolver signalResolver;
     private final JobRepository jobs;
@@ -70,6 +72,14 @@ public class JobMatchingService {
      * skills for any job without enrichment. Default off; instant rollback.
      */
     private final boolean useEnrichment;
+    /**
+     * Pre-gate: reject a discovered job before full scoring if its role similarity to the candidate
+     * is below this threshold (0–100). Default 10 — low enough that enrichment or description text
+     * can clear it, high enough to still block completely off-domain listings. The strict
+     * 3-factor gate (score + roleCount + skillFamilies) is the real filter; this is only a
+     * cheap early exit to avoid scoring the most obviously irrelevant jobs.
+     */
+    private final int roleRelevanceMin;
 
     public JobMatchingService(CandidateSignalResolver signalResolver,
                               JobRepository jobs,
@@ -85,7 +95,8 @@ public class JobMatchingService {
                               @Value("${jobs.recommendation.gate-min-skills:3}") int gateMinSkillFamilies,
                               @Value("${jobs.industry.filter-enabled:true}") boolean industryFilterEnabled,
                               @Value("${candidate.recommendation.audit-enabled:false}") boolean recommendationAuditEnabled,
-                              @Value("${jobs.matching.use-enrichment:false}") boolean useEnrichment) {
+                              @Value("${jobs.matching.use-enrichment:false}") boolean useEnrichment,
+                              @Value("${jobs.matching.role-relevance-min:10}") int roleRelevanceMin) {
         this.signalResolver = signalResolver;
         this.jobs = jobs;
         this.recommendations = recommendations;
@@ -101,6 +112,7 @@ public class JobMatchingService {
         this.industryFilterEnabled = industryFilterEnabled;
         this.recommendationAuditEnabled = recommendationAuditEnabled;
         this.useEnrichment = useEnrichment;
+        this.roleRelevanceMin = roleRelevanceMin;
     }
 
     /**
@@ -145,7 +157,7 @@ public class JobMatchingService {
                 .filter(j -> !isIndustryExcluded(j, candidateFamily))
                 .filter(j -> {
                     int rs = scoring.roleSimilarity(j, effectiveSkills(j, enrichedSkills), skills, targetRole);
-                    return rs < 0 || rs >= ROLE_RELEVANCE_MIN;
+                    return rs < 0 || rs >= roleRelevanceMin;
                 })
                 .map(j -> new Scored(j, scoring.scoreV2(j, effectiveSkills(j, enrichedSkills), ctx, prefs)))
                 .filter(s -> passesGate(s.result()))

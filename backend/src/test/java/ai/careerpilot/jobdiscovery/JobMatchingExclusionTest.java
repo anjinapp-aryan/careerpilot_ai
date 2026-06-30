@@ -28,7 +28,7 @@ class JobMatchingExclusionTest {
             new RoleExclusionFilter(taxonomy),
             mock(CandidateProfileVersionRepository.class), mock(RecommendationAuditRepository.class),
             mock(JobAiEnrichmentRepository.class),
-            true, 70, 3, true, false, false);
+            true, 70, 3, true, false, false, 40);
 
     private static Job job(String title, String description) {
         return Job.builder().title(title).description(description).build();

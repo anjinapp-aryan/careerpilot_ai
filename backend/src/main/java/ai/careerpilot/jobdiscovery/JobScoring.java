@@ -1,6 +1,8 @@
 package ai.careerpilot.jobdiscovery;
 
 import ai.careerpilot.domain.Job;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.util.*;
@@ -18,10 +20,31 @@ import java.util.stream.Collectors;
 @Component
 public class JobScoring {
 
-    private final JobTaxonomy taxonomy;
+    /** Default upper bound for the skill-ratio denominator (see {@link #skillDenomCap}). */
+    private static final int DEFAULT_SKILL_DENOM_CAP = 8;
 
+    private final JobTaxonomy taxonomy;
+    /**
+     * Upper bound for the skill-ratio denominator. A long, well-written JD names many skill
+     * families; without a cap the ratio {@code matched / allJobFamilies} shrinks the more
+     * thorough the posting is, so a candidate with a strong 6-family overlap on a detailed JD
+     * scored <i>lower</i> than a 2-family overlap on a thin one. Capping the denominator treats
+     * a job as needing at most this many "core" families, so genuine overlap is rewarded instead
+     * of being diluted by description verbosity. Env-tunable; set very high to restore the old
+     * uncapped behavior (instant rollback).
+     */
+    private final int skillDenomCap;
+
+    /** Convenience constructor (tests / direct use) — uses the default denominator cap. */
     public JobScoring(JobTaxonomy taxonomy) {
+        this(taxonomy, DEFAULT_SKILL_DENOM_CAP);
+    }
+
+    @Autowired
+    public JobScoring(JobTaxonomy taxonomy,
+                      @Value("${jobs.matching.skill-denom-cap:8}") int skillDenomCap) {
         this.taxonomy = taxonomy;
+        this.skillDenomCap = skillDenomCap > 0 ? skillDenomCap : DEFAULT_SKILL_DENOM_CAP;
     }
 
     public static final List<String> SKILL_VOCABULARY = List.of(
@@ -137,7 +160,7 @@ public class JobScoring {
         } else if (jobSkillFamilies.isEmpty()) {
             skills = 25;                              // JD names no recognizable tech skills → weak fit
         } else {
-            int denom = Math.max(jobSkillFamilies.size(), SKILL_DENOM_FLOOR);
+            int denom = Math.min(Math.max(jobSkillFamilies.size(), SKILL_DENOM_FLOOR), skillDenomCap);
             skills = Math.min(100, matchedFamilies.size() * 100 / denom);
             signals++;
         }

@@ -50,7 +50,7 @@ class JobMatchingRecommendationAuditTest {
         return new JobMatchingService(resolver, jobs, recommendations, new JobScoring(taxonomy), taxonomy,
                 new RoleExclusionFilter(taxonomy), profileVersions, audit,
                 mock(JobAiEnrichmentRepository.class),
-                false, 0, 0, false, auditEnabled, false);   // strict gate off so the seeded job always qualifies
+                false, 0, 0, false, auditEnabled, false, 0);   // strict gate off + no relevance pre-gate so seeded job always qualifies
     }
 
     @Test

@@ -29,7 +29,14 @@ class JobAiEnrichmentExtractorTest {
               "salaryCurrency": "USD",
               "salaryEstimated": true,
               "summary": "Senior frontend role building fintech dashboards.",
-              "confidenceScore": 0.82
+              "confidenceScore": 0.82,
+              "roleFamily": "Frontend Engineer",
+              "workMode": "HYBRID",
+              "visaSupport": true,
+              "country": "Germany",
+              "companyType": "SCALEUP",
+              "companySize": "MID",
+              "experienceYears": 5
             }
             """;
 
@@ -46,6 +53,37 @@ class JobAiEnrichmentExtractorTest {
         assertEquals("USD", r.salaryCurrency());
         assertTrue(r.salaryEstimated());
         assertEquals(0, new BigDecimal("0.82").compareTo(r.confidenceScore()));
+        assertEquals("Frontend Engineer", r.roleFamily());
+        assertEquals("HYBRID", r.workMode());
+        assertTrue(r.visaSupport());
+        assertEquals("Germany", r.country());
+        assertEquals("SCALEUP", r.companyType());
+        assertEquals("MID", r.companySize());
+        assertEquals(5, r.experienceYears());
+    }
+
+    @Test
+    void newFieldsToleratedWhenAbsentEntirely() {
+        // Pre-2B-4-shaped model output (no new keys) must still parse cleanly — an older/odd
+        // response never breaks extraction, it just leaves the new fields null.
+        JobEnrichmentResult r = extractor.parseAndValidate("""
+                {"seniorityLevel":"Mid","normalizedSkills":["Go"]}
+                """);
+        assertNull(r.roleFamily());
+        assertNull(r.workMode());
+        assertNull(r.visaSupport());
+        assertNull(r.country());
+        assertNull(r.companyType());
+        assertNull(r.companySize());
+        assertNull(r.experienceYears());
+    }
+
+    @Test
+    void experienceYearsToleratesStringDigits() {
+        JobEnrichmentResult r = extractor.parseAndValidate("""
+                {"seniorityLevel":"Mid","normalizedSkills":["Go"],"experienceYears":"5+ years"}
+                """);
+        assertEquals(5, r.experienceYears());
     }
 
     @Test

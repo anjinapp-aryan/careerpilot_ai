@@ -5,6 +5,7 @@ import ai.careerpilot.api.dto.JobRecommendationDtos.RecommendedJobsResponse;
 import ai.careerpilot.api.dto.JobTelemetryEvent;
 import ai.careerpilot.domain.Job;
 import ai.careerpilot.domain.JobFetchAudit;
+import ai.careerpilot.domain.RecommendationAudit;
 import ai.careerpilot.jobdiscovery.JobAggregationService;
 import ai.careerpilot.jobdiscovery.JobAggregationService.DiscoverySummary;
 import ai.careerpilot.jobdiscovery.JobEmbeddingService;
@@ -12,6 +13,7 @@ import ai.careerpilot.jobdiscovery.enrich.JobAiEnrichmentService;
 import ai.careerpilot.jobdiscovery.dedup.JobDuplicateDetectionService;
 import ai.careerpilot.domain.JobAiEnrichment;
 import ai.careerpilot.repo.JobFetchAuditRepository;
+import ai.careerpilot.repo.RecommendationAuditRepository;
 import ai.careerpilot.security.AuthenticatedUser;
 import ai.careerpilot.service.JobMatchExplanationService;
 import ai.careerpilot.service.JobRecommendationService;
@@ -39,6 +41,7 @@ public class JobController {
     private final JobEmbeddingService embeddings;
     private final JobAiEnrichmentService enrichment;
     private final JobDuplicateDetectionService dedup;
+    private final RecommendationAuditRepository recommendationAudits;
 
     public JobController(JobService jobs,
                          JobRecommendationService recommendations,
@@ -47,7 +50,8 @@ public class JobController {
                          JobMatchExplanationService explanations,
                          JobEmbeddingService embeddings,
                          JobAiEnrichmentService enrichment,
-                         JobDuplicateDetectionService dedup) {
+                         JobDuplicateDetectionService dedup,
+                         RecommendationAuditRepository recommendationAudits) {
         this.jobs = jobs;
         this.recommendations = recommendations;
         this.aggregation = aggregation;
@@ -56,6 +60,7 @@ public class JobController {
         this.embeddings = embeddings;
         this.enrichment = enrichment;
         this.dedup = dedup;
+        this.recommendationAudits = recommendationAudits;
     }
 
     @GetMapping
@@ -228,5 +233,26 @@ public class JobController {
     @GetMapping("/discovery/audit")
     public List<JobFetchAudit> discoveryAudit(AuthenticatedUser user) {
         return audits.findTop20ByOrderByStartedAtDesc();
+    }
+
+    /**
+     * Phase 2B-2 — this user's persisted scoring-breakdown audit trail (one row per scored job per
+     * refresh), letting a future explainability surface answer "why did this job score X" without
+     * re-running the matcher. Empty unless {@code candidate.recommendation.audit-enabled} is on —
+     * the table simply has no rows for anyone when the flag is off, so no flag check is needed here.
+     */
+    @GetMapping("/recommendations/audit")
+    public List<RecommendationAudit> recommendationAudit(AuthenticatedUser user) {
+        return recommendationAudits.findByUserIdOrderByCreatedAtDesc(user.userId());
+    }
+
+    /**
+     * Phase 2B-2 — explicitly recompute the authenticated user's recommendations against the current
+     * discovered pool (the same work a page-0 {@code GET /recommended} already triggers implicitly).
+     * Gives the client an explicit "Refresh matches" action plus a count of what was written.
+     */
+    @PostMapping("/recommendations/rebuild")
+    public Map<String, Integer> rebuildRecommendations(AuthenticatedUser user) {
+        return Map.of("written", recommendations.rebuild(user.userId()));
     }
 }

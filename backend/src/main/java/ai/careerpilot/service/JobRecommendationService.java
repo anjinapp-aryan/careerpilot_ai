@@ -69,6 +69,16 @@ public class JobRecommendationService {
         return recommend(userId, orgId, 0, Math.max(1, limit), "all");
     }
 
+    /**
+     * Phase 2B-2 — explicitly recompute this user's persisted recommendations against the current
+     * discovered pool, instead of relying on the implicit refresh that happens on a page-0 read.
+     * Returns the number of recommendations written. Same cost/behavior as today's implicit refresh;
+     * this just gives the client an explicit trigger (e.g. "Refresh matches" button) and a count.
+     */
+    public int rebuild(UUID userId) {
+        return matching.refreshForUser(userId);
+    }
+
     public RecommendedJobsResponse recommend(UUID userId, UUID orgId, int limit, String filter) {
         return recommend(userId, orgId, 0, Math.max(1, limit), filter);
     }
@@ -141,13 +151,32 @@ public class JobRecommendationService {
             // Browse (/api/jobs/pool). Confidence is shown as a badge, not used as a hard gate
             // (it was over-filtering and collapsing the list to the fallback path). Flag-gated.
             if (v2Enabled && rec.getMatchScore() < threshold) continue;
-            if (!matchesFilter(job, rec.getMatchScore(), filter)) continue;
+            if (!matchesRecFilter(job, rec, filter)) continue;
 
             out.add(new RecommendedJob(job, rec.getMatchScore(),
                     csv(rec.getMatchingSkills()), csv(rec.getMissingSkills()),
-                    rec.getConfidenceLevel(), parseBreakdown(rec.getScoreBreakdown())));
+                    rec.getConfidenceLevel(), parseBreakdown(rec.getScoreBreakdown()), rec.getCategory(),
+                    rec.getPriority(), rec.getPriorityScore(), rec.getMustApply()));
         }
         return out;
+    }
+
+    /**
+     * Phase 2C: recommendation-aware filtering — the 2C "collections" (must-apply, human-review,
+     * priority bands) key off the persisted {@code category}/{@code must_apply}/{@code priority}
+     * columns, which only the persisted path has. Everything else falls through to the shared
+     * job-attribute {@link #matchesFilter}. A collection filter matches nothing on rows where the
+     * relevant column is null (categorization/priority flag was off) — correct: no data, no match.
+     */
+    private boolean matchesRecFilter(Job job, JobRecommendation rec, String filter) {
+        if (filter == null || filter.isBlank() || "all".equalsIgnoreCase(filter)) return true;
+        return switch (filter.toLowerCase()) {
+            case "must-apply" -> Boolean.TRUE.equals(rec.getMustApply());
+            case "human-review" -> "HUMAN_REVIEW".equals(rec.getCategory());
+            case "high-priority" -> "HIGH_PRIORITY".equals(rec.getCategory());
+            case "auto-apply-ready" -> "AUTO_APPLY_READY".equals(rec.getCategory());
+            default -> matchesFilter(job, rec.getMatchScore(), filter);
+        };
     }
 
     /** Recommended-tab filter chips. {@code all} passes everything that cleared the gate. */

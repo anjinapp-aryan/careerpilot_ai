@@ -5,6 +5,7 @@ import ai.careerpilot.domain.JobAiEnrichment;
 import ai.careerpilot.domain.JobRecommendation;
 import ai.careerpilot.domain.RecommendationAudit;
 import ai.careerpilot.jobdiscovery.CandidateSignalResolver.CandidateMatchSignals;
+import ai.careerpilot.jobdiscovery.cache.MatchCache;
 import ai.careerpilot.repo.CandidateProfileVersionRepository;
 import ai.careerpilot.repo.JobAiEnrichmentRepository;
 import ai.careerpilot.repo.JobRecommendationRepository;
@@ -50,6 +51,11 @@ public class JobMatchingService {
     private final CandidateProfileVersionRepository profileVersions;
     private final RecommendationAuditRepository recommendationAudit;
     private final JobAiEnrichmentRepository enrichment;
+    private final JobCategorizer categorizer;
+    private final PreferenceGate preferenceGate;
+    private final MatchCache matchCache;
+    private final ai.careerpilot.jobdiscovery.priority.PriorityEngine priorityEngine;
+    private final MustApplyEvaluator mustApplyEvaluator;
     private final ObjectMapper mapper = new ObjectMapper();
 
     /** Full-spec Recommended gate: score >= minScore AND >= 1 role family AND >= 3 skill families. */
@@ -80,6 +86,13 @@ public class JobMatchingService {
      * cheap early exit to avoid scoring the most obviously irrelevant jobs.
      */
     private final int roleRelevanceMin;
+    /**
+     * Phase 2B-5 (Step 6) — reject a job outright before scoring when it structurally violates a
+     * candidate's mandatory work-mode/location/visa preference (e.g. "Remote only" rejects an
+     * onsite job even at 100% skill match). Default off: today those preferences are soft weights
+     * only. See {@link PreferenceGate} for exactly which signals trigger a reject.
+     */
+    private final boolean hardPreferenceEnabled;
 
     public JobMatchingService(CandidateSignalResolver signalResolver,
                               JobRepository jobs,
@@ -90,13 +103,19 @@ public class JobMatchingService {
                               CandidateProfileVersionRepository profileVersions,
                               RecommendationAuditRepository recommendationAudit,
                               JobAiEnrichmentRepository enrichment,
+                              JobCategorizer categorizer,
+                              PreferenceGate preferenceGate,
+                              MatchCache matchCache,
+                              ai.careerpilot.jobdiscovery.priority.PriorityEngine priorityEngine,
+                              MustApplyEvaluator mustApplyEvaluator,
                               @Value("${jobs.recommendation.strict-gate-enabled:true}") boolean strictGateEnabled,
                               @Value("${jobs.recommendation.gate-min-score:70}") int gateMinScore,
                               @Value("${jobs.recommendation.gate-min-skills:3}") int gateMinSkillFamilies,
                               @Value("${jobs.industry.filter-enabled:true}") boolean industryFilterEnabled,
                               @Value("${candidate.recommendation.audit-enabled:false}") boolean recommendationAuditEnabled,
                               @Value("${jobs.matching.use-enrichment:false}") boolean useEnrichment,
-                              @Value("${jobs.matching.role-relevance-min:10}") int roleRelevanceMin) {
+                              @Value("${jobs.matching.role-relevance-min:10}") int roleRelevanceMin,
+                              @Value("${jobs.matching.hard-preference-enabled:false}") boolean hardPreferenceEnabled) {
         this.signalResolver = signalResolver;
         this.jobs = jobs;
         this.recommendations = recommendations;
@@ -106,6 +125,11 @@ public class JobMatchingService {
         this.profileVersions = profileVersions;
         this.recommendationAudit = recommendationAudit;
         this.enrichment = enrichment;
+        this.categorizer = categorizer;
+        this.preferenceGate = preferenceGate;
+        this.matchCache = matchCache;
+        this.priorityEngine = priorityEngine;
+        this.mustApplyEvaluator = mustApplyEvaluator;
         this.strictGateEnabled = strictGateEnabled;
         this.gateMinScore = gateMinScore;
         this.gateMinSkillFamilies = gateMinSkillFamilies;
@@ -113,6 +137,7 @@ public class JobMatchingService {
         this.recommendationAuditEnabled = recommendationAuditEnabled;
         this.useEnrichment = useEnrichment;
         this.roleRelevanceMin = roleRelevanceMin;
+        this.hardPreferenceEnabled = hardPreferenceEnabled;
     }
 
     /**
@@ -124,6 +149,15 @@ public class JobMatchingService {
     public int refreshForUser(UUID userId) {
         CandidateMatchSignals signals = signalResolver.resolve(userId).orElse(null);
         if (signals == null) return 0;   // no profile and no workflow run → nothing to score against
+
+        // Phase 2B-3: skip the rescore + persist cycle entirely when nothing has changed (same
+        // resume/profile version AND same discovered-pool version) since the last refresh, within the
+        // cache's 24h TTL. job_recommendations already reflects this exact state, so 0 is written —
+        // "written" honestly means "changed", not "exists". No-op (always a miss) when disabled.
+        java.time.Instant poolVersion = matchCache.isEnabled() ? jobs.maxDiscoveredCreatedAt() : null;
+        if (matchCache.isFresh(userId, signals.resumeId(), poolVersion)) {
+            return 0;
+        }
 
         List<Job> pool = jobs.findDiscoveredPool(POOL_LIMIT);
         if (pool.isEmpty()) return 0;
@@ -155,6 +189,7 @@ public class JobMatchingService {
         List<Scored> scored = pool.stream()
                 .filter(j -> !isRoleExcluded(j, excludedRoles))
                 .filter(j -> !isIndustryExcluded(j, candidateFamily))
+                .filter(j -> !hardPreferenceEnabled || !preferenceGate.isHardRejected(j, prefs))
                 .filter(j -> {
                     int rs = scoring.roleSimilarity(j, effectiveSkills(j, enrichedSkills), skills, targetRole);
                     return rs < 0 || rs >= roleRelevanceMin;
@@ -166,9 +201,9 @@ public class JobMatchingService {
                 .sorted(Comparator.comparingInt((Scored s) -> s.result().matchScore()).reversed())
                 .limit(KEEP_TOP)
                 .toList();
-        log.info("RECO_MATCH user={} source={} pool={} gated={} persisted={} strictGate={} industryFilter={} excluded={}",
+        log.info("RECO_MATCH user={} source={} pool={} gated={} persisted={} strictGate={} industryFilter={} hardPreference={} excluded={}",
                 userId, signals.source(), pool.size(), scored.size(), ranked.size(),
-                strictGateEnabled, industryFilterEnabled, excludedRoles.size());
+                strictGateEnabled, industryFilterEnabled, hardPreferenceEnabled, excludedRoles.size());
 
         // Batch-load this user's existing recommendation rows once (was an N+1 SELECT per job),
         // and remove rows that no longer qualify so the Recommended tab can't show stale matches.
@@ -196,6 +231,19 @@ public class JobMatchingService {
             rec.setRecommendationReason(reason(r, job));
             rec.setConfidenceLevel(r.confidence());
             rec.setScoreBreakdown(writeJson(r.breakdown()));
+            // Phase 2B-1 / 2C-2: stamp the action category + MUST_APPLY flag (pure functions of the
+            // score/breakdown). Flag-gated — when off, both stay null and the row is identical to today.
+            if (categorizer.isEnabled()) {
+                rec.setCategory(categorizer.categorize(r.matchScore()).name());
+                rec.setMustApply(mustApplyEvaluator.isMustApply(job, r));
+            }
+            // Phase 2C-1: stamp the priority band + raw priority number (separate ranking dimension;
+            // never re-orders the list). Flag-gated independently — off leaves both null.
+            if (priorityEngine.isEnabled()) {
+                var p = priorityEngine.compute(job, r);
+                rec.setPriority(p.level().name());
+                rec.setPriorityScore(p.priorityScore());
+            }
             recommendations.save(rec);
             keptJobIds.add(job.getId());
             written++;
@@ -212,6 +260,7 @@ public class JobMatchingService {
         if (!stale.isEmpty()) recommendations.deleteAll(stale);
 
         log.debug("Matcher persisted {} recommendations ({} removed) for user {}", written, stale.size(), userId);
+        matchCache.markRefreshed(userId, resumeId, poolVersion);
         return written;
     }
 

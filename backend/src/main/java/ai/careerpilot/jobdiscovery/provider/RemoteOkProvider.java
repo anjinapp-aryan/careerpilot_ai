@@ -61,7 +61,8 @@ public class RemoteOkProvider extends AbstractWebJobProvider {
                     str(m.get("description")),
                     stringList(m.get("tags")),
                     str(m.getOrDefault("url", m.get("apply_url"))),
-                    epochSeconds(m.get("epoch"))));
+                    epochSeconds(m.get("epoch")),
+                    m));   // capture raw payload for the Job Lake (ignored by legacy normalizer)
         }
         log.info("remoteok: fetched {} jobs", jobs.size());
         return jobs;

@@ -4,6 +4,7 @@ import ai.careerpilot.ai.AiGatewayService;
 import ai.careerpilot.ai.AiGatewayProperties;
 import ai.careerpilot.service.profile.CandidateProfileMetrics;
 import ai.careerpilot.jobdiscovery.enrich.JobAiEnrichmentMetrics;
+import ai.careerpilot.jobdiscovery.cache.MatchCacheMetrics;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -28,6 +29,7 @@ public class DiagnosticsController {
     private final AiGatewayProperties props;
     private final CandidateProfileMetrics candidateProfileMetrics;
     private final JobAiEnrichmentMetrics jobEnrichmentMetrics;
+    private final MatchCacheMetrics matchCacheMetrics;
 
     @Value("${GEMINI_API_KEY:}")
     private String geminiKey;
@@ -47,13 +49,18 @@ public class DiagnosticsController {
     @Value("${jobs.enrich.ai.enabled:false}")
     private boolean jobEnrichmentEnabled;
 
+    @Value("${jobs.matching.cache-enabled:false}")
+    private boolean matchCacheEnabled;
+
     public DiagnosticsController(AiGatewayService gateway, AiGatewayProperties props,
                                  CandidateProfileMetrics candidateProfileMetrics,
-                                 JobAiEnrichmentMetrics jobEnrichmentMetrics) {
+                                 JobAiEnrichmentMetrics jobEnrichmentMetrics,
+                                 MatchCacheMetrics matchCacheMetrics) {
         this.gateway = gateway;
         this.props = props;
         this.candidateProfileMetrics = candidateProfileMetrics;
         this.jobEnrichmentMetrics = jobEnrichmentMetrics;
+        this.matchCacheMetrics = matchCacheMetrics;
     }
 
     @GetMapping("/ai")
@@ -120,6 +127,16 @@ public class DiagnosticsController {
         result.put("enabled", jobEnrichmentEnabled);
         result.putAll(jobEnrichmentMetrics.snapshot());
         log.info("Job Enrichment Diagnostics endpoint accessed");
+        return result;
+    }
+
+    /** Phase 2B-3 — MatchCache hit/miss counts (counts only, no cached content). */
+    @GetMapping("/match-cache")
+    public Map<String, Object> matchCacheDiagnostics() {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("enabled", matchCacheEnabled);
+        result.putAll(matchCacheMetrics.snapshot());
+        log.info("Match Cache Diagnostics endpoint accessed");
         return result;
     }
 

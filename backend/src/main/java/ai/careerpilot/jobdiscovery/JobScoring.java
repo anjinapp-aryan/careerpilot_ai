@@ -316,7 +316,8 @@ public class JobScoring {
                 .toList();
     }
 
-    private boolean locationMatches(Job job, PreferenceContext p) {
+    /** Package-private: reused by {@link PreferenceGate} (Phase 2B-5) to avoid duplicating this logic. */
+    boolean locationMatches(Job job, PreferenceContext p) {
         String country = job.getCountry() == null ? "" : job.getCountry().toLowerCase();
         String city = job.getCity() == null ? "" : job.getCity().toLowerCase();
         String loc = job.getLocation() == null ? "" : job.getLocation().toLowerCase();
@@ -327,7 +328,8 @@ public class JobScoring {
         return countryHit || cityHit;
     }
 
-    private boolean remotePrefMatches(String remoteType, PreferenceContext p) {
+    /** Package-private: reused by {@link PreferenceGate} (Phase 2B-5) to avoid duplicating this logic. */
+    boolean remotePrefMatches(String remoteType, PreferenceContext p) {
         return switch (remoteType) {
             case "REMOTE" -> p.remote();
             case "HYBRID" -> p.hybrid();

@@ -114,7 +114,8 @@ public class AdzunaProvider extends AbstractWebJobProvider {
                     str(m.get("description")),
                     List.of(),                  // skills inferred by the normalizer
                     str(m.get("redirect_url")),
-                    isoInstant(m.get("created"))));
+                    isoInstant(m.get("created")),
+                    m));   // capture raw payload for the Job Lake (ignored by legacy normalizer)
         }
         return jobs;
     }

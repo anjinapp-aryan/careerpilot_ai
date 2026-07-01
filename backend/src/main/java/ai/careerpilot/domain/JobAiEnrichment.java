@@ -55,6 +55,15 @@ public class JobAiEnrichment {
     @Column(name = "enrichment_version") private Integer enrichmentVersion;
     @Column(name = "content_fingerprint") private String contentFingerprint;
 
+    // ── Phase 2B-4: field completion (additive; null until the job is re-enriched) ──
+    @Column(name = "role_family") private String roleFamily;
+    @Column(name = "work_mode") private String workMode;           // REMOTE | HYBRID | ONSITE
+    @Column(name = "visa_support") private Boolean visaSupport;
+    @Column private String country;
+    @Column(name = "company_type") private String companyType;
+    @Column(name = "company_size") private String companySize;
+    @Column(name = "experience_years") private Integer experienceYears;
+
     @CreationTimestamp @Column(name = "created_at", updatable = false) private Instant createdAt;
     @UpdateTimestamp @Column(name = "updated_at") private Instant updatedAt;
 }

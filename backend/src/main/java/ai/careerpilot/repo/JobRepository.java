@@ -69,6 +69,16 @@ public interface JobRepository extends JpaRepository<Job, UUID> {
                    "ORDER BY posted_date DESC NULLS LAST LIMIT :limit", nativeQuery = true)
     List<Job> findDiscoveredPool(@Param("limit") int limit);
 
+    /**
+     * Phase 2B-3 — cheap freshness signal for {@code MatchCache}: the newest {@code created_at} in
+     * the discovered pool. Jobs are only ever inserted (never content-updated after {@code
+     * JobNormalizer.merge()}, which doesn't touch {@code created_at}), so a later timestamp means
+     * new jobs have arrived since the cache was last written. Null when the pool is empty.
+     */
+    @Query(value = "SELECT max(created_at) FROM jobs WHERE org_id IS NULL AND external_id IS NOT NULL",
+           nativeQuery = true)
+    java.time.Instant maxDiscoveredCreatedAt();
+
     // ── Admin Dashboard aggregations (Phase 2 Increment D) ───────────────────────
 
     @Query(value = "SELECT count(*) FROM jobs WHERE org_id IS NULL AND external_id IS NOT NULL", nativeQuery = true)

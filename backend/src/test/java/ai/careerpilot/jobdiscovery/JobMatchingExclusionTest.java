@@ -1,12 +1,15 @@
 package ai.careerpilot.jobdiscovery;
 
 import ai.careerpilot.domain.Job;
+import ai.careerpilot.jobdiscovery.cache.MatchCache;
+import ai.careerpilot.jobdiscovery.cache.MatchCacheMetrics;
 import ai.careerpilot.repo.CandidateProfileVersionRepository;
 import ai.careerpilot.repo.JobAiEnrichmentRepository;
 import ai.careerpilot.repo.JobRecommendationRepository;
 import ai.careerpilot.repo.JobRepository;
 import ai.careerpilot.repo.RecommendationAuditRepository;
 import org.junit.jupiter.api.Test;
+import org.springframework.data.redis.core.StringRedisTemplate;
 
 import java.util.List;
 
@@ -27,8 +30,10 @@ class JobMatchingExclusionTest {
             mock(JobRecommendationRepository.class), new JobScoring(taxonomy), taxonomy,
             new RoleExclusionFilter(taxonomy),
             mock(CandidateProfileVersionRepository.class), mock(RecommendationAuditRepository.class),
-            mock(JobAiEnrichmentRepository.class),
-            true, 70, 3, true, false, false, 40);
+            mock(JobAiEnrichmentRepository.class), new JobCategorizer(false), new PreferenceGate(new JobScoring(taxonomy)),
+            new MatchCache(mock(StringRedisTemplate.class), new MatchCacheMetrics(), false),
+            new ai.careerpilot.jobdiscovery.priority.PriorityEngine(false), new MustApplyEvaluator(),
+            true, 70, 3, true, false, false, 40, false);
 
     private static Job job(String title, String description) {
         return Job.builder().title(title).description(description).build();

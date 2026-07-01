@@ -4,12 +4,15 @@ import ai.careerpilot.domain.CandidateProfileVersion;
 import ai.careerpilot.domain.Job;
 import ai.careerpilot.domain.RecommendationAudit;
 import ai.careerpilot.jobdiscovery.CandidateSignalResolver.CandidateMatchSignals;
+import ai.careerpilot.jobdiscovery.cache.MatchCache;
+import ai.careerpilot.jobdiscovery.cache.MatchCacheMetrics;
 import ai.careerpilot.repo.CandidateProfileVersionRepository;
 import ai.careerpilot.repo.JobAiEnrichmentRepository;
 import ai.careerpilot.repo.JobRecommendationRepository;
 import ai.careerpilot.repo.JobRepository;
 import ai.careerpilot.repo.RecommendationAuditRepository;
 import org.junit.jupiter.api.Test;
+import org.springframework.data.redis.core.StringRedisTemplate;
 
 import java.util.List;
 import java.util.Optional;
@@ -49,8 +52,10 @@ class JobMatchingRecommendationAuditTest {
                                        boolean auditEnabled) {
         return new JobMatchingService(resolver, jobs, recommendations, new JobScoring(taxonomy), taxonomy,
                 new RoleExclusionFilter(taxonomy), profileVersions, audit,
-                mock(JobAiEnrichmentRepository.class),
-                false, 0, 0, false, auditEnabled, false, 0);   // strict gate off + no relevance pre-gate so seeded job always qualifies
+                mock(JobAiEnrichmentRepository.class), new JobCategorizer(false), new PreferenceGate(new JobScoring(taxonomy)),
+                new MatchCache(mock(StringRedisTemplate.class), new MatchCacheMetrics(), false),
+                new ai.careerpilot.jobdiscovery.priority.PriorityEngine(false), new MustApplyEvaluator(),
+                false, 0, 0, false, auditEnabled, false, 0, false);   // strict gate off + no relevance pre-gate so seeded job always qualifies
     }
 
     @Test

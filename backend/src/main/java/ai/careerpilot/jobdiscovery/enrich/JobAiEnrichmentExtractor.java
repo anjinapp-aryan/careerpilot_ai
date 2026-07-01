@@ -41,7 +41,14 @@ public class JobAiEnrichmentExtractor {
               "salaryCurrency": <ISO currency code, e.g. "USD","EUR","INR", or null>,
               "salaryEstimated": <true if you inferred the band from market norms; false if the posting stated it>,
               "summary": <1-2 sentence neutral summary of the role>,
-              "confidenceScore": <number 0.0-1.0, your confidence in this extraction>
+              "confidenceScore": <number 0.0-1.0, your confidence in this extraction>,
+              "roleFamily": <coarse role family, e.g. "Backend Engineer","Frontend Engineer","DevOps","Data Scientist","Product Manager", or null>,
+              "workMode": <one of: "REMOTE","HYBRID","ONSITE", or null if not stated or inferable>,
+              "visaSupport": <true if the posting mentions visa sponsorship/relocation support; false if it explicitly says no sponsorship; null if unstated>,
+              "country": <the employer's/role's country, inferred from location text if needed, or null>,
+              "companyType": <one of: "STARTUP","SCALEUP","ENTERPRISE","AGENCY","NONPROFIT", or null if unclear>,
+              "companySize": <one of: "STARTUP","SMB","MID","ENTERPRISE", or null if unclear>,
+              "experienceYears": <integer minimum years of experience required, or null if unstated>
             }
 
             Infer seniority from responsibilities and required experience, not just the title.
@@ -126,7 +133,14 @@ public class JobAiEnrichmentExtractor {
                 textOrNull(n.get("salaryCurrency")),
                 boolOrNull(n.get("salaryEstimated")),
                 textOrNull(n.get("summary")),
-                clampConfidence(n.get("confidenceScore")));
+                clampConfidence(n.get("confidenceScore")),
+                textOrNull(n.get("roleFamily")),
+                textOrNull(n.get("workMode")),
+                boolOrNull(n.get("visaSupport")),
+                textOrNull(n.get("country")),
+                textOrNull(n.get("companyType")),
+                textOrNull(n.get("companySize")),
+                intOrNull(n.get("experienceYears")));
 
         // Minimum viability: an enrichment with no seniority and no skills is not usable.
         if ((r.seniorityLevel() == null || r.seniorityLevel().isBlank()) && r.normalizedSkills().isEmpty()) {
@@ -167,6 +181,17 @@ public class JobAiEnrichmentExtractor {
             });
         }
         return out;
+    }
+
+    private static Integer intOrNull(JsonNode node) {
+        if (node == null || node.isNull()) return null;
+        try {
+            if (node.isNumber()) return node.intValue();
+            String t = node.asText("").replaceAll("[^0-9]", "");
+            return t.isEmpty() ? null : Integer.parseInt(t);
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     private static BigDecimal decimalOrNull(JsonNode node) {

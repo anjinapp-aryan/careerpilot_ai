@@ -19,9 +19,10 @@ public final class JobRecommendationDtos {
             Integer resumeScore) {}
 
     /**
-     * A ranked job. {@code confidenceLevel} and {@code scoreBreakdown} are nullable so the
-     * legacy on-the-fly path (no v2 data) serializes the same shape as before — existing
-     * clients ignore the new fields.
+     * A ranked job. {@code confidenceLevel}, {@code scoreBreakdown} and {@code category} are
+     * nullable so the legacy on-the-fly path (no v2 data) serializes the same shape as before —
+     * existing clients ignore the new fields. {@code category} is non-null only when
+     * {@code JOB_AUTO_CATEGORIZATION_ENABLED} is on (Phase 2B-1).
      */
     public record RecommendedJob(
             Job job,
@@ -29,11 +30,27 @@ public final class JobRecommendationDtos {
             List<String> matchedSkills,
             List<String> missingSkills,
             String confidenceLevel,
-            ScoreBreakdown scoreBreakdown) {
+            ScoreBreakdown scoreBreakdown,
+            String category,
+            String priority,
+            Integer priorityScore,
+            Boolean mustApply) {
 
         /** Backward-compatible constructor for the legacy (no breakdown/confidence) path. */
         public RecommendedJob(Job job, int matchScore, List<String> matchedSkills, List<String> missingSkills) {
-            this(job, matchScore, matchedSkills, missingSkills, null, null);
+            this(job, matchScore, matchedSkills, missingSkills, null, null, null, null, null, null);
+        }
+
+        /** Backward-compatible constructor for the v2 path that predates categorization. */
+        public RecommendedJob(Job job, int matchScore, List<String> matchedSkills, List<String> missingSkills,
+                              String confidenceLevel, ScoreBreakdown scoreBreakdown) {
+            this(job, matchScore, matchedSkills, missingSkills, confidenceLevel, scoreBreakdown, null, null, null, null);
+        }
+
+        /** Backward-compatible constructor for the 2B-1 path (category, no priority/must-apply). */
+        public RecommendedJob(Job job, int matchScore, List<String> matchedSkills, List<String> missingSkills,
+                              String confidenceLevel, ScoreBreakdown scoreBreakdown, String category) {
+            this(job, matchScore, matchedSkills, missingSkills, confidenceLevel, scoreBreakdown, category, null, null, null);
         }
     }
 

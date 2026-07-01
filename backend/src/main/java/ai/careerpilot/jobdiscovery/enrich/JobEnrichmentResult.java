@@ -18,5 +18,13 @@ public record JobEnrichmentResult(
         String salaryCurrency,
         Boolean salaryEstimated,
         String summary,
-        BigDecimal confidenceScore) {
+        BigDecimal confidenceScore,
+        // ── Phase 2B-4: field completion ──
+        String roleFamily,
+        String workMode,
+        Boolean visaSupport,
+        String country,
+        String companyType,
+        String companySize,
+        Integer experienceYears) {
 }

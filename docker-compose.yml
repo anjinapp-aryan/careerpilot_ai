@@ -109,6 +109,18 @@ services:
       CANDIDATE_PROFILE_REBUILD_CRON: "${CANDIDATE_PROFILE_REBUILD_CRON:-0 0 2 ? * SUN}"
       CANDIDATE_PROFILE_REBUILD_MAX_PER_RUN: ${CANDIDATE_PROFILE_REBUILD_MAX_PER_RUN:-200}
       CANDIDATE_RECOMMENDATION_AUDIT_ENABLED: ${CANDIDATE_RECOMMENDATION_AUDIT_ENABLED:-false}
+      # Phase 2B-1 — action categorization (AUTO_APPLY/HUMAN_REVIEW/GOOD_MATCH/IGNORE). Default DARK.
+      JOB_AUTO_CATEGORIZATION_ENABLED: ${JOB_AUTO_CATEGORIZATION_ENABLED:-false}
+      # Phase 2B-5 — hard-reject jobs that violate a mandatory work-mode/location/visa preference. Default DARK.
+      JOB_HARD_PREFERENCE_ENABLED: ${JOB_HARD_PREFERENCE_ENABLED:-false}
+      # Phase 2B-3 — MatchCache: skip rescoring when nothing changed since the last refresh (24h TTL, Redis). Default DARK.
+      JOB_MATCH_CACHE_ENABLED: ${JOB_MATCH_CACHE_ENABLED:-false}
+      # Phase 2C-1 — priority engine (CRITICAL/HIGH/MEDIUM/LOW ranking dimension). Default DARK.
+      RECOMMENDATION_PRIORITY_ENABLED: ${RECOMMENDATION_PRIORITY_ENABLED:-false}
+      # Phase 2C-3 — approval actions (/api/recommendations approve|reject|save|archive → Application). Default DARK.
+      RECOMMENDATION_APPROVAL_ENABLED: ${RECOMMENDATION_APPROVAL_ENABLED:-false}
+      # Phase 2C-4 — recommendation feedback capture (feeds the behavior profile). Default DARK.
+      RECOMMENDATION_FEEDBACK_ENABLED: ${RECOMMENDATION_FEEDBACK_ENABLED:-false}
       # Domestic/International scope derived server-side from the candidate (home/preferred countries).
       JOBS_DISCOVERY_SCOPE_STRICT_ENABLED: ${JOBS_DISCOVERY_SCOPE_STRICT_ENABLED:-false}
       # Adzuna keyed provider — sources jobs PER COUNTRY (incl. India 'in'). Empty keys = provider
@@ -126,6 +138,13 @@ services:
       # Phase 2 Increment C — fuzzy job deduplication (reuses embeddings). Default off (ships dark).
       JOBS_DEDUP_ENABLED: ${JOBS_DEDUP_ENABLED:-false}
       JOBS_DEDUP_MAX_PER_RUN: ${JOBS_DEDUP_MAX_PER_RUN:-200}
+      # Phase 2A — Enterprise Job Lake (SHADOW pipeline: job_raw → job_normalized → job_lake). Runs
+      # alongside the legacy discovery and never writes into `jobs`. All default DARK (no behavior
+      # change). NOTE: master flag is JOB_LAKE_DISCOVERY_ENABLED, not JOB_DISCOVERY_ENABLED — the
+      # latter gates the LEGACY pipeline, so reusing it would disable live discovery.
+      JOB_LAKE_DISCOVERY_ENABLED: ${JOB_LAKE_DISCOVERY_ENABLED:-false}
+      JOB_DISCOVERY_DEDUP_ENABLED: ${JOB_DISCOVERY_DEDUP_ENABLED:-false}
+      JOB_SOFTWARE_FILTER_ENABLED: ${JOB_SOFTWARE_FILTER_ENABLED:-false}
       AGENT_SERVICE_URL: ${AGENT_SERVICE_URL}
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:5173}
       MINIO_ENDPOINT: ${S3_ENDPOINT}

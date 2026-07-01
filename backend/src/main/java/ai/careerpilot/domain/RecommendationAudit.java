@@ -39,5 +39,8 @@ public class RecommendationAudit {
     @Column(name = "salary_score", nullable = false) private int salaryScore;
     @Column(name = "final_score", nullable = false) private int finalScore;
 
+    /** Phase 2C-3: the human decision stamped onto this row, if any (APPROVE|REJECT|SAVE|ARCHIVE). */
+    @Column(name = "decision") private String decision;
+
     @CreationTimestamp @Column(name = "created_at", updatable = false) private Instant createdAt;
 }

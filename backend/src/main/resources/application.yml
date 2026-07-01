@@ -291,6 +291,19 @@ jobs:
     # landed at 68-69, just under the 70 gate). Cap treats a job as needing at most N core
     # families. Set very high (e.g. 999) to restore the old uncapped behavior (instant rollback).
     skill-denom-cap: ${JOBS_MATCHING_SKILL_DENOM_CAP:8}
+    # ---- Phase 2B-5: mandatory preference hard-reject (Step 6) ----
+    # Today work-mode/location/visa are soft weights only (1-10% of the score), so a job that
+    # structurally cannot work for the candidate (e.g. onsite when they set "Remote only") can still
+    # clear the gate on strong skills alone. When true, PreferenceGate rejects such jobs outright,
+    # before scoring — only on an EXPLICIT signal (a stated preference + a known, conflicting job
+    # field); never on missing/unknown data. Default off; instant rollback. See PreferenceGate.java.
+    hard-preference-enabled: ${JOB_HARD_PREFERENCE_ENABLED:false}
+    # ---- Phase 2B-3: MatchCache (Step 11) ----
+    # Skips the rescore + persist cycle in refreshForUser when nothing changed (same resume/profile
+    # version AND same discovered-pool version) since the last refresh, within a 24h TTL. Activates
+    # the provisioned-but-unused Redis. Fails open (always a miss) if Redis is unreachable — never
+    # serves a stale read on a cache error. Default off; instant rollback. See MatchCache.java.
+    cache-enabled: ${JOB_MATCH_CACHE_ENABLED:false}
   recommendation:
     v2-enabled: ${JOB_RECO_V2_ENABLED:true}      # gate Recommended on score+confidence
     threshold: ${JOB_RECO_THRESHOLD:70}          # min match score for Recommended + Browse boundary (spec: 70)
@@ -299,6 +312,17 @@ jobs:
     strict-gate-enabled: ${JOB_RECO_STRICT_GATE:true}
     gate-min-score: ${JOB_RECO_GATE_MIN_SCORE:70}
     gate-min-skills: ${JOB_RECO_GATE_MIN_SKILLS:3}
+    # ---- Phase 2B-1 / 2C-2: action categorization (Step 7 → refined Step 2) ----
+    # Buckets each persisted recommendation by its match score into a 5-tier action category
+    # (AUTO_APPLY_READY >=95, HIGH_PRIORITY 90-94, HUMAN_REVIEW 80-89, RECOMMENDED 70-79, else ARCHIVED)
+    # and a cross-cutting MUST_APPLY flag. Pure function of the score/breakdown — no re-score, no LLM.
+    # Default off → category/must_apply stay NULL, zero behavior change.
+    auto-categorization-enabled: ${JOB_AUTO_CATEGORIZATION_ENABLED:false}
+    # ---- Phase 2C-1: priority engine (Step 4) ----
+    # Computes a separate priority band (CRITICAL/HIGH/MEDIUM/LOW) = match score + additive bonuses
+    # (visa/remote/exact-role/salary/recent). A distinct ranking dimension; never re-orders the existing
+    # match-score-ordered Recommended list. Default off → priority stays NULL, zero behavior change.
+    priority-enabled: ${RECOMMENDATION_PRIORITY_ENABLED:false}
   explain:
     enabled: ${JOB_EXPLAIN_ENABLED:true}         # "Why am I a match?" LLM endpoint
   discovery:
@@ -325,6 +349,36 @@ jobs:
         base-url: ${JOOBLE_BASE_URL:https://jooble.org}
         api-key: ${JOOBLE_API_KEY:}
         keywords: ${JOOBLE_KEYWORDS:software engineer,data engineer}
+    # ---- Phase 2A: Enterprise Job Lake (SHADOW pipeline) ----
+    # Additive, layered discovery (job_raw → job_normalized → job_lake) that runs ALONGSIDE the
+    # legacy discovery above and NEVER writes into the `jobs` table. Ships DARK: every flag below
+    # defaults false → no rows written, no scheduled run, zero behavior change until explicitly on.
+    # NOTE: the master flag is JOB_LAKE_DISCOVERY_ENABLED, NOT JOB_DISCOVERY_ENABLED — the latter is
+    # already bound to the LEGACY pipeline above (jobs.discovery.enabled), and reusing it would turn
+    # the live pipeline off. Distinct name = no regression.
+    lake:
+      enabled: ${JOB_LAKE_DISCOVERY_ENABLED:false}
+      # Daily at 02:00 UTC (zone pinned in the scheduler). Separate from the legacy 06:00 cron.
+      cron: ${JOB_LAKE_DISCOVERY_CRON:0 0 2 * * *}
+      # Deterministic (AI-free) dedup over job_normalized → job_duplicate_mapping. Default off.
+      dedup-enabled: ${JOB_DISCOVERY_DEDUP_ENABLED:false}
+      # Min title-token Jaccard to confirm a same-(country,city) candidate is the same posting.
+      dedup-title-threshold: ${JOB_LAKE_DEDUP_TITLE_THRESHOLD:0.6}
+      # Software-only pre-store gate (reuses JobTaxonomy). Off → store everything (Step 9). Default off.
+      software-filter-enabled: ${JOB_SOFTWARE_FILTER_ENABLED:false}
+
+# ---- Phase 2C Recommendation Intelligence (human approval + feedback) ----
+# All default DARK — endpoints inert / no rows written until explicitly enabled.
+recommendation:
+  approval:
+    # Gates the /api/recommendations approve|reject|save|archive endpoints, which write to the
+    # existing Application entity (reuse, not a parallel queue). Off → those endpoints return 404.
+    enabled: ${RECOMMENDATION_APPROVAL_ENABLED:false}
+  feedback:
+    # Gates recommendation feedback capture (Step 6): the POST /feedback endpoint AND the automatic
+    # capture from an approve/reject/save/archive decision. Off → no rows written, decisions still work.
+    # Feeds the 2C-5 candidate_behavior_profile.
+    enabled: ${RECOMMENDATION_FEEDBACK_ENABLED:false}
 
 # ---- Candidate Intelligence Profile (Phase 1) ----
 # Canonical AI-analyzed profile = resume intelligence merged with a snapshot of

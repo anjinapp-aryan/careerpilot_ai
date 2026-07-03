@@ -32,5 +32,15 @@ public class JobRecommendation {
     @Column(name = "score_breakdown", columnDefinition = "text") private String scoreBreakdown; // JSON of 6 factors
     @Column(name = "confidence_level") private String confidenceLevel; // HIGH | MEDIUM | LOW
 
+    // ── Phase 2B-1 / 2C-2: action category (additive; null unless JOB_AUTO_CATEGORIZATION_ENABLED) ──
+    @Column(name = "category") private String category; // AUTO_APPLY_READY | HIGH_PRIORITY | HUMAN_REVIEW | RECOMMENDED | ARCHIVED
+
+    // ── Phase 2C-1: priority band + raw priority number (null unless RECOMMENDATION_PRIORITY_ENABLED) ──
+    @Column(name = "priority") private String priority;             // CRITICAL | HIGH | MEDIUM | LOW
+    @Column(name = "priority_score") private Integer priorityScore; // base match score + attribute bonuses
+
+    // ── Phase 2C-2: MUST_APPLY flag (null unless JOB_AUTO_CATEGORIZATION_ENABLED) ──
+    @Column(name = "must_apply") private Boolean mustApply;
+
     @CreationTimestamp @Column(name = "created_at", updatable = false) private Instant createdAt;
 }

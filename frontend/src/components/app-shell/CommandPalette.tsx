@@ -16,12 +16,17 @@ import {
 import { NAV_ITEMS } from './nav';
 import { useCommandPalette } from '@/hooks/useCommandPalette';
 import { useTheme } from '@/lib/theme';
+import { useAuthStore } from '@/lib/auth';
 import { Kbd } from '@/components/ui/kbd';
+
+const ADMIN_ROLES = new Set(['OWNER', 'ADMIN']);
 
 export function CommandPalette() {
   const navigate = useNavigate();
   const { open, setOpen, toggle } = useCommandPalette();
   const setMode = useTheme((s) => s.setMode);
+  const isAdmin = ADMIN_ROLES.has(useAuthStore((s) => s.user?.role) ?? '');
+  const navItems = NAV_ITEMS.filter((item) => !item.adminOnly || isAdmin);
 
   // Global ⌘K / Ctrl-K toggle.
   useEffect(() => {
@@ -81,7 +86,7 @@ export function CommandPalette() {
                 </Command.Empty>
 
                 <Command.Group heading="Navigate">
-                  {NAV_ITEMS.map((item) => {
+                  {navItems.map((item) => {
                     const Icon = item.icon;
                     return (
                       <Command.Item

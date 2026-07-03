@@ -1,10 +1,11 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { motion } from 'framer-motion';
 import {
   Bookmark,
   Building2,
   CalendarDays,
+  ChevronDown,
   DollarSign,
   ExternalLink,
   Filter,
@@ -12,6 +13,7 @@ import {
   Plus,
   Search,
   Send,
+  Sparkles,
   SlidersHorizontal,
   Settings2,
 } from 'lucide-react';
@@ -35,10 +37,11 @@ import {
 } from '@/components/ui/dialog';
 import { cn } from '@/lib/cn';
 import { RecommendedJobs } from '@/components/jobs/RecommendedJobs';
+import { CandidateProfileCard } from '@/components/jobs/CandidateProfileCard';
 import { PreferencesDialog } from '@/components/jobs/PreferencesDialog';
 import { JobBadges } from '@/components/jobs/JobBadges';
 import { trackJobEvent } from '@/lib/jobTelemetry';
-import type { Application, Job, JobsPage } from '@/types/workflow';
+import type { Application, CandidatePreferences, Job, JobsPage } from '@/types/workflow';
 
 type JobsTab = 'recommended' | 'domestic' | 'international' | 'saved' | 'applied' | 'browse';
 
@@ -50,8 +53,6 @@ const TAB_ITEMS: { value: JobsTab; label: string }[] = [
   { value: 'applied', label: 'Applied' },
   { value: 'browse', label: 'Browse' },
 ];
-
-const HOME_COUNTRIES = ['India', 'United States', 'United Kingdom', 'Canada', 'Germany', 'Australia'];
 
 const EMPTY_DRAFT = { title: '', company: '', location: '', description: '', salaryRange: '' };
 
@@ -66,6 +67,7 @@ export default function Jobs() {
   const qc = useQueryClient();
   const { toast } = useToast();
   const [q, setQ] = useState('');
+  const [smartSearch, setSmartSearch] = useState(false);
   const [location, setLocation] = useState('');
   const [remoteOnly, setRemoteOnly] = useState(false);
   const [company, setCompany] = useState('');
@@ -84,7 +86,16 @@ export default function Jobs() {
   const { data, isLoading } = useQuery<JobsPage>({
     queryKey: ['jobs', q],
     queryFn: async () => (await api.get('/api/jobs', { params: { q } })).data,
-    enabled: tab === 'browse',
+    enabled: tab === 'browse' && !smartSearch,
+  });
+
+  // AI semantic search (Phase 2 Increment A): same Browse search box, embeds the query and ranks
+  // discovered jobs by cosine similarity instead of a title/company substring match. Only fires
+  // once the user has typed something — an empty query has no embedding to search with.
+  const { data: semanticResults, isLoading: semanticLoading } = useQuery<Job[]>({
+    queryKey: ['jobs', 'semantic', q],
+    queryFn: async () => (await api.get('/api/jobs/search/semantic', { params: { q, k: 20 } })).data,
+    enabled: tab === 'browse' && smartSearch && q.trim().length > 0,
   });
 
   const isDiscoverTab = tab === 'domestic' || tab === 'international';
@@ -105,6 +116,26 @@ export default function Jobs() {
     enabled: isDiscoverTab,
   });
   const discoveredJobs = discoveredPage?.content ?? [];
+
+  // Home country defaults to the user's first saved preferred country (instead of a hardcoded
+  // 'India'), applied once so a manual chip selection is never overridden on a later refetch.
+  const homeCountryInitialized = useRef(false);
+  const { data: preferences } = useQuery<CandidatePreferences>({
+    queryKey: ['candidate', 'preferences'],
+    queryFn: async () => (await api.get('/api/candidate/preferences')).data,
+  });
+  useEffect(() => {
+    if (homeCountryInitialized.current) return;
+    // Home country is server-authoritative for Domestic; mirror it in local state for display +
+    // the legacy country param. Prefer the explicit home country, else the first preferred country.
+    const resolved = preferences?.homeCountry || preferences?.preferredCountries?.[0];
+    if (resolved) {
+      setHomeCountry(resolved);
+      homeCountryInitialized.current = true;
+    }
+  }, [preferences]);
+
+  const preferredCountries = preferences?.preferredCountries ?? [];
 
   // Browse "more opportunities": global discovered pool minus high-confidence recommendations.
   const { data: poolPage } = useQuery<JobsPage>({
@@ -181,7 +212,8 @@ export default function Jobs() {
     track.mutate({ jobId, status: 'SAVED' });
   };
 
-  const jobs = data?.content ?? [];
+  const jobs = smartSearch ? semanticResults ?? [] : data?.content ?? [];
+  const browseLoading = smartSearch ? semanticLoading : isLoading;
   const filtered = useMemo(
     () =>
       jobs.filter((j) => {
@@ -269,34 +301,47 @@ export default function Jobs() {
       <Tabs items={TAB_ITEMS} value={tab} onChange={(v) => setTab(v as JobsTab)} />
 
       {tab === 'recommended' && (
-        <RecommendedJobs
-          onApply={(jobId) => track.mutate({ jobId, status: 'APPLIED' })}
-          onSave={(jobId) => track.mutate({ jobId, status: 'SAVED' })}
-          busy={track.isPending}
-        />
+        <div className="space-y-4">
+          <CandidateProfileCard />
+          <RecommendedJobs
+            onApply={(jobId) => track.mutate({ jobId, status: 'APPLIED' })}
+            onSave={(jobId) => track.mutate({ jobId, status: 'SAVED' })}
+            busy={track.isPending}
+          />
+        </div>
       )}
 
       {isDiscoverTab && (
         <div className="space-y-4">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-sm font-medium text-muted-foreground">Home country</span>
-            {HOME_COUNTRIES.map((c) => (
+          {tab === 'domestic' && (
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-sm font-medium text-muted-foreground">Home country</span>
+              <span className="rounded-full border border-primary bg-primary/10 px-3 py-1 text-xs font-medium text-primary">
+                {homeCountry}
+              </span>
               <button
-                key={c}
-                onClick={() => setHomeCountry(c)}
-                className={cn(
-                  'rounded-full border px-3 py-1 text-xs font-medium transition-colors',
-                  homeCountry === c
-                    ? 'border-primary bg-primary/10 text-primary'
-                    : 'border-border text-muted-foreground hover:bg-muted',
-                )}
+                onClick={() => setShowPreferences(true)}
+                className="text-xs font-medium text-primary hover:underline"
               >
-                {c}
+                Change in Preferences
               </button>
-            ))}
-          </div>
+            </div>
+          )}
           {tab === 'international' && (
             <div className="flex flex-wrap items-center gap-2">
+              {preferredCountries.length > 0 && (
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="text-sm font-medium text-muted-foreground">Preferred</span>
+                  {preferredCountries.map((c) => (
+                    <span
+                      key={c}
+                      className="rounded-full border border-border bg-muted/50 px-2.5 py-1 text-xs font-medium text-foreground"
+                    >
+                      {c}
+                    </span>
+                  ))}
+                </div>
+              )}
               <div className="relative">
                 <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
                 <Input
@@ -345,7 +390,7 @@ export default function Jobs() {
               ? 'Loading roles…'
               : tab === 'domestic'
                 ? `${discoveredJobs.length} role${discoveredJobs.length === 1 ? '' : 's'} in ${homeCountry}`
-                : `${discoveredJobs.length} role${discoveredJobs.length === 1 ? '' : 's'} outside ${homeCountry}`}
+                : `${discoveredJobs.length} role${discoveredJobs.length === 1 ? '' : 's'} in your preferred countries`}
           </p>
           {discoveredLoading ? (
             <div className="space-y-4">
@@ -446,16 +491,35 @@ export default function Jobs() {
             <Input
               value={q}
               onChange={(e) => setQ(e.target.value)}
-              placeholder="Search by title or company…"
+              placeholder={smartSearch ? 'Describe the role you want (e.g. "remote react frontend")…' : 'Search by title or company…'}
               className="h-11 pl-9"
             />
           </div>
 
+          <label className="flex w-fit cursor-pointer items-center gap-2 text-sm text-muted-foreground">
+            <button
+              type="button"
+              role="switch"
+              aria-checked={smartSearch}
+              onClick={() => setSmartSearch((v) => !v)}
+              className={cn('relative h-5 w-9 rounded-full transition-colors', smartSearch ? 'bg-primary' : 'bg-muted')}
+            >
+              <span
+                className={cn(
+                  'absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform',
+                  smartSearch ? 'translate-x-4' : 'translate-x-0.5',
+                )}
+              />
+            </button>
+            <span className={cn('font-medium', smartSearch && 'text-foreground')}>✨ Smart search</span>
+            <span className="text-xs">(AI-ranked by meaning, not just keywords)</span>
+          </label>
+
           <p className="text-sm text-muted-foreground">
-            {isLoading ? 'Searching…' : `${filtered.length} role${filtered.length === 1 ? '' : 's'} found`}
+            {browseLoading ? 'Searching…' : `${filtered.length} role${filtered.length === 1 ? '' : 's'} found`}
           </p>
 
-          {isLoading ? (
+          {browseLoading ? (
             <div className="space-y-4">
               {Array.from({ length: 4 }).map((_, i) => (
                 <Skeleton key={i} className="h-36 rounded-xl" />
@@ -495,7 +559,7 @@ export default function Jobs() {
                 <Badge tone="neutral">{poolJobs.length}</Badge>
               </div>
               <p className="text-xs text-muted-foreground">
-                Discovered roles that didn’t clear your 75% match bar — still worth a look.
+                Discovered roles that didn’t clear your 70% match bar — still worth a look.
               </p>
               {poolJobs.map((job, i) => (
                 <JobCard
@@ -575,8 +639,40 @@ interface JobCardProps {
   busy: boolean;
 }
 
+/** Raw shape of GET /api/jobs/{id}/enrichment — the JPA entity, with JSON-array columns still
+ *  serialized as strings (not yet parsed into real arrays). Phase 2 Increment D. */
+interface JobAiEnrichmentRaw {
+  seniorityLevel: string | null;
+  normalizedSkillsJson: string | null;
+  domainsJson: string | null;
+  employmentType: string | null;
+  salaryBandMin: number | null;
+  salaryBandMax: number | null;
+  salaryCurrency: string | null;
+  salaryEstimated: boolean | null;
+  summary: string | null;
+  confidenceScore: number | null;
+}
+
+function parseJsonArray(raw: string | null): string[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
 function JobCard({ job, index, onSave, onApply, busy }: JobCardProps) {
   const isRemote = /remote/i.test(`${job.location ?? ''} ${job.title}`);
+  const [showInsights, setShowInsights] = useState(false);
+  const { data: enrichment, isLoading: enrichmentLoading, isError: enrichmentError } = useQuery<JobAiEnrichmentRaw>({
+    queryKey: ['job-enrichment', job.id],
+    queryFn: async () => (await api.get(`/api/jobs/${job.id}/enrichment`)).data,
+    enabled: showInsights,
+    retry: false,
+  });
   return (
     <motion.div
       initial={{ opacity: 0, y: 10 }}
@@ -645,7 +741,51 @@ function JobCard({ job, index, onSave, onApply, busy }: JobCardProps) {
                   </Button>
                 </a>
               )}
+              <Button size="sm" variant="ghost" onClick={() => setShowInsights((v) => !v)} className="ml-auto">
+                <Sparkles className="h-3.5 w-3.5" /> AI Insights
+                <ChevronDown className={cn('h-3.5 w-3.5 transition-transform', showInsights && 'rotate-180')} />
+              </Button>
             </div>
+
+            {showInsights && (
+              <div className="mt-3 rounded-lg border border-border bg-muted/30 p-3 text-sm">
+                {enrichmentLoading ? (
+                  <Skeleton className="h-16 w-full" />
+                ) : enrichmentError || !enrichment ? (
+                  <p className="text-xs text-muted-foreground">
+                    No AI insights available for this role yet.
+                  </p>
+                ) : (
+                  <div className="space-y-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      {enrichment.seniorityLevel && <Badge tone="primary">{enrichment.seniorityLevel}</Badge>}
+                      {enrichment.employmentType && <Badge tone="neutral">{enrichment.employmentType}</Badge>}
+                      {(enrichment.salaryBandMin || enrichment.salaryBandMax) && (
+                        <Badge tone="info">
+                          {enrichment.salaryBandMin?.toLocaleString()}–{enrichment.salaryBandMax?.toLocaleString()}{' '}
+                          {enrichment.salaryCurrency}
+                          {enrichment.salaryEstimated ? ' (estimated)' : ''}
+                        </Badge>
+                      )}
+                    </div>
+                    {enrichment.summary && (
+                      <p className="text-xs text-muted-foreground">{enrichment.summary}</p>
+                    )}
+                    {parseJsonArray(enrichment.normalizedSkillsJson).length > 0 && (
+                      <div className="flex flex-wrap gap-1.5">
+                        {parseJsonArray(enrichment.normalizedSkillsJson)
+                          .slice(0, 10)
+                          .map((skill) => (
+                            <span key={skill} className="rounded-full bg-secondary/10 px-2 py-0.5 text-xs text-secondary">
+                              {skill}
+                            </span>
+                          ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </div>
       </Card>

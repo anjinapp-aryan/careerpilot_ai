@@ -22,6 +22,12 @@ public class JobEnricher {
     private static final Pattern YEARS = Pattern.compile(
             "(\\d{1,2})\\s*\\+?\\s*(?:years?|yrs?)(?:\\s+(?:of\\s+)?experience)?", Pattern.CASE_INSENSITIVE);
 
+    private final JobTaxonomy taxonomy;
+
+    public JobEnricher(JobTaxonomy taxonomy) {
+        this.taxonomy = taxonomy;
+    }
+
     /** Mutates {@code job} in place with derived enrichment fields. */
     public void enrich(Job job) {
         String haystack = (safe(job.getTitle()) + " " + safe(job.getDescription()) + " "
@@ -32,6 +38,8 @@ public class JobEnricher {
         job.setRelocationSupport(detectRelocation(haystack));
         job.setCompanySize(deriveCompanySize(haystack));
         job.setRequiredExperience(parseRequiredExperience(safe(job.getDescription()) + " " + safe(job.getTitle())));
+        // Industry/job-family classification drives the recommendation quality filter.
+        job.setJobFamily(taxonomy.classifyFamily(job.getTitle(), job.getDescription()));
     }
 
     String deriveRemoteType(String haystack, Boolean remoteFlag) {

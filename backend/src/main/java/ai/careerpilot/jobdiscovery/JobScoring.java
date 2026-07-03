@@ -1,6 +1,8 @@
 package ai.careerpilot.jobdiscovery;
 
 import ai.careerpilot.domain.Job;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.util.*;
@@ -17,6 +19,33 @@ import java.util.stream.Collectors;
  */
 @Component
 public class JobScoring {
+
+    /** Default upper bound for the skill-ratio denominator (see {@link #skillDenomCap}). */
+    private static final int DEFAULT_SKILL_DENOM_CAP = 8;
+
+    private final JobTaxonomy taxonomy;
+    /**
+     * Upper bound for the skill-ratio denominator. A long, well-written JD names many skill
+     * families; without a cap the ratio {@code matched / allJobFamilies} shrinks the more
+     * thorough the posting is, so a candidate with a strong 6-family overlap on a detailed JD
+     * scored <i>lower</i> than a 2-family overlap on a thin one. Capping the denominator treats
+     * a job as needing at most this many "core" families, so genuine overlap is rewarded instead
+     * of being diluted by description verbosity. Env-tunable; set very high to restore the old
+     * uncapped behavior (instant rollback).
+     */
+    private final int skillDenomCap;
+
+    /** Convenience constructor (tests / direct use) — uses the default denominator cap. */
+    public JobScoring(JobTaxonomy taxonomy) {
+        this(taxonomy, DEFAULT_SKILL_DENOM_CAP);
+    }
+
+    @Autowired
+    public JobScoring(JobTaxonomy taxonomy,
+                      @Value("${jobs.matching.skill-denom-cap:8}") int skillDenomCap) {
+        this.taxonomy = taxonomy;
+        this.skillDenomCap = skillDenomCap > 0 ? skillDenomCap : DEFAULT_SKILL_DENOM_CAP;
+    }
 
     public static final List<String> SKILL_VOCABULARY = List.of(
             "java", "spring boot", "spring", "kotlin", "python", "javascript", "typescript",
@@ -40,9 +69,14 @@ public class JobScoring {
     public record ScoreBreakdown(int skills, int experience, int role, int location,
                                  int salary, int visa, int workMode) {}
 
-    /** Full v2 result: total + matched/missing skills + breakdown + confidence (HIGH|MEDIUM|LOW). */
+    /**
+     * Full v2 result: total + matched/missing skills + breakdown + confidence (HIGH|MEDIUM|LOW).
+     * {@code matchedSkillFamilyCount}/{@code matchedRoleCount} back the Recommended quality gate
+     * (>= 3 skill families AND >= 1 role family) without persisting extra columns.
+     */
     public record ScoreResultV2(int matchScore, List<String> matchedSkills, List<String> missingSkills,
-                                ScoreBreakdown breakdown, String confidence) {}
+                                ScoreBreakdown breakdown, String confidence,
+                                int matchedSkillFamilyCount, int matchedRoleCount) {}
 
     /** Candidate signals derived from the latest workflow run. */
     public record CandidateContext(List<String> skills, String targetRole, List<String> targetLocations,
@@ -71,43 +105,91 @@ public class JobScoring {
             "hybrid", "onsite", "fulltime", "part", "time", "contract", "freelance");
 
     /**
-     * Weighted score: skills 35, experience 20, role 15, location 10, salary 10, visa 5, workMode 5.
-     * A factor with no usable data contributes a neutral 50 but does NOT count toward confidence —
-     * so a high score built mostly on neutral defaults is flagged LOW/MEDIUM.
+     * Minimum denominator for the skill ratio so a JD that only names one or two skills the
+     * candidate happens to have can't reach 100% — that loophole let sparse, off-target JDs
+     * (e.g. a marketing post mentioning "SQL") look like perfect skill matches.
+     */
+    private static final int SKILL_DENOM_FLOOR = 3;
+
+    /**
+     * Weighted score: skills 40, role 25, experience 20, location 10, salary 3, visa/workMode 1 each.
+     * Skills and role are computed over normalized <i>families</i> (so spelling variants and related
+     * roles match), and negative signals score low rather than the old neutral 50 — that 50 default
+     * was the main reason irrelevant jobs floated to high scores. The breakdown record keeps its
+     * 7-field shape (API contract) even though salary/visa/workMode now carry little weight.
      */
     public ScoreResultV2 scoreV2(Job job, CandidateContext ctx, PreferenceContext prefs) {
+        return scoreV2(job, job.getSkills(), ctx, prefs);
+    }
+
+    /**
+     * Score a job against a candidate, reading the job's skill signal from {@code effectiveSkills}
+     * (a comma-joined skills string) instead of {@code job.getSkills()}. Callers pass the AI-enriched
+     * {@code normalized_skills} here when available (see {@code jobs.matching.use-enrichment}); the
+     * raw {@code job.getSkills()} when not. Title/description/location/salary still come from the job
+     * entity — only the skill signal is overridable.
+     */
+    public ScoreResultV2 scoreV2(Job job, String effectiveSkills, CandidateContext ctx, PreferenceContext prefs) {
         PreferenceContext p = prefs == null ? PreferenceContext.empty() : prefs;
         String haystack = ((job.getTitle() == null ? "" : job.getTitle()) + " "
-                + (job.getDescription() == null ? "" : job.getDescription())).toLowerCase();
-
-        Set<String> candidateSkillSet = (ctx.skills() == null ? List.<String>of() : ctx.skills()).stream()
-                .filter(Objects::nonNull).map(String::toLowerCase).collect(Collectors.toSet());
-        List<String> mentionedSkills = SKILL_VOCABULARY.stream().filter(haystack::contains).toList();
-        List<String> matchedSkills = mentionedSkills.stream().filter(candidateSkillSet::contains).toList();
-        List<String> missingSkills = mentionedSkills.stream().filter(s -> !candidateSkillSet.contains(s)).toList();
+                + (job.getDescription() == null ? "" : job.getDescription()) + " "
+                + (effectiveSkills == null ? "" : effectiveSkills)).toLowerCase();
 
         int signals = 0;
 
-        // Skills (35%)
-        boolean skillsSignal = !mentionedSkills.isEmpty() && !candidateSkillSet.isEmpty();
-        int skills = mentionedSkills.isEmpty() ? 50 : (matchedSkills.size() * 100 / mentionedSkills.size());
-        if (skillsSignal) signals++;
+        // ── Skills (40%) — normalized skill families, with a denominator floor ──────────
+        Set<String> candFamilies = taxonomy.skillFamilies(ctx.skills());
+        Set<String> jobSkillFamilies = new HashSet<>(taxonomy.skillFamiliesInText(haystack));
+        if (effectiveSkills != null) {
+            jobSkillFamilies.addAll(taxonomy.skillFamilies(
+                    Arrays.asList(effectiveSkills.toLowerCase().split("\\s*,\\s*"))));
+        }
+        Set<String> matchedFamilies = new HashSet<>(candFamilies);
+        matchedFamilies.retainAll(jobSkillFamilies);
 
-        // Experience (20%)
-        int experience = 50;
-        boolean expSignal = job.getRequiredExperience() != null && ctx.yearsExperience() != null;
-        if (expSignal) {
-            int req = job.getRequiredExperience(), have = ctx.yearsExperience();
-            experience = have >= req ? 100 : Math.max(0, 100 - (req - have) * 15);
+        // Display lists (concrete vocabulary terms) keyed off family membership.
+        List<String> mentionedSkills = SKILL_VOCABULARY.stream().filter(haystack::contains).toList();
+        List<String> matchedSkills = mentionedSkills.stream()
+                .filter(s -> candFamilies.contains(taxonomy.skillFamily(s))).distinct().toList();
+        List<String> missingSkills = mentionedSkills.stream()
+                .filter(s -> !candFamilies.contains(taxonomy.skillFamily(s))).distinct().toList();
+
+        int skills;
+        if (candFamilies.isEmpty()) {
+            skills = 50;                              // no candidate skills on file → can't assess
+        } else if (jobSkillFamilies.isEmpty()) {
+            skills = 25;                              // JD names no recognizable tech skills → weak fit
+        } else {
+            int denom = Math.min(Math.max(jobSkillFamilies.size(), SKILL_DENOM_FLOOR), skillDenomCap);
+            skills = Math.min(100, matchedFamilies.size() * 100 / denom);
             signals++;
         }
 
-        // Role similarity (15%)
-        int roleSim = roleSimilarity(job, ctx.skills(), ctx.targetRole());
-        int role = roleSim < 0 ? 50 : roleSim;
-        if (roleSim >= 0) signals++;
+        // ── Role (25%) — coarse role-family overlap via the taxonomy ────────────────────
+        Set<String> candRoles = taxonomy.roleFamilies(ctx.targetRole());
+        Set<String> jobRoles = taxonomy.roleFamilies(job.getTitle());
+        int matchedRoleCount;
+        int role;
+        if (candRoles.isEmpty() || jobRoles.isEmpty()) {
+            matchedRoleCount = 0;
+            role = 40;                               // unknown on either side → mild, not neutral-50
+        } else {
+            Set<String> roleOverlap = new HashSet<>(candRoles);
+            roleOverlap.retainAll(jobRoles);
+            matchedRoleCount = roleOverlap.size();
+            int denom = Math.min(candRoles.size(), jobRoles.size());
+            role = matchedRoleCount == 0 ? 10 : Math.min(100, roleOverlap.size() * 100 / denom);
+            signals++;
+        }
 
-        // Location (10%)
+        // ── Experience (20%) — seniority-aware; de-prioritize junior roles for seniors ──
+        int experience = experienceScore(job, ctx);
+        if (taxonomy.seniorityLevel(job.getTitle()) != JobTaxonomy.SENIORITY_UNKNOWN
+                || (job.getRequiredExperience() != null && ctx.yearsExperience() != null)) {
+            signals++;
+        }
+
+        // ── Location (10%) ──────────────────────────────────────────────────────────────
         int location;
         boolean jobRemote = "REMOTE".equals(job.getRemoteType()) || Boolean.TRUE.equals(job.getRemote());
         if (p.anyLocationPref()) {
@@ -122,7 +204,7 @@ public class JobScoring {
             location = jobRemote ? 100 : 50;
         }
 
-        // Salary (10%)
+        // ── Salary (3%) ─────────────────────────────────────────────────────────────────
         int salary = 50;
         boolean salSignal = (job.getSalaryMin() != null || job.getSalaryMax() != null)
                 && (p.salaryMin() != null || p.salaryMax() != null);
@@ -131,18 +213,17 @@ public class JobScoring {
             signals++;
         }
 
-        // Visa sponsorship (5%)
+        // ── Visa sponsorship (1%) ───────────────────────────────────────────────────────
         int visa = 50;
         if (p.visaRequired()) {
-            // Candidate needs sponsorship: reward jobs that offer it, penalize those that don't.
             visa = Boolean.TRUE.equals(job.getSponsorshipAvailable()) ? 100
-                    : Boolean.FALSE.equals(job.getSponsorshipAvailable()) ? 0 : 40; // unknown = mild penalty
+                    : Boolean.FALSE.equals(job.getSponsorshipAvailable()) ? 0 : 40;
             signals++;
         } else if (job.getSponsorshipAvailable() != null) {
-            visa = 100; // candidate doesn't need it → never a blocker
+            visa = 100;
         }
 
-        // Work-mode preference (5%)
+        // ── Work-mode preference (1%) ───────────────────────────────────────────────────
         int workMode = 50;
         boolean workModeSignal = p.anyRemotePref() && job.getRemoteType() != null;
         if (workModeSignal) {
@@ -150,13 +231,43 @@ public class JobScoring {
             signals++;
         }
 
-        int total = Math.round(skills * 0.35f + experience * 0.20f + role * 0.15f + location * 0.10f
-                + salary * 0.10f + visa * 0.05f + workMode * 0.05f);
+        int total = Math.round(skills * 0.40f + role * 0.25f + experience * 0.20f + location * 0.10f
+                + salary * 0.03f + visa * 0.01f + workMode * 0.01f);
         total = Math.min(100, Math.max(0, total));
 
         String confidence = signals >= 4 ? "HIGH" : signals >= 2 ? "MEDIUM" : "LOW";
         return new ScoreResultV2(total, matchedSkills, missingSkills,
-                new ScoreBreakdown(skills, experience, role, location, salary, visa, workMode), confidence);
+                new ScoreBreakdown(skills, experience, role, location, salary, visa, workMode), confidence,
+                matchedFamilies.size(), matchedRoleCount);
+    }
+
+    /**
+     * Seniority-aware experience fit. A 12-yr candidate matching a Senior/Lead/Architect role scores
+     * high; the same candidate against an Intern/Junior/Graduate role is strongly de-prioritized
+     * (the old {@code have >= req ? 100} logic rewarded exactly these mismatches). Falls back to the
+     * years-vs-required comparison, then to a neutral 50 only when no signal exists at all.
+     */
+    private int experienceScore(Job job, CandidateContext ctx) {
+        int jobLevel = taxonomy.seniorityLevel(job.getTitle());
+        Integer have = ctx.yearsExperience();
+        int candLevel = taxonomy.seniorityFromYears(have);
+
+        if (jobLevel != JobTaxonomy.SENIORITY_UNKNOWN && candLevel != JobTaxonomy.SENIORITY_UNKNOWN) {
+            int gap = candLevel - jobLevel;             // >0 = candidate over-levelled for the role
+            if (gap == 0) return 100;
+            if (gap == 1) return 90;                    // one rung senior → still a fine fit
+            if (gap >= 2) return Math.max(10, 100 - gap * 30); // over-qualified (e.g. senior → junior)
+            return Math.max(20, 100 + gap * 20);        // under-levelled (job wants more senior)
+        }
+        if (job.getRequiredExperience() != null && have != null) {
+            int req = job.getRequiredExperience();
+            if (have >= req) {
+                // Meets the bar, but a senior candidate against a near-zero requirement is a junior role.
+                return (req <= 1 && have >= 8) ? 45 : 100;
+            }
+            return Math.max(0, 100 - (req - have) * 15);
+        }
+        return 50;                                       // genuinely no signal
     }
 
     /**
@@ -166,14 +277,23 @@ public class JobScoring {
      * scores ~0 (→ rejected by the relevance gate) while "Java Developer" vs "Java Architect" stays high.
      */
     public int roleSimilarity(Job job, List<String> candidateSkills, String targetRole) {
+        return roleSimilarity(job, job.getSkills(), candidateSkills, targetRole);
+    }
+
+    /**
+     * As {@link #roleSimilarity(Job, List, String)} but with the job's skill signal supplied via
+     * {@code effectiveSkills} (AI-enriched normalized skills when available — see
+     * {@code jobs.matching.use-enrichment}). Title/description still come from the job entity.
+     */
+    public int roleSimilarity(Job job, String effectiveSkills, List<String> candidateSkills, String targetRole) {
         Set<String> candTerms = new java.util.HashSet<>(roleTokens(targetRole));
         if (candidateSkills != null) candidateSkills.forEach(s -> { if (s != null) candTerms.add(s.toLowerCase().trim()); });
 
         Set<String> jobTerms = new java.util.HashSet<>(roleTokens(job.getTitle()));
         jobTerms.addAll(extractSkills((job.getTitle() == null ? "" : job.getTitle()) + " "
                 + (job.getDescription() == null ? "" : job.getDescription())));
-        if (job.getSkills() != null) {
-            Arrays.stream(job.getSkills().split(",")).map(String::trim).map(String::toLowerCase)
+        if (effectiveSkills != null) {
+            Arrays.stream(effectiveSkills.split(",")).map(String::trim).map(String::toLowerCase)
                     .filter(s -> !s.isEmpty()).forEach(jobTerms::add);
         }
 
@@ -196,7 +316,8 @@ public class JobScoring {
                 .toList();
     }
 
-    private boolean locationMatches(Job job, PreferenceContext p) {
+    /** Package-private: reused by {@link PreferenceGate} (Phase 2B-5) to avoid duplicating this logic. */
+    boolean locationMatches(Job job, PreferenceContext p) {
         String country = job.getCountry() == null ? "" : job.getCountry().toLowerCase();
         String city = job.getCity() == null ? "" : job.getCity().toLowerCase();
         String loc = job.getLocation() == null ? "" : job.getLocation().toLowerCase();
@@ -207,7 +328,8 @@ public class JobScoring {
         return countryHit || cityHit;
     }
 
-    private boolean remotePrefMatches(String remoteType, PreferenceContext p) {
+    /** Package-private: reused by {@link PreferenceGate} (Phase 2B-5) to avoid duplicating this logic. */
+    boolean remotePrefMatches(String remoteType, PreferenceContext p) {
         return switch (remoteType) {
             case "REMOTE" -> p.remote();
             case "HYBRID" -> p.hybrid();

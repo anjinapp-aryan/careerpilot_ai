@@ -8,11 +8,20 @@ import ResumeOptimization from '@/pages/ResumeOptimization';
 import Jobs from '@/pages/Jobs';
 import Applications from '@/pages/Applications';
 import Workflow from '@/pages/Workflow';
+import AdminDashboard from '@/pages/AdminDashboard';
 import AppShell from '@/components/app-shell/AppShell';
+
+const ADMIN_ROLES = new Set(['OWNER', 'ADMIN']);
 
 function Private({ children }: { children: JSX.Element }) {
   const token = useAuthStore((s) => s.token);
   return token ? children : <Navigate to="/login" replace />;
+}
+
+/** Frontend-side defense in depth — the backend independently 403s non-admins on every call. */
+function AdminOnly({ children }: { children: JSX.Element }) {
+  const role = useAuthStore((s) => s.user?.role);
+  return role && ADMIN_ROLES.has(role) ? children : <Navigate to="/" replace />;
 }
 
 export default function App() {
@@ -34,6 +43,14 @@ export default function App() {
         <Route path="jobs" element={<Jobs />} />
         <Route path="applications" element={<Applications />} />
         <Route path="workflow" element={<Workflow />} />
+        <Route
+          path="admin"
+          element={
+            <AdminOnly>
+              <AdminDashboard />
+            </AdminOnly>
+          }
+        />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

@@ -9,4 +9,7 @@ import java.util.UUID;
 public interface ApplicationRepository extends JpaRepository<Application, UUID> {
     List<Application> findByUserIdOrderByCreatedAtDesc(UUID userId);
     long countByUserIdAndStatus(UUID userId, String status);
+
+    /** Phase 2C-3: the user's most recent application row for a job, if any (decision upsert target). */
+    java.util.Optional<Application> findFirstByUserIdAndJobIdOrderByCreatedAtDesc(UUID userId, UUID jobId);
 }

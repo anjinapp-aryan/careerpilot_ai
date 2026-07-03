@@ -44,7 +44,7 @@ const FILTERS: { value: RecommendedFilter; label: string }[] = [
 ];
 
 function matchTone(score: number): 'success' | 'primary' | 'warning' {
-  if (score >= 75) return 'success';
+  if (score >= 70) return 'success';
   if (score >= 50) return 'primary';
   return 'warning';
 }
@@ -180,7 +180,7 @@ export function RecommendedJobs({ onApply, onSave, busy }: RecommendedJobsProps)
           title={filter === 'all' ? 'No high-confidence matches yet' : 'No matches for this filter'}
           description={
             filter === 'all'
-              ? 'Recommended shows roles scoring 75%+ against your profile. Set your preferences or run a discovery pass to surface more — lower-scoring roles appear under Browse.'
+              ? 'Recommended shows roles scoring 70%+ against your profile with at least one matching role and three matching skills. Set your preferences or run a discovery pass to surface more — lower-scoring roles appear under Browse.'
               : 'Try a different filter, or check the Browse tab for more roles.'
           }
         />

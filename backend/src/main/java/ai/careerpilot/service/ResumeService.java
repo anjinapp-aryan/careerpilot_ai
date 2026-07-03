@@ -2,8 +2,10 @@ package ai.careerpilot.service;
 
 import ai.careerpilot.domain.Resume;
 import ai.careerpilot.repo.ResumeRepository;
+import ai.careerpilot.service.profile.event.ResumeChangedEvent;
 import ai.careerpilot.storage.S3StorageService;
 import org.apache.tika.Tika;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
@@ -18,11 +20,14 @@ public class ResumeService {
 
     private final ResumeRepository resumes;
     private final S3StorageService storage;
+    private final ApplicationEventPublisher events;
     private final Tika tika = new Tika();
 
-    public ResumeService(ResumeRepository resumes, S3StorageService storage) {
+    public ResumeService(ResumeRepository resumes, S3StorageService storage,
+                         ApplicationEventPublisher events) {
         this.resumes = resumes;
         this.storage = storage;
+        this.events = events;
     }
 
     @Transactional
@@ -42,7 +47,11 @@ public class ResumeService {
                 .sizeBytes(file.getSize())
                 .parsedText(parsed)
                 .build();
-        return resumes.save(r);
+        Resume saved = resumes.save(r);
+        // Decoupled: the Candidate Profile module (if enabled) regenerates after commit, async.
+        // Failure there can never affect this upload — see CandidateProfileEventListener.
+        events.publishEvent(ResumeChangedEvent.uploaded(userId, saved.getId()));
+        return saved;
     }
 
     public List<Resume> listForUser(UUID userId) {

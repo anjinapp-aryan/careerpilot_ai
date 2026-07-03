@@ -5,9 +5,15 @@ import ai.careerpilot.api.dto.JobRecommendationDtos.RecommendedJobsResponse;
 import ai.careerpilot.api.dto.JobTelemetryEvent;
 import ai.careerpilot.domain.Job;
 import ai.careerpilot.domain.JobFetchAudit;
+import ai.careerpilot.domain.RecommendationAudit;
 import ai.careerpilot.jobdiscovery.JobAggregationService;
 import ai.careerpilot.jobdiscovery.JobAggregationService.DiscoverySummary;
+import ai.careerpilot.jobdiscovery.JobEmbeddingService;
+import ai.careerpilot.jobdiscovery.enrich.JobAiEnrichmentService;
+import ai.careerpilot.jobdiscovery.dedup.JobDuplicateDetectionService;
+import ai.careerpilot.domain.JobAiEnrichment;
 import ai.careerpilot.repo.JobFetchAuditRepository;
+import ai.careerpilot.repo.RecommendationAuditRepository;
 import ai.careerpilot.security.AuthenticatedUser;
 import ai.careerpilot.service.JobMatchExplanationService;
 import ai.careerpilot.service.JobRecommendationService;
@@ -18,6 +24,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 @RestController
@@ -31,17 +38,29 @@ public class JobController {
     private final JobAggregationService aggregation;
     private final JobFetchAuditRepository audits;
     private final JobMatchExplanationService explanations;
+    private final JobEmbeddingService embeddings;
+    private final JobAiEnrichmentService enrichment;
+    private final JobDuplicateDetectionService dedup;
+    private final RecommendationAuditRepository recommendationAudits;
 
     public JobController(JobService jobs,
                          JobRecommendationService recommendations,
                          JobAggregationService aggregation,
                          JobFetchAuditRepository audits,
-                         JobMatchExplanationService explanations) {
+                         JobMatchExplanationService explanations,
+                         JobEmbeddingService embeddings,
+                         JobAiEnrichmentService enrichment,
+                         JobDuplicateDetectionService dedup,
+                         RecommendationAuditRepository recommendationAudits) {
         this.jobs = jobs;
         this.recommendations = recommendations;
         this.aggregation = aggregation;
         this.audits = audits;
         this.explanations = explanations;
+        this.embeddings = embeddings;
+        this.enrichment = enrichment;
+        this.dedup = dedup;
+        this.recommendationAudits = recommendationAudits;
     }
 
     @GetMapping
@@ -81,9 +100,10 @@ public class JobController {
     }
 
     /**
-     * Phase 2 Domestic/International tabs: read the global discovered-job pool.
-     * {@code scope=domestic} returns jobs in {@code country}; anything else returns
-     * everything outside it (incl. unknown-country jobs).
+     * Domestic/International tabs: read the global discovered-job pool. The {@code scope} selects the
+     * country set, which (when strict scope is enabled) is derived server-side from the authenticated
+     * candidate's profile — the {@code country} param is legacy-only and ignored in strict mode, so
+     * Domestic can never be widened by the client.
      */
     @GetMapping("/discovered")
     public Page<Job> discovered(AuthenticatedUser user,
@@ -95,7 +115,79 @@ public class JobController {
                                 @RequestParam(required = false) String q,
                                 @RequestParam(defaultValue = "0") int page,
                                 @RequestParam(defaultValue = "20") int size) {
-        return jobs.discovered(scope, country, remoteType, sponsorship, relocation, q, page, size);
+        return jobs.discovered(user.userId(), scope, country, remoteType, sponsorship, relocation, q, page, size);
+    }
+
+    /**
+     * Semantic search over the embedded discovered pool (Phase 2 Increment A): embeds {@code q} and
+     * returns the cosine nearest neighbors. Returns an empty list when embeddings are disabled or
+     * nothing is embedded yet — callers should fall back to the keyword {@code /discovered} search.
+     */
+    @GetMapping("/search/semantic")
+    public List<Job> semanticSearch(AuthenticatedUser user,
+                                    @RequestParam String q,
+                                    @RequestParam(defaultValue = "20") int k) {
+        return embeddings.semanticSearch(q, k);
+    }
+
+    /**
+     * Manually embed discovered jobs that have no embedding yet (capped per call). Idempotent and
+     * safe to re-run; a no-op when embeddings are disabled. Returns the number embedded.
+     */
+    @PostMapping("/embeddings/backfill")
+    public Map<String, Integer> backfillEmbeddings(AuthenticatedUser user,
+                                                   @RequestParam(required = false) Integer limit) {
+        int written = limit != null ? embeddings.embedMissingJobs(limit) : embeddings.embedMissingJobs();
+        return Map.of("embedded", written);
+    }
+
+    /**
+     * LLM-enrich discovered jobs that have no enrichment row yet (capped per call). Idempotent and
+     * safe to re-run; a no-op when enrichment is disabled. Returns the number enriched. The "on-demand
+     * batch" half of Increment B (the scheduler runs this nightly).
+     */
+    @PostMapping("/enrich/backfill")
+    public Map<String, Integer> backfillEnrichment(AuthenticatedUser user,
+                                                   @RequestParam(required = false) Integer limit) {
+        int written = limit != null ? enrichment.enrichMissingJobs(limit) : enrichment.enrichMissingJobs();
+        return Map.of("enriched", written);
+    }
+
+    /**
+     * On-demand single-job enrichment: enrich (or re-enrich) one job synchronously. Returns the saved
+     * enrichment, or 404 when enrichment is disabled, the job is unknown, or extraction failed.
+     */
+    @PostMapping("/{id}/enrich")
+    public JobAiEnrichment enrichOne(AuthenticatedUser user, @PathVariable UUID id) {
+        return enrichment.enrichOne(id)
+                .orElseThrow(() -> new org.springframework.web.server.ResponseStatusException(
+                        org.springframework.http.HttpStatus.NOT_FOUND,
+                        "enrichment unavailable (disabled, unknown job, or extraction failed)"));
+    }
+
+    /**
+     * Read-only lookup for the Jobs UI's "AI Insights" expander (Phase 2 Increment D) — returns the
+     * already-stored enrichment row, no LLM call. 404 when the job hasn't been enriched yet (the UI
+     * should treat that as "no insights available", not an error).
+     */
+    @GetMapping("/{id}/enrichment")
+    public JobAiEnrichment getEnrichment(AuthenticatedUser user, @PathVariable UUID id) {
+        return enrichment.getEnrichment(id)
+                .orElseThrow(() -> new org.springframework.web.server.ResponseStatusException(
+                        org.springframework.http.HttpStatus.NOT_FOUND, "no enrichment available for this job"));
+    }
+
+    /**
+     * Detect cross-source duplicates among embedded jobs that haven't been duplicate-checked yet
+     * (capped per call). Idempotent and safe to re-run; a no-op when dedup is disabled. Returns the
+     * number of jobs checked (not the number found duplicate — see GET /api/admin/stats/duplicates
+     * for cluster counts). The "on-demand batch" half of Increment C (the scheduler runs this nightly).
+     */
+    @PostMapping("/dedup/backfill")
+    public Map<String, Integer> backfillDedup(AuthenticatedUser user,
+                                              @RequestParam(required = false) Integer limit) {
+        int checked = limit != null ? dedup.detectDuplicates(limit) : dedup.detectDuplicates();
+        return Map.of("checked", checked);
     }
 
     /**
@@ -141,5 +233,26 @@ public class JobController {
     @GetMapping("/discovery/audit")
     public List<JobFetchAudit> discoveryAudit(AuthenticatedUser user) {
         return audits.findTop20ByOrderByStartedAtDesc();
+    }
+
+    /**
+     * Phase 2B-2 — this user's persisted scoring-breakdown audit trail (one row per scored job per
+     * refresh), letting a future explainability surface answer "why did this job score X" without
+     * re-running the matcher. Empty unless {@code candidate.recommendation.audit-enabled} is on —
+     * the table simply has no rows for anyone when the flag is off, so no flag check is needed here.
+     */
+    @GetMapping("/recommendations/audit")
+    public List<RecommendationAudit> recommendationAudit(AuthenticatedUser user) {
+        return recommendationAudits.findByUserIdOrderByCreatedAtDesc(user.userId());
+    }
+
+    /**
+     * Phase 2B-2 — explicitly recompute the authenticated user's recommendations against the current
+     * discovered pool (the same work a page-0 {@code GET /recommended} already triggers implicitly).
+     * Gives the client an explicit "Refresh matches" action plus a count of what was written.
+     */
+    @PostMapping("/recommendations/rebuild")
+    public Map<String, Integer> rebuildRecommendations(AuthenticatedUser user) {
+        return Map.of("written", recommendations.rebuild(user.userId()));
     }
 }

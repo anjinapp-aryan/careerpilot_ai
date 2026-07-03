@@ -132,6 +132,23 @@ ai:
         base-url: ${OPENROUTER_BASE_URL:https://openrouter.ai/api/v1}
         timeout-ms: 25000
 
+  # ---- Embeddings: pgvector semantic search (Phase 2 Increment A) ----
+  # Gated DARK by default. When enabled, discovered jobs (post-ingest, capped) and resumes (on
+  # upload) get a Gemini text-embedding-004 vector (768-d, matching the vector(768) columns), and
+  # GET /api/jobs/search/semantic does a cosine nearest-neighbor read. Reuses the gemini API key
+  # from ai.gateway.providers.gemini — no separate key. Default off = zero new AI cost / no behavior
+  # change; instant rollback by flipping the flag.
+  embeddings:
+    enabled: ${EMBEDDINGS_ENABLED:false}
+    # gemini-embedding-001 supports outputDimensionality; we request 768 to match the vector(768)
+    # columns. (text-embedding-004 is not available on this API key — it 404s.)
+    model: ${EMBEDDINGS_MODEL:gemini-embedding-001}
+    dimensions: ${EMBEDDINGS_DIMENSIONS:768}
+    # Max characters of source text sent to the embedding API (cost + payload guard).
+    max-chars: ${EMBEDDINGS_MAX_CHARS:8000}
+    # Cap on how many missing-embedding jobs are embedded per discovery run (cost guard).
+    max-per-run: ${EMBEDDINGS_MAX_PER_RUN:200}
+
 # ---- Resilience4j: retry + circuit breaker per provider ----
 resilience4j:
   retry:
@@ -218,13 +235,102 @@ jobs:
   # legacy unthresholded behavior with no redeploy.
   enrich:
     enabled: ${JOB_ENRICH_ENABLED:true}          # keyword classification at ingest
+    # ---- LLM job enrichment (Phase 2 Increment B) ----
+    # Semantic enrichment the keyword tier can't derive (seniority/skills/domains/salary-band/summary),
+    # via the AI Gateway. Stored in the 1:1 job_ai_enrichment table; produced-but-not-consumed in v1
+    # (matching does not read it yet). Gated DARK by default → zero LLM cost / no behavior change.
+    ai:
+      enabled: ${JOBS_ENRICH_AI_ENABLED:false}
+      # Cap on how many missing-enrichment jobs are enriched per run (scheduler + backfill) — cost guard.
+      max-per-run: ${JOBS_ENRICH_AI_MAX_PER_RUN:200}
+      # Max characters of the job description sent to the LLM (cost + payload guard).
+      max-chars: ${JOBS_ENRICH_AI_MAX_CHARS:6000}
+      # Per-call provider preference for this structured-extraction task: prefer a FAST model
+      # (gemini flash) over the default deepseek reasoning model (~68s/job → a few seconds). Still
+      # falls back to the rest of the gateway chain on failure. Comma-separated; first configured wins.
+      providers: ${JOBS_ENRICH_AI_PROVIDERS:gemini}
+  # ---- Fuzzy job deduplication (Phase 2 Increment C) ----
+  # Detects cross-source duplicate postings (same job on RemoteOK and Arbeitnow, say) via embedding
+  # cosine similarity (Increment A) confirmed by title/company text match. Stored in job_duplicates;
+  # produced-but-not-consumed in v1 — Browse/Recommended/Discovered do NOT filter on this yet.
+  # Gated DARK by default → no rows written until explicitly flipped on.
+  dedup:
+    enabled: ${JOBS_DEDUP_ENABLED:false}
+    # Cap on how many unchecked jobs are duplicate-checked per run (scheduler + backfill).
+    max-per-run: ${JOBS_DEDUP_MAX_PER_RUN:200}
+    # Minimum cosine similarity (1 - distance) for a neighbor to even be considered a candidate.
+    embedding-threshold: ${JOBS_DEDUP_EMBEDDING_THRESHOLD:0.92}
+    # Minimum title-token Jaccard similarity required when company names don't match exactly.
+    title-jaccard-threshold: ${JOBS_DEDUP_TITLE_JACCARD_THRESHOLD:0.55}
+  # ---- Industry / job-family quality filter ----
+  # Excludes non-technical families (Marketing/Sales/HR/Recruiter/Support/Finance) from a tech
+  # candidate's recommendations. The candidate's own family is never excluded. Flag-gated for
+  # instant rollback: false = no family-based exclusion (legacy behavior).
+  industry:
+    filter-enabled: ${JOB_INDUSTRY_FILTER:true}
+  # ---- Candidate-signal source for job matching (Phase 1 single-source-of-truth) ----
+  # false (default) = matcher reads candidate signals from the legacy WorkflowRun snapshot +
+  # live candidate_preferences (pre-Phase-1 behavior, unchanged). true = matcher reads from the
+  # canonical CandidateProfile (resolved by CandidateSignalResolver), falling back to legacy only
+  # for users who have no profile row yet. Flip on AFTER profiles are backfilled; instant rollback.
+  matching:
+    profile-source-enabled: ${JOBS_MATCHING_PROFILE_SOURCE_ENABLED:false}
+    # When true, the matcher scores against the AI-enriched normalized_skills (job_ai_enrichment)
+    # instead of the raw, often-generic provider jobs.skills column, for any job that has an
+    # enrichment row — so prose-only listings match a candidate on their real tech stack. Falls back
+    # to the raw skills for unenriched jobs. Requires JOBS_ENRICH_AI_ENABLED to have populated
+    # enrichment. Default off; instant rollback.
+    use-enrichment: ${JOBS_MATCHING_USE_ENRICHMENT:false}
+    # Pre-gate: reject a job before full scoring if role similarity is below this (0-100).
+    # Lowered from 40 → 10: a candidate with many skills needs fewer to appear in the job
+    # description to clear the pre-gate; the 3-factor strict gate is the real quality filter.
+    role-relevance-min: ${JOBS_MATCHING_ROLE_RELEVANCE_MIN:10}
+    # Upper bound for the skill-ratio denominator. A thorough JD names many skill families;
+    # without a cap, matched/allJobFamilies shrinks the more detailed the posting is, so strong
+    # overlap on a rich JD scored LOWER than weak overlap on a thin one (real, relevant roles
+    # landed at 68-69, just under the 70 gate). Cap treats a job as needing at most N core
+    # families. Set very high (e.g. 999) to restore the old uncapped behavior (instant rollback).
+    skill-denom-cap: ${JOBS_MATCHING_SKILL_DENOM_CAP:8}
+    # ---- Phase 2B-5: mandatory preference hard-reject (Step 6) ----
+    # Today work-mode/location/visa are soft weights only (1-10% of the score), so a job that
+    # structurally cannot work for the candidate (e.g. onsite when they set "Remote only") can still
+    # clear the gate on strong skills alone. When true, PreferenceGate rejects such jobs outright,
+    # before scoring — only on an EXPLICIT signal (a stated preference + a known, conflicting job
+    # field); never on missing/unknown data. Default off; instant rollback. See PreferenceGate.java.
+    hard-preference-enabled: ${JOB_HARD_PREFERENCE_ENABLED:false}
+    # ---- Phase 2B-3: MatchCache (Step 11) ----
+    # Skips the rescore + persist cycle in refreshForUser when nothing changed (same resume/profile
+    # version AND same discovered-pool version) since the last refresh, within a 24h TTL. Activates
+    # the provisioned-but-unused Redis. Fails open (always a miss) if Redis is unreachable — never
+    # serves a stale read on a cache error. Default off; instant rollback. See MatchCache.java.
+    cache-enabled: ${JOB_MATCH_CACHE_ENABLED:false}
   recommendation:
     v2-enabled: ${JOB_RECO_V2_ENABLED:true}      # gate Recommended on score+confidence
-    threshold: ${JOB_RECO_THRESHOLD:75}          # min match score for Recommended
+    threshold: ${JOB_RECO_THRESHOLD:70}          # min match score for Recommended + Browse boundary (spec: 70)
+    # Full-spec Recommended gate: score >= gate-min-score AND >= 1 matched role family AND
+    # >= gate-min-skills matched skill families. false = legacy top-N-by-score (instant rollback).
+    strict-gate-enabled: ${JOB_RECO_STRICT_GATE:true}
+    gate-min-score: ${JOB_RECO_GATE_MIN_SCORE:70}
+    gate-min-skills: ${JOB_RECO_GATE_MIN_SKILLS:3}
+    # ---- Phase 2B-1 / 2C-2: action categorization (Step 7 → refined Step 2) ----
+    # Buckets each persisted recommendation by its match score into a 5-tier action category
+    # (AUTO_APPLY_READY >=95, HIGH_PRIORITY 90-94, HUMAN_REVIEW 80-89, RECOMMENDED 70-79, else ARCHIVED)
+    # and a cross-cutting MUST_APPLY flag. Pure function of the score/breakdown — no re-score, no LLM.
+    # Default off → category/must_apply stay NULL, zero behavior change.
+    auto-categorization-enabled: ${JOB_AUTO_CATEGORIZATION_ENABLED:false}
+    # ---- Phase 2C-1: priority engine (Step 4) ----
+    # Computes a separate priority band (CRITICAL/HIGH/MEDIUM/LOW) = match score + additive bonuses
+    # (visa/remote/exact-role/salary/recent). A distinct ranking dimension; never re-orders the existing
+    # match-score-ordered Recommended list. Default off → priority stays NULL, zero behavior change.
+    priority-enabled: ${RECOMMENDATION_PRIORITY_ENABLED:false}
   explain:
     enabled: ${JOB_EXPLAIN_ENABLED:true}         # "Why am I a match?" LLM endpoint
   discovery:
     enabled: ${JOB_DISCOVERY_ENABLED:true}
+    # When true, Domestic/International tabs derive their country set from the candidate's own
+    # profile (home country / preferred countries) instead of the client-supplied country param,
+    # and user-excluded roles are filtered out. Default off → legacy behavior, instant rollback.
+    scope-strict-enabled: ${JOBS_DISCOVERY_SCOPE_STRICT_ENABLED:false}
     # Daily at 06:00. Tighten to hourly later ("0 0 * * * *") with no code change.
     cron: ${JOB_DISCOVERY_CRON:0 0 6 * * *}
     user-agent: ${JOB_DISCOVERY_USER_AGENT:CareerPilotAI/1.0 (+https://careerpilot.ai)}
@@ -243,6 +349,105 @@ jobs:
         base-url: ${JOOBLE_BASE_URL:https://jooble.org}
         api-key: ${JOOBLE_API_KEY:}
         keywords: ${JOOBLE_KEYWORDS:software engineer,data engineer}
+    # ---- Phase 2A: Enterprise Job Lake (SHADOW pipeline) ----
+    # Additive, layered discovery (job_raw → job_normalized → job_lake) that runs ALONGSIDE the
+    # legacy discovery above and NEVER writes into the `jobs` table. Ships DARK: every flag below
+    # defaults false → no rows written, no scheduled run, zero behavior change until explicitly on.
+    # NOTE: the master flag is JOB_LAKE_DISCOVERY_ENABLED, NOT JOB_DISCOVERY_ENABLED — the latter is
+    # already bound to the LEGACY pipeline above (jobs.discovery.enabled), and reusing it would turn
+    # the live pipeline off. Distinct name = no regression.
+    lake:
+      enabled: ${JOB_LAKE_DISCOVERY_ENABLED:false}
+      # Daily at 02:00 UTC (zone pinned in the scheduler). Separate from the legacy 06:00 cron.
+      cron: ${JOB_LAKE_DISCOVERY_CRON:0 0 2 * * *}
+      # Deterministic (AI-free) dedup over job_normalized → job_duplicate_mapping. Default off.
+      dedup-enabled: ${JOB_DISCOVERY_DEDUP_ENABLED:false}
+      # Min title-token Jaccard to confirm a same-(country,city) candidate is the same posting.
+      dedup-title-threshold: ${JOB_LAKE_DEDUP_TITLE_THRESHOLD:0.6}
+      # Software-only pre-store gate (reuses JobTaxonomy). Off → store everything (Step 9). Default off.
+      software-filter-enabled: ${JOB_SOFTWARE_FILTER_ENABLED:false}
+
+# ---- Phase 2C Recommendation Intelligence (human approval + feedback) ----
+# All default DARK — endpoints inert / no rows written until explicitly enabled.
+recommendation:
+  approval:
+    # Gates the /api/recommendations approve|reject|save|archive endpoints, which write to the
+    # existing Application entity (reuse, not a parallel queue). Off → those endpoints return 404.
+    enabled: ${RECOMMENDATION_APPROVAL_ENABLED:false}
+  feedback:
+    # Gates recommendation feedback capture (Step 6): the POST /feedback endpoint AND the automatic
+    # capture from an approve/reject/save/archive decision. Off → no rows written, decisions still work.
+    # Feeds the 2C-5 candidate_behavior_profile.
+    enabled: ${RECOMMENDATION_FEEDBACK_ENABLED:false}
+
+# ---- Phase 2D.1 Resume Tailoring Engine ----
+# All default DARK — endpoints return 404 / worker no-ops until explicitly enabled. The original
+# resume (resumes.s3_key / parsed_text) is never modified; every generation is a new immutable
+# resume_tailoring row. Never runs synchronously inside RecommendationDecisionService.decide() —
+# approval publishes RecommendationApprovedEvent, consumed async/after-commit by
+# ResumeTailoringWorker, so tailoring latency/failures can never affect the approval response.
+resume:
+  tailoring:
+    # Master switch for the engine itself (manual POST /api/resume/tailor + GET endpoints).
+    enabled: ${RESUME_TAILORING_ENABLED:false}
+    # Redis-backed cache keyed on (user, resume version, job version, profile version), 7-day TTL.
+    # Independent of the master switch so caching behavior can be validated separately.
+    cache-enabled: ${RESUME_TAILORING_CACHE_ENABLED:false}
+    trigger-on-approve:
+      # Separate flag: lets the engine be manually testable via the API before the approve-flow
+      # auto-trigger (RecommendationApprovedEvent -> ResumeTailoringWorker) is turned on.
+      enabled: ${RESUME_TAILORING_TRIGGER_ON_APPROVE_ENABLED:false}
+    min-length-chars: ${RESUME_TAILORING_MIN_LENGTH:800}
+    max-length-chars: ${RESUME_TAILORING_MAX_LENGTH:20000}
+    # Phase 2D.1.1 — bounded pool for the async job pipeline (ResumeTailoringJobService), separate
+    # from the app-wide default @Async executor. Small on purpose: each task holds an LLM call for
+    # up to ~2 minutes under provider degradation (see the Phase 2D.1 sign-off's P95 finding).
+    executor:
+      core-pool-size: ${RESUME_TAILORING_EXECUTOR_CORE_POOL_SIZE:2}
+      max-pool-size: ${RESUME_TAILORING_EXECUTOR_MAX_POOL_SIZE:5}
+      queue-capacity: ${RESUME_TAILORING_EXECUTOR_QUEUE_CAPACITY:50}
+    # Phase 2D.1.1 — per-call provider preference passed to AiGatewayService.chat(...,
+    # preferredProviders), tried before the rest of the default ai.gateway.order chain. Gemini
+    # first by default: the live sign-off found DeepSeek's 20s-per-attempt timeout + circuit-breaker
+    # cascade was the dominant cost in every sampled tailoring generation (P95 ~117s). Empty list
+    # falls back to the default gateway order unchanged.
+    preferred-providers: ${RESUME_TAILORING_PREFERRED_PROVIDERS:gemini,groq,deepseek,qwen,openrouter}
+
+# ---- Candidate Intelligence Profile (Phase 1) ----
+# Canonical AI-analyzed profile = resume intelligence merged with a snapshot of
+# candidate_preferences. Ships DARK: enabled=false → event listeners no-op and the
+# /api/candidate-profile endpoints return 404, so there is zero behavior change until
+# explicitly flipped on after validation. Consumed by job matching/discovery once the relevant
+# downstream flag (jobs.matching.profile-source-enabled / candidate.profile.single-source-enabled)
+# is also on.
+candidate:
+  profile:
+    enabled: ${CANDIDATE_PROFILE_ENABLED:false}
+    # Cap on resume characters sent to the LLM extraction (cost/latency guard).
+    max-resume-chars: ${CANDIDATE_PROFILE_MAX_RESUME_CHARS:12000}
+    backfill:
+      # Pause between LLM extractions during the one-time enablement backfill, so generating
+      # profiles for every existing user stays within the shared provider rate limits.
+      throttle-ms: ${CANDIDATE_PROFILE_BACKFILL_THROTTLE_MS:500}
+    # Phase 1.5 — when true, Domestic/International discovery and excluded-role filtering read the
+    # canonical CandidateProfile (via CandidateSignalResolver.resolveLocationSignals), falling back
+    # to live candidate_preferences for users with no profile row yet. Independent of
+    # jobs.matching.profile-source-enabled (which only gates the Recommended-tab matcher) so the two
+    # consumer groups can be migrated on separate schedules. Default off; instant rollback.
+    single-source-enabled: ${PROFILE_SINGLE_SOURCE_ENABLED:false}
+    rebuild:
+      # Phase 1.5 — weekly catch-up rebuild for users whose cached extraction has drifted from their
+      # latest resume (e.g. after a prompt/schema change). Reuses the same idempotent
+      # needsBackfill/backfillUser fingerprint check as the one-time enablement backfill, so a
+      # crashed run simply re-evaluates staleness next time. Default off; instant rollback.
+      enabled: ${CANDIDATE_PROFILE_REBUILD_ENABLED:false}
+      cron: ${CANDIDATE_PROFILE_REBUILD_CRON:0 0 2 ? * SUN}
+      max-per-run: ${CANDIDATE_PROFILE_REBUILD_MAX_PER_RUN:200}
+  recommendation:
+    # Phase 1.5 — persists the per-job scoring breakdown (skill/role/preference/location/visa/salary/
+    # final) from JobScoring.scoreV2 into recommendation_audit, for explainability. Purely additive
+    # side effect after scoring; never affects the returned recommendation. Default off.
+    audit-enabled: ${CANDIDATE_RECOMMENDATION_AUDIT_ENABLED:false}
 
 logging:
   level:

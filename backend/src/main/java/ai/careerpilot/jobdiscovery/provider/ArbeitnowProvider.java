@@ -60,7 +60,8 @@ public class ArbeitnowProvider extends AbstractWebJobProvider {
                     str(m.get("description")),
                     stringList(m.get("tags")),
                     str(m.get("url")),
-                    epochSeconds(m.get("created_at"))));
+                    epochSeconds(m.get("created_at")),
+                    m));   // capture raw payload for the Job Lake (ignored by legacy normalizer)
         }
         log.info("arbeitnow: fetched {} jobs", jobs.size());
         return jobs;

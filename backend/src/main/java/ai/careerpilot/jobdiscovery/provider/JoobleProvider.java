@@ -86,7 +86,8 @@ public class JoobleProvider extends AbstractWebJobProvider {
                     str(m.get("snippet")),
                     List.of(),              // skills inferred by the normalizer
                     str(m.get("link")),
-                    isoInstant(m.get("updated"))));
+                    isoInstant(m.get("updated")),
+                    m));   // capture raw payload for the Job Lake (ignored by legacy normalizer)
         }
         return jobs;
     }

@@ -43,6 +43,8 @@ public class Job {
     @Column(name = "relocation_support") private Boolean relocationSupport;
     @Column(name = "company_size") private String companySize;          // STARTUP | SMB | MID | ENTERPRISE
     @Column(name = "required_experience") private Integer requiredExperience;
+    // Industry/job-family classification (keyword-derived at ingest; drives the quality filter).
+    @Column(name = "job_family") private String jobFamily;              // TECH | MARKETING | SALES | HR | RECRUITER | SUPPORT | FINANCE | OTHER
 
     @CreationTimestamp @Column(name = "created_at", updatable = false) private Instant createdAt;
 }

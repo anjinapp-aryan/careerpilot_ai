@@ -5,9 +5,11 @@ import ai.careerpilot.domain.ResumeVersion;
 import ai.careerpilot.kafka.WorkflowEventProducer;
 import ai.careerpilot.repo.ResumeRepository;
 import ai.careerpilot.repo.ResumeVersionRepository;
+import ai.careerpilot.service.profile.event.ResumeChangedEvent;
 import ai.careerpilot.storage.S3StorageService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -31,15 +33,17 @@ public class ResumeVersionService {
     private final ResumeDocumentService documents;
     private final S3StorageService storage;
     private final WorkflowEventProducer events;
+    private final ApplicationEventPublisher appEvents;
 
     public ResumeVersionService(ResumeVersionRepository versions, ResumeRepository resumes,
                                 ResumeDocumentService documents, S3StorageService storage,
-                                WorkflowEventProducer events) {
+                                WorkflowEventProducer events, ApplicationEventPublisher appEvents) {
         this.versions = versions;
         this.resumes = resumes;
         this.documents = documents;
         this.storage = storage;
         this.events = events;
+        this.appEvents = appEvents;
     }
 
     public record NewVersion(
@@ -99,6 +103,10 @@ public class ResumeVersionService {
                 "versionId", saved.getId().toString(),
                 "versionNumber", next,
                 "userId", req.userId().toString())));
+
+        // Decoupled: an optimized resume regenerates the Candidate Profile (if enabled) after
+        // commit, async. Failure there never affects optimization — see CandidateProfileEventListener.
+        appEvents.publishEvent(ResumeChangedEvent.optimized(req.userId(), req.resumeId()));
         return saved;
     }
 

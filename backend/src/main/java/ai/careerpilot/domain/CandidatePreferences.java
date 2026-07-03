@@ -22,9 +22,19 @@ public class CandidatePreferences {
     @Column(name = "user_id")
     private UUID userId;
 
+    /**
+     * Candidate's home country — the editable source; snapshotted onto {@code CandidateProfile}
+     * on every regeneration. Domestic discovery resolves it via
+     * {@code CandidateSignalResolver#resolveLocationSignals}, which reads this column directly
+     * unless {@code candidate.profile.single-source-enabled} is on and a profile row exists.
+     */
+    @Column(name = "home_country") private String homeCountry;
+
     @Column(name = "preferred_countries", columnDefinition = "text") private String preferredCountries;
     @Column(name = "preferred_cities", columnDefinition = "text") private String preferredCities;
     @Column(name = "preferred_roles", columnDefinition = "text") private String preferredRoles;
+    /** Comma-joined role/family names the user never wants recommended (e.g. "Sales,Marketing"). */
+    @Column(name = "excluded_roles", columnDefinition = "text") private String excludedRoles;
 
     @Column(name = "remote_preference", nullable = false) private boolean remotePreference;
     @Column(name = "hybrid_preference", nullable = false) private boolean hybridPreference;

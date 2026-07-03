@@ -2,12 +2,15 @@ package ai.careerpilot.service;
 
 import ai.careerpilot.domain.Application;
 import ai.careerpilot.domain.JobRecommendation;
+import ai.careerpilot.domain.RecommendationAudit;
 import ai.careerpilot.repo.ApplicationRepository;
 import ai.careerpilot.repo.JobRecommendationRepository;
 import ai.careerpilot.repo.RecommendationAuditRepository;
+import ai.careerpilot.resumetailoring.event.RecommendationApprovedEvent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -53,15 +56,18 @@ public class RecommendationDecisionService {
     private final ApplicationRepository apps;
     private final JobRecommendationRepository recommendations;
     private final RecommendationAuditRepository audit;
+    private final ApplicationEventPublisher events;
     private final boolean enabled;
 
     public RecommendationDecisionService(ApplicationRepository apps,
                                          JobRecommendationRepository recommendations,
                                          RecommendationAuditRepository audit,
+                                         ApplicationEventPublisher events,
                                          @Value("${recommendation.approval.enabled:false}") boolean enabled) {
         this.apps = apps;
         this.recommendations = recommendations;
         this.audit = audit;
+        this.events = events;
         this.enabled = enabled;
     }
 
@@ -102,12 +108,20 @@ public class RecommendationDecisionService {
         Application saved = apps.save(app);
 
         // Best-effort replay stamp — only when a scoring-audit row exists (audit flag was on at match time).
-        audit.findFirstByUserIdAndJobIdOrderByCreatedAtDesc(userId, jobId).ifPresent(row -> {
-            row.setDecision(normalized.toUpperCase());
-            audit.save(row);
-        });
+        RecommendationAudit auditRow = audit.findFirstByUserIdAndJobIdOrderByCreatedAtDesc(userId, jobId)
+                .map(row -> { row.setDecision(normalized.toUpperCase()); return audit.save(row); })
+                .orElse(null);
 
         log.info("RECO_DECISION user={} job={} action={} status={}", userId, jobId, normalized, status);
+
+        // Phase 2D.1 — approving a job kicks off resume tailoring, decoupled via a Spring event.
+        // Published unconditionally; the async listener is itself flag-gated and swallows failures,
+        // so this line can never affect the approval response (fire-and-forget, no listener lookup here).
+        if ("approve".equals(normalized)) {
+            events.publishEvent(new RecommendationApprovedEvent(userId, orgId, jobId, saved.getId(),
+                    auditRow != null ? auditRow.getId() : null));
+        }
+
         return saved;
     }
 }

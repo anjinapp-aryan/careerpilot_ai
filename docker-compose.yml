@@ -121,6 +121,17 @@ services:
       RECOMMENDATION_APPROVAL_ENABLED: ${RECOMMENDATION_APPROVAL_ENABLED:-false}
       # Phase 2C-4 — recommendation feedback capture (feeds the behavior profile). Default DARK.
       RECOMMENDATION_FEEDBACK_ENABLED: ${RECOMMENDATION_FEEDBACK_ENABLED:-false}
+      # Phase 2D.1 — Resume Tailoring Engine (per-job LLM rewrite, never modifies the original resume). Default DARK.
+      RESUME_TAILORING_ENABLED: ${RESUME_TAILORING_ENABLED:-false}
+      RESUME_TAILORING_CACHE_ENABLED: ${RESUME_TAILORING_CACHE_ENABLED:-false}
+      RESUME_TAILORING_TRIGGER_ON_APPROVE_ENABLED: ${RESUME_TAILORING_TRIGGER_ON_APPROVE_ENABLED:-false}
+      RESUME_TAILORING_MIN_LENGTH: ${RESUME_TAILORING_MIN_LENGTH:-800}
+      RESUME_TAILORING_MAX_LENGTH: ${RESUME_TAILORING_MAX_LENGTH:-20000}
+      # Phase 2D.1.1 — bounded async executor + provider-routing override (production hardening).
+      RESUME_TAILORING_EXECUTOR_CORE_POOL_SIZE: ${RESUME_TAILORING_EXECUTOR_CORE_POOL_SIZE:-2}
+      RESUME_TAILORING_EXECUTOR_MAX_POOL_SIZE: ${RESUME_TAILORING_EXECUTOR_MAX_POOL_SIZE:-5}
+      RESUME_TAILORING_EXECUTOR_QUEUE_CAPACITY: ${RESUME_TAILORING_EXECUTOR_QUEUE_CAPACITY:-50}
+      RESUME_TAILORING_PREFERRED_PROVIDERS: ${RESUME_TAILORING_PREFERRED_PROVIDERS:-gemini,groq,deepseek,qwen,openrouter}
       # Domestic/International scope derived server-side from the candidate (home/preferred countries).
       JOBS_DISCOVERY_SCOPE_STRICT_ENABLED: ${JOBS_DISCOVERY_SCOPE_STRICT_ENABLED:-false}
       # Adzuna keyed provider — sources jobs PER COUNTRY (incl. India 'in'). Empty keys = provider

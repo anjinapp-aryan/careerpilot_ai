@@ -6,9 +6,12 @@ import ai.careerpilot.domain.RecommendationAudit;
 import ai.careerpilot.repo.ApplicationRepository;
 import ai.careerpilot.repo.JobRecommendationRepository;
 import ai.careerpilot.repo.RecommendationAuditRepository;
+import ai.careerpilot.resumetailoring.event.RecommendationApprovedEvent;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.springframework.context.ApplicationEventPublisher;
 
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -32,7 +35,7 @@ class RecommendationDecisionServiceTest {
                                                   JobRecommendationRepository recs,
                                                   RecommendationAuditRepository audit) {
         when(apps.save(any(Application.class))).thenAnswer(inv -> inv.getArgument(0));
-        return new RecommendationDecisionService(apps, recs, audit, true);
+        return new RecommendationDecisionService(apps, recs, audit, mock(ApplicationEventPublisher.class), true);
     }
 
     @Test
@@ -93,7 +96,7 @@ class RecommendationDecisionServiceTest {
         JobRecommendationRepository recs = mock(JobRecommendationRepository.class);
         RecommendationAuditRepository audit = mock(RecommendationAuditRepository.class);
         assertThrows(IllegalArgumentException.class,
-                () -> new RecommendationDecisionService(apps, recs, audit, true)
+                () -> new RecommendationDecisionService(apps, recs, audit, mock(ApplicationEventPublisher.class), true)
                         .decide(userId, orgId, jobId, "frobnicate", null));
         verifyNoInteractions(apps);
     }
@@ -122,6 +125,50 @@ class RecommendationDecisionServiceTest {
         assertFalse(RecommendationDecisionService.isValidAction("frobnicate"));
         assertFalse(RecommendationDecisionService.isValidAction(null));
         assertTrue(new RecommendationDecisionService(mock(ApplicationRepository.class),
-                mock(JobRecommendationRepository.class), mock(RecommendationAuditRepository.class), true).isEnabled());
+                mock(JobRecommendationRepository.class), mock(RecommendationAuditRepository.class),
+                mock(ApplicationEventPublisher.class), true).isEnabled());
+    }
+
+    @Test
+    void approvePublishesRecommendationApprovedEventWithAuditIdWhenPresent() {
+        ApplicationRepository apps = mock(ApplicationRepository.class);
+        JobRecommendationRepository recs = mock(JobRecommendationRepository.class);
+        RecommendationAuditRepository audit = mock(RecommendationAuditRepository.class);
+        ApplicationEventPublisher events = mock(ApplicationEventPublisher.class);
+        when(apps.save(any(Application.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(apps.findFirstByUserIdAndJobIdOrderByCreatedAtDesc(userId, jobId)).thenReturn(Optional.empty());
+        when(recs.findByUserIdAndJobId(userId, jobId)).thenReturn(Optional.empty());
+        RecommendationAudit row = RecommendationAudit.builder().userId(userId).jobId(jobId).build();
+        row.setId(UUID.randomUUID());
+        when(audit.findFirstByUserIdAndJobIdOrderByCreatedAtDesc(userId, jobId)).thenReturn(Optional.of(row));
+        when(audit.save(any(RecommendationAudit.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        new RecommendationDecisionService(apps, recs, audit, events, true)
+                .decide(userId, orgId, jobId, "approve", null);
+
+        ArgumentCaptor<RecommendationApprovedEvent> captor = ArgumentCaptor.forClass(RecommendationApprovedEvent.class);
+        verify(events).publishEvent(captor.capture());
+        assertEquals(userId, captor.getValue().userId());
+        assertEquals(jobId, captor.getValue().jobId());
+        assertEquals(row.getId(), captor.getValue().recommendationAuditId());
+    }
+
+    @Test
+    void rejectSaveArchiveDoNotPublishTailoringEvent() {
+        for (String action : List.of("reject", "save", "archive")) {
+            ApplicationRepository apps = mock(ApplicationRepository.class);
+            JobRecommendationRepository recs = mock(JobRecommendationRepository.class);
+            RecommendationAuditRepository audit = mock(RecommendationAuditRepository.class);
+            ApplicationEventPublisher events = mock(ApplicationEventPublisher.class);
+            when(apps.save(any(Application.class))).thenAnswer(inv -> inv.getArgument(0));
+            when(apps.findFirstByUserIdAndJobIdOrderByCreatedAtDesc(userId, jobId)).thenReturn(Optional.empty());
+            when(recs.findByUserIdAndJobId(userId, jobId)).thenReturn(Optional.empty());
+            when(audit.findFirstByUserIdAndJobIdOrderByCreatedAtDesc(userId, jobId)).thenReturn(Optional.empty());
+
+            new RecommendationDecisionService(apps, recs, audit, events, true)
+                    .decide(userId, orgId, jobId, action, null);
+
+            verifyNoInteractions(events);
+        }
     }
 }

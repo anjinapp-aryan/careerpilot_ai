@@ -2,17 +2,24 @@ package ai.careerpilot.api;
 
 import ai.careerpilot.ai.AiGatewayService;
 import ai.careerpilot.ai.AiGatewayProperties;
+import ai.careerpilot.domain.ResumeTailoringJob;
+import ai.careerpilot.repo.ResumeTailoringJobRepository;
 import ai.careerpilot.service.profile.CandidateProfileMetrics;
 import ai.careerpilot.jobdiscovery.enrich.JobAiEnrichmentMetrics;
 import ai.careerpilot.jobdiscovery.cache.MatchCacheMetrics;
+import ai.careerpilot.resumetailoring.cache.ResumeTailoringCacheMetrics;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.time.Duration;
+import java.time.Instant;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -52,15 +59,31 @@ public class DiagnosticsController {
     @Value("${jobs.matching.cache-enabled:false}")
     private boolean matchCacheEnabled;
 
+    @Value("${resume.tailoring.enabled:false}")
+    private boolean resumeTailoringEnabled;
+
+    @Value("${resume.tailoring.preferred-providers:}")
+    private List<String> resumeTailoringPreferredProviders;
+
+    private final ResumeTailoringCacheMetrics resumeTailoringMetrics;
+    private final ResumeTailoringJobRepository resumeTailoringJobs;
+    private final ThreadPoolTaskExecutor resumeTailoringExecutor;
+
     public DiagnosticsController(AiGatewayService gateway, AiGatewayProperties props,
                                  CandidateProfileMetrics candidateProfileMetrics,
                                  JobAiEnrichmentMetrics jobEnrichmentMetrics,
-                                 MatchCacheMetrics matchCacheMetrics) {
+                                 MatchCacheMetrics matchCacheMetrics,
+                                 ResumeTailoringCacheMetrics resumeTailoringMetrics,
+                                 ResumeTailoringJobRepository resumeTailoringJobs,
+                                 ThreadPoolTaskExecutor resumeTailoringExecutor) {
         this.gateway = gateway;
         this.props = props;
         this.candidateProfileMetrics = candidateProfileMetrics;
         this.jobEnrichmentMetrics = jobEnrichmentMetrics;
         this.matchCacheMetrics = matchCacheMetrics;
+        this.resumeTailoringMetrics = resumeTailoringMetrics;
+        this.resumeTailoringJobs = resumeTailoringJobs;
+        this.resumeTailoringExecutor = resumeTailoringExecutor;
     }
 
     @GetMapping("/ai")
@@ -137,6 +160,81 @@ public class DiagnosticsController {
         result.put("enabled", matchCacheEnabled);
         result.putAll(matchCacheMetrics.snapshot());
         log.info("Match Cache Diagnostics endpoint accessed");
+        return result;
+    }
+
+    /** Phase 2D.1 — Resume Tailoring engine metrics (counts/latency only — no resume content). */
+    @GetMapping("/resume-tailoring")
+    public Map<String, Object> resumeTailoringDiagnostics() {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("enabled", resumeTailoringEnabled);
+        result.putAll(resumeTailoringMetrics.snapshot());
+        log.info("Resume Tailoring Diagnostics endpoint accessed");
+        return result;
+    }
+
+    /** Phase 2D.1.1 — live queue state: job counts by status + the bounded executor's own stats. */
+    @GetMapping("/resume-tailoring/queue")
+    public Map<String, Object> resumeTailoringQueueDiagnostics() {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("queued", resumeTailoringJobs.countByStatus(ResumeTailoringJob.STATUS_QUEUED));
+        result.put("running", resumeTailoringJobs.countByStatus(ResumeTailoringJob.STATUS_RUNNING));
+        Instant since = Instant.now().minus(Duration.ofHours(24));
+        result.put("succeededLast24h", resumeTailoringJobs.countByStatusAndCreatedAtAfter(ResumeTailoringJob.STATUS_SUCCEEDED, since));
+        result.put("failedLast24h", resumeTailoringJobs.countByStatusAndCreatedAtAfter(ResumeTailoringJob.STATUS_FAILED, since));
+        long oldestQueuedAgeSeconds = resumeTailoringJobs.findFirstByStatusOrderByCreatedAtAsc(ResumeTailoringJob.STATUS_QUEUED)
+                .map(j -> Duration.between(j.getCreatedAt(), Instant.now()).getSeconds())
+                .orElse(0L);
+        result.put("oldestQueuedAgeSeconds", oldestQueuedAgeSeconds);
+        result.put("executorActiveCount", resumeTailoringExecutor.getActiveCount());
+        result.put("executorPoolSize", resumeTailoringExecutor.getPoolSize());
+        result.put("executorQueueSize", resumeTailoringExecutor.getThreadPoolExecutor().getQueue().size());
+        result.put("executorQueueCapacity", resumeTailoringExecutor.getQueueCapacity());
+        log.info("Resume Tailoring Queue Diagnostics endpoint accessed");
+        return result;
+    }
+
+    /**
+     * Phase 2D.1.1 — computed UP/DEGRADED/DOWN verdict for the tailoring engine, mirroring
+     * {@code AiGatewayService.health()}'s shape. DOWN when the executor queue is saturated or no
+     * preferred provider is reachable; DEGRADED on an elevated recent failure rate; NOT_CONFIGURED
+     * when the engine flag is off.
+     */
+    @GetMapping("/resume-tailoring/health")
+    public Map<String, Object> resumeTailoringHealth() {
+        Map<String, Object> result = new LinkedHashMap<>();
+        if (!resumeTailoringEnabled) {
+            result.put("status", "NOT_CONFIGURED");
+            return result;
+        }
+
+        int queueSize = resumeTailoringExecutor.getThreadPoolExecutor().getQueue().size();
+        boolean queueSaturated = queueSize >= resumeTailoringExecutor.getQueueCapacity();
+
+        List<String> preferred = resumeTailoringPreferredProviders == null || resumeTailoringPreferredProviders.isEmpty()
+                ? props.getOrder() : resumeTailoringPreferredProviders;
+        boolean anyPreferredProviderUp = gateway.providerStatuses().stream()
+                .anyMatch(p -> preferred.contains(p.get("name")) && "UP".equals(p.get("status")));
+
+        List<ResumeTailoringJob> recent = resumeTailoringJobs.findTop20ByOrderByCreatedAtDesc();
+        long failed = recent.stream().filter(j -> ResumeTailoringJob.STATUS_FAILED.equals(j.getStatus())).count();
+        double failureRate = recent.isEmpty() ? 0.0 : (double) failed / recent.size();
+
+        String status;
+        if (queueSaturated || !anyPreferredProviderUp) {
+            status = "DOWN";
+        } else if (failureRate > 0.30) {
+            status = "DEGRADED";
+        } else {
+            status = "UP";
+        }
+
+        result.put("status", status);
+        result.put("queueSaturated", queueSaturated);
+        result.put("anyPreferredProviderUp", anyPreferredProviderUp);
+        result.put("recentFailureRate", failureRate);
+        result.put("recentSampleSize", recent.size());
+        log.info("Resume Tailoring Health endpoint accessed — status={}", status);
         return result;
     }
 

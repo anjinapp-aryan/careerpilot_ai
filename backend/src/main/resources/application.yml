@@ -380,6 +380,39 @@ recommendation:
     # Feeds the 2C-5 candidate_behavior_profile.
     enabled: ${RECOMMENDATION_FEEDBACK_ENABLED:false}
 
+# ---- Phase 2D.1 Resume Tailoring Engine ----
+# All default DARK — endpoints return 404 / worker no-ops until explicitly enabled. The original
+# resume (resumes.s3_key / parsed_text) is never modified; every generation is a new immutable
+# resume_tailoring row. Never runs synchronously inside RecommendationDecisionService.decide() —
+# approval publishes RecommendationApprovedEvent, consumed async/after-commit by
+# ResumeTailoringWorker, so tailoring latency/failures can never affect the approval response.
+resume:
+  tailoring:
+    # Master switch for the engine itself (manual POST /api/resume/tailor + GET endpoints).
+    enabled: ${RESUME_TAILORING_ENABLED:false}
+    # Redis-backed cache keyed on (user, resume version, job version, profile version), 7-day TTL.
+    # Independent of the master switch so caching behavior can be validated separately.
+    cache-enabled: ${RESUME_TAILORING_CACHE_ENABLED:false}
+    trigger-on-approve:
+      # Separate flag: lets the engine be manually testable via the API before the approve-flow
+      # auto-trigger (RecommendationApprovedEvent -> ResumeTailoringWorker) is turned on.
+      enabled: ${RESUME_TAILORING_TRIGGER_ON_APPROVE_ENABLED:false}
+    min-length-chars: ${RESUME_TAILORING_MIN_LENGTH:800}
+    max-length-chars: ${RESUME_TAILORING_MAX_LENGTH:20000}
+    # Phase 2D.1.1 — bounded pool for the async job pipeline (ResumeTailoringJobService), separate
+    # from the app-wide default @Async executor. Small on purpose: each task holds an LLM call for
+    # up to ~2 minutes under provider degradation (see the Phase 2D.1 sign-off's P95 finding).
+    executor:
+      core-pool-size: ${RESUME_TAILORING_EXECUTOR_CORE_POOL_SIZE:2}
+      max-pool-size: ${RESUME_TAILORING_EXECUTOR_MAX_POOL_SIZE:5}
+      queue-capacity: ${RESUME_TAILORING_EXECUTOR_QUEUE_CAPACITY:50}
+    # Phase 2D.1.1 — per-call provider preference passed to AiGatewayService.chat(...,
+    # preferredProviders), tried before the rest of the default ai.gateway.order chain. Gemini
+    # first by default: the live sign-off found DeepSeek's 20s-per-attempt timeout + circuit-breaker
+    # cascade was the dominant cost in every sampled tailoring generation (P95 ~117s). Empty list
+    # falls back to the default gateway order unchanged.
+    preferred-providers: ${RESUME_TAILORING_PREFERRED_PROVIDERS:gemini,groq,deepseek,qwen,openrouter}
+
 # ---- Candidate Intelligence Profile (Phase 1) ----
 # Canonical AI-analyzed profile = resume intelligence merged with a snapshot of
 # candidate_preferences. Ships DARK: enabled=false → event listeners no-op and the

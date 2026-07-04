@@ -413,6 +413,92 @@ resume:
     # falls back to the default gateway order unchanged.
     preferred-providers: ${RESUME_TAILORING_PREFERRED_PROVIDERS:gemini,groq,deepseek,qwen,openrouter}
 
+# ---- Phase 2D.2 ATS Optimization Engine ----
+# Analyzes the LATEST tailored resume (from 2D.1) against its job: a deterministic ATS score
+# (reuses ResumeImprovementCalculator) plus LLM-generated matched/missing keywords and
+# optimization suggestions. Async job pipeline from day one (see resume.tailoring.executor's
+# comment for why) — no synchronous version ever shipped. All default DARK.
+ats:
+  optimization:
+    enabled: ${ATS_OPTIMIZATION_ENABLED:false}
+    trigger-on-tailoring:
+      # Separate flag: auto-triggers on ResumeTailoredEvent (published once a tailoring succeeds).
+      # Independent of `enabled` so the engine stays manually testable via the API first.
+      enabled: ${ATS_OPTIMIZATION_TRIGGER_ON_TAILORING_ENABLED:false}
+    executor:
+      core-pool-size: ${ATS_OPTIMIZATION_EXECUTOR_CORE_POOL_SIZE:2}
+      max-pool-size: ${ATS_OPTIMIZATION_EXECUTOR_MAX_POOL_SIZE:5}
+      queue-capacity: ${ATS_OPTIMIZATION_EXECUTOR_QUEUE_CAPACITY:50}
+    # No new provider-routing env var — reuses the existing ai.gateway.routing.atsOptimization
+    # list above (previously loaded-but-unused smart-router scaffolding).
+
+# ---- Phase 2D.3 Gap Analysis Engine (deterministic, non-LLM) ----
+# Triggered by AtsOptimizedEvent. All default DARK. Cache is versioned on (tailoringId,
+# atsAnalysisId), 7-day TTL, fail-open (deterministic recompute is always safe).
+gap:
+  analysis:
+    enabled: ${GAP_ANALYSIS_ENABLED:false}
+    trigger:
+      enabled: ${GAP_ANALYSIS_TRIGGER_ENABLED:false}
+    cache-enabled: ${GAP_ANALYSIS_CACHE_ENABLED:true}
+    executor:
+      core-pool-size: ${GAP_ANALYSIS_EXECUTOR_CORE_POOL_SIZE:2}
+      max-pool-size: ${GAP_ANALYSIS_EXECUTOR_MAX_POOL_SIZE:4}
+      queue-capacity: ${GAP_ANALYSIS_EXECUTOR_QUEUE_CAPACITY:100}
+
+# ---- Phase 2D.4 ATS Explainability Engine (deterministic, non-LLM) ----
+# Triggered by GapAnalysisCompletedEvent. All default DARK.
+ats.explainability:
+  enabled: ${ATS_EXPLAINABILITY_ENABLED:false}
+  trigger:
+    enabled: ${ATS_EXPLAINABILITY_TRIGGER_ENABLED:false}
+  executor:
+    core-pool-size: ${ATS_EXPLAINABILITY_EXECUTOR_CORE_POOL_SIZE:2}
+    max-pool-size: ${ATS_EXPLAINABILITY_EXECUTOR_MAX_POOL_SIZE:4}
+    queue-capacity: ${ATS_EXPLAINABILITY_EXECUTOR_QUEUE_CAPACITY:100}
+
+# ---- Phase 2D.5 Cover Letter Engine (LLM-backed, validator-guarded) ----
+# Triggered by AtsExplainabilityCompletedEvent. All default DARK. Validator rejects fabricated
+# credential claims and letters that don't name the target company.
+cover:
+  letter:
+    enabled: ${COVER_LETTER_ENABLED:false}
+    trigger:
+      enabled: ${COVER_LETTER_TRIGGER_ENABLED:false}
+    cache-enabled: ${COVER_LETTER_CACHE_ENABLED:true}
+    min-length-chars: ${COVER_LETTER_MIN_LENGTH:300}
+    max-length-chars: ${COVER_LETTER_MAX_LENGTH:6000}
+    executor:
+      core-pool-size: ${COVER_LETTER_EXECUTOR_CORE_POOL_SIZE:2}
+      max-pool-size: ${COVER_LETTER_EXECUTOR_MAX_POOL_SIZE:5}
+      queue-capacity: ${COVER_LETTER_EXECUTOR_QUEUE_CAPACITY:50}
+
+# ---- Phase 2D.6 Application Package Builder (deterministic assembly by reference) ----
+# Triggered by CoverLetterCompletedEvent. All default DARK.
+application:
+  package:
+    enabled: ${APPLICATION_PACKAGE_ENABLED:false}
+    trigger:
+      enabled: ${APPLICATION_PACKAGE_TRIGGER_ENABLED:false}
+    cache-enabled: ${APPLICATION_PACKAGE_CACHE_ENABLED:true}
+    executor:
+      core-pool-size: ${APPLICATION_PACKAGE_EXECUTOR_CORE_POOL_SIZE:2}
+      max-pool-size: ${APPLICATION_PACKAGE_EXECUTOR_MAX_POOL_SIZE:4}
+      queue-capacity: ${APPLICATION_PACKAGE_EXECUTOR_QUEUE_CAPACITY:100}
+
+# ---- Phase 2D.7 Auto Apply Package Preparation (deterministic; PREPARATION ONLY, no automation) ----
+# Triggered by ApplicationPackageReadyEvent. All default DARK.
+auto:
+  apply:
+    package:
+      enabled: ${AUTO_APPLY_PACKAGE_ENABLED:false}
+    trigger:
+      enabled: ${AUTO_APPLY_TRIGGER_ENABLED:false}
+    executor:
+      core-pool-size: ${AUTO_APPLY_EXECUTOR_CORE_POOL_SIZE:2}
+      max-pool-size: ${AUTO_APPLY_EXECUTOR_MAX_POOL_SIZE:4}
+      queue-capacity: ${AUTO_APPLY_EXECUTOR_QUEUE_CAPACITY:100}
+
 # ---- Candidate Intelligence Profile (Phase 1) ----
 # Canonical AI-analyzed profile = resume intelligence merged with a snapshot of
 # candidate_preferences. Ships DARK: enabled=false → event listeners no-op and the

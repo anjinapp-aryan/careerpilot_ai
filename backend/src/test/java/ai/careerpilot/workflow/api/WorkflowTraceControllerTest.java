@@ -2,6 +2,8 @@ package ai.careerpilot.workflow.api;
 
 import ai.careerpilot.security.AuthenticatedUser;
 import ai.careerpilot.workflow.trace.WorkflowTraceDtos.CorrelationDiagnosticsDto;
+import ai.careerpilot.workflow.trace.WorkflowTraceDtos.WorkflowEventDto;
+import ai.careerpilot.workflow.trace.WorkflowTraceDtos.WorkflowGraphDto;
 import ai.careerpilot.workflow.trace.WorkflowTraceDtos.WorkflowSummaryDto;
 import ai.careerpilot.workflow.trace.WorkflowTraceDtos.WorkflowTraceDto;
 import ai.careerpilot.workflow.trace.WorkflowTraceService;
@@ -52,6 +54,23 @@ class WorkflowTraceControllerTest {
         when(service.diagnostics(cid, userId)).thenReturn(dto);
         assertThat(controller.diagnostics(user, cid)).isSameAs(dto);
         verify(service).diagnostics(cid, userId);
+    }
+
+    @Test
+    void graphDelegatesWithAuthenticatedUserId() {
+        WorkflowGraphDto dto = new WorkflowGraphDto(cid, "RUNNING", List.of(), List.of());
+        when(service.graph(cid, userId)).thenReturn(dto);
+        assertThat(controller.graph(user, cid)).isSameAs(dto);
+        verify(service).graph(cid, userId);
+    }
+
+    @Test
+    void eventsDelegatesWithAuthenticatedUserId() {
+        List<WorkflowEventDto> events = List.of(
+                new WorkflowEventDto("e1", cid, "APPLICATION_CREATED", null, "SUCCESS"));
+        when(service.events(cid, userId)).thenReturn(events);
+        assertThat(controller.events(user, cid)).isSameAs(events);
+        verify(service).events(cid, userId);
     }
 
     @Test

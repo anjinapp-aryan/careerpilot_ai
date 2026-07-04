@@ -16,6 +16,10 @@ import ai.careerpilot.repo.WorkflowCorrelationRepository;
 import ai.careerpilot.repo.WorkflowDeadLetterRepository;
 import ai.careerpilot.workflow.trace.WorkflowTraceDtos.CorrelationDiagnosticsDto;
 import ai.careerpilot.workflow.trace.WorkflowTraceDtos.DeadLetterDto;
+import ai.careerpilot.workflow.trace.WorkflowTraceDtos.GraphEdgeDto;
+import ai.careerpilot.workflow.trace.WorkflowTraceDtos.GraphNodeDto;
+import ai.careerpilot.workflow.trace.WorkflowTraceDtos.WorkflowEventDto;
+import ai.careerpilot.workflow.trace.WorkflowTraceDtos.WorkflowGraphDto;
 import ai.careerpilot.workflow.trace.WorkflowTraceDtos.WorkflowStepDto;
 import ai.careerpilot.workflow.trace.WorkflowTraceDtos.WorkflowSummaryDto;
 import ai.careerpilot.workflow.trace.WorkflowTraceDtos.WorkflowTraceDto;
@@ -122,6 +126,54 @@ public class WorkflowTraceService {
         int failed = (int) t.steps().stream().filter(s -> STEP_FAILED.equals(s.status())).count();
         return new CorrelationDiagnosticsDto(t.correlationId(), t.workflowType(), t.status(),
                 completed + failed, completed, failed, t.deadLetters().size(), t.durationMs());
+    }
+
+    /** Graph projection ({@code nodes[] / edges[]}) of the same reconstruction, for workflow visualization. */
+    @Transactional(readOnly = true)
+    public WorkflowGraphDto graph(String correlationId, UUID userId) {
+        WorkflowTraceDto t = getWorkflow(correlationId, userId);
+        List<GraphNodeDto> nodes = new ArrayList<>();
+        List<GraphEdgeDto> edges = new ArrayList<>();
+        String prev = null;
+        for (WorkflowStepDto s : t.steps()) {
+            nodes.add(new GraphNodeDto(s.step(), humanize(s.step()), s.status(), s.completedAt()));
+            if (prev != null) edges.add(new GraphEdgeDto(prev, s.step()));
+            prev = s.step();
+        }
+        return new WorkflowGraphDto(t.correlationId(), t.status(), nodes, edges);
+    }
+
+    /** Ordered raw-event projection for support/debugging — one event per stage that actually occurred
+     * (NOT_STARTED/PENDING omitted). Deterministic ids so the same trace always yields the same events. */
+    @Transactional(readOnly = true)
+    public List<WorkflowEventDto> events(String correlationId, UUID userId) {
+        WorkflowTraceDto t = getWorkflow(correlationId, userId);
+        List<WorkflowEventDto> out = new ArrayList<>();
+        for (WorkflowStepDto s : t.steps()) {
+            if (STEP_NOT_STARTED.equals(s.status()) || STEP_PENDING.equals(s.status())) continue;
+            Instant ts = s.completedAt() != null ? s.completedAt() : s.startedAt();
+            out.add(new WorkflowEventDto(eventId(t.correlationId(), s.step()),
+                    t.correlationId(), s.step(), ts, s.status()));
+        }
+        return out;
+    }
+
+    /** Deterministic, stable event id for a (correlation, stage) pair — no event-log table exists. */
+    private static String eventId(String correlationId, String step) {
+        return UUID.nameUUIDFromBytes((correlationId + ":" + step).getBytes(java.nio.charset.StandardCharsets.UTF_8))
+                .toString();
+    }
+
+    /** {@code APPLICATION_TRACKED} -> {@code Application Tracked} (display label for graph nodes). */
+    private static String humanize(String step) {
+        if (step == null || step.isBlank()) return step;
+        StringBuilder b = new StringBuilder();
+        for (String w : step.split("_")) {
+            if (w.isEmpty()) continue;
+            if (b.length() > 0) b.append(' ');
+            b.append(Character.toUpperCase(w.charAt(0))).append(w.substring(1).toLowerCase());
+        }
+        return b.toString();
     }
 
     // ── reconstruction ──

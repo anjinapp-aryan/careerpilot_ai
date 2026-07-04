@@ -62,4 +62,37 @@ public final class WorkflowTraceDtos {
             int failedStages,
             int deadLetters,
             Long workflowDurationMs) {}
+
+    /** Phase 3A follow-up — graph projection of the reconstructed trace, shaped for a future workflow
+     * visualization ({@code {nodes:[], edges:[]}}). Nodes are the pipeline stages carrying their derived
+     * status; edges are the sequential stage transitions. Read-only, derived from the same trace. */
+    public record WorkflowGraphDto(
+            String correlationId,
+            String status,
+            List<GraphNodeDto> nodes,
+            List<GraphEdgeDto> edges) {}
+
+    /** One graph node = one pipeline stage. {@code id} is the stable step key; {@code label} is a
+     * human-readable rendering; {@code status} mirrors the step status vocabulary. */
+    public record GraphNodeDto(
+            String id,
+            String label,
+            String status,
+            Instant timestamp) {}
+
+    /** A directed edge between two adjacent stage nodes (by their {@code id}). */
+    public record GraphEdgeDto(
+            String from,
+            String to) {}
+
+    /** Phase 3A follow-up — a raw, ordered event projection for support/debugging. Each event is one
+     * stage transition that actually occurred (NOT_STARTED/PENDING stages are omitted). {@code eventId}
+     * is a deterministic id derived from correlation id + stage, so the same trace always yields the
+     * same event ids (Phase 3A persists no separate event-log table — this is a projection). */
+    public record WorkflowEventDto(
+            String eventId,
+            String correlationId,
+            String eventType,
+            Instant timestamp,
+            String status) {}
 }

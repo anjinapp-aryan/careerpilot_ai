@@ -3,6 +3,7 @@ package ai.careerpilot.repo;
 import ai.careerpilot.domain.RecommendationAudit;
 import org.springframework.data.jpa.repository.JpaRepository;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -18,4 +19,7 @@ public interface RecommendationAuditRepository extends JpaRepository<Recommendat
 
     /** Phase 2C-3: the latest scoring-audit row for a job, to stamp the user's decision onto (replay). */
     Optional<RecommendationAudit> findFirstByUserIdAndJobIdOrderByCreatedAtDesc(UUID userId, UUID jobId);
+
+    /** Retention (Phase 3B prep): purge scoring-audit rows created before a cutoff. Flag-gated caller. */
+    long deleteByCreatedAtBefore(Instant cutoff);
 }

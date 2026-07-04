@@ -229,4 +229,73 @@ class WorkflowTraceServiceTest {
         assertThat(diag.totalEvents()).isEqualTo(diag.completedStages() + diag.failedStages());
         assertThat(diag.deadLetters()).isEqualTo(1);
     }
+
+    // ── graph projection (follow-up) ──
+
+    @Test
+    void graphHasOneNodePerStageAndSequentialEdges() {
+        when(correlations.findByCorrelationId(cid)).thenReturn(Optional.of(corr("TIMELINE", "IN_PROGRESS")));
+        stubEmptyArtifacts();
+        var g = service.graph(cid.toString(), userId);
+        assertThat(g.correlationId()).isEqualTo(cid.toString());
+        assertThat(g.status()).isEqualTo("RUNNING");
+        assertThat(g.nodes()).hasSize(WorkflowStage.values().length);
+        assertThat(g.edges()).hasSize(WorkflowStage.values().length - 1); // linear chain
+        assertThat(g.nodes().get(0).id()).isEqualTo(WorkflowStage.APPLICATION_CREATED.dtoStep());
+        assertThat(g.nodes().get(0).label()).isEqualTo("Application Created");
+        // edges link adjacent node ids in pipeline order
+        assertThat(g.edges().get(0).from()).isEqualTo(WorkflowStage.APPLICATION_CREATED.dtoStep());
+        assertThat(g.edges().get(0).to()).isEqualTo(WorkflowStage.APPLICATION_TRACKED.dtoStep());
+        // node status mirrors the step status
+        assertThat(g.nodes().get(1).status()).isEqualTo("SUCCESS");
+    }
+
+    @Test
+    void graphIsTenantScoped() {
+        when(correlations.findByCorrelationId(cid)).thenReturn(Optional.of(corr("TIMELINE", "IN_PROGRESS")));
+        assertThatThrownBy(() -> service.graph(cid.toString(), UUID.randomUUID()))
+                .isInstanceOf(NoSuchElementException.class);
+    }
+
+    // ── raw-event projection (follow-up) ──
+
+    @Test
+    void eventsOmitNotStartedAndPendingStages() {
+        when(correlations.findByCorrelationId(cid)).thenReturn(Optional.of(corr("TIMELINE", "IN_PROGRESS")));
+        stubEmptyArtifacts();
+        var events = service.events(cid.toString(), userId);
+        // only the 4 executed stages (ENTRY..TIMELINE) are events; PENDING/NOT_STARTED omitted
+        assertThat(events).hasSize(4);
+        assertThat(events).allSatisfy(e -> {
+            assertThat(e.correlationId()).isEqualTo(cid.toString());
+            assertThat(e.eventId()).isNotBlank();
+            assertThat(e.status()).isIn("SUCCESS", "FAILED", "SKIPPED", "RUNNING");
+        });
+        assertThat(events.get(0).eventType()).isEqualTo(WorkflowStage.APPLICATION_CREATED.dtoStep());
+    }
+
+    @Test
+    void eventIdsAreDeterministic() {
+        when(correlations.findByCorrelationId(cid)).thenReturn(Optional.of(corr("TIMELINE", "IN_PROGRESS")));
+        stubEmptyArtifacts();
+        var first = service.events(cid.toString(), userId);
+        var second = service.events(cid.toString(), userId);
+        assertThat(first.get(0).eventId()).isEqualTo(second.get(0).eventId());
+    }
+
+    @Test
+    void failedStageSurfacesAsEvent() {
+        when(correlations.findByCorrelationId(cid)).thenReturn(Optional.of(corr("INTERVIEW_DETECTION", "IN_PROGRESS")));
+        stubEmptyArtifacts();
+        when(deadLetters.findByCorrelationIdOrderByCreatedAtDesc(cid)).thenReturn(List.of(
+                WorkflowDeadLetter.builder().correlationId(cid).workflow("interview-detection")
+                        .stage("detect-interview").exception("boom")
+                        .createdAt(Instant.parse("2026-07-05T10:08:00Z")).build()));
+        var events = service.events(cid.toString(), userId);
+        assertThat(events).anySatisfy(e -> {
+            assertThat(e.eventType()).isEqualTo(WorkflowStage.INTERVIEW_DETECTED.dtoStep());
+            assertThat(e.status()).isEqualTo("FAILED");
+            assertThat(e.timestamp()).isEqualTo(Instant.parse("2026-07-05T10:08:00Z"));
+        });
+    }
 }

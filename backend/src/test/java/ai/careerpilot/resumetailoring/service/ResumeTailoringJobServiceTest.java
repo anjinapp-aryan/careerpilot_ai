@@ -4,8 +4,10 @@ import ai.careerpilot.domain.ResumeTailoring;
 import ai.careerpilot.domain.ResumeTailoringJob;
 import ai.careerpilot.repo.ResumeTailoringJobRepository;
 import ai.careerpilot.repo.ResumeTailoringRepository;
+import ai.careerpilot.resumetailoring.event.ResumeTailoredEvent;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
 import java.util.Map;
@@ -35,12 +37,14 @@ class ResumeTailoringJobServiceTest {
     private ResumeTailoringRepository tailorings;
     private ResumeTailoringService tailoring;
     private ThreadPoolTaskExecutor executor;
+    private ApplicationEventPublisher events;
 
     private ResumeTailoringJobService service(int corePoolSize, int maxPoolSize, int queueCapacity) {
         store.clear();
         jobs = mock(ResumeTailoringJobRepository.class);
         tailorings = mock(ResumeTailoringRepository.class);
         tailoring = mock(ResumeTailoringService.class);
+        events = mock(ApplicationEventPublisher.class);
 
         when(jobs.save(any(ResumeTailoringJob.class))).thenAnswer(inv -> {
             ResumeTailoringJob j = inv.getArgument(0);
@@ -57,7 +61,7 @@ class ResumeTailoringJobServiceTest {
         executor.setThreadNamePrefix("test-resume-tailor-");
         executor.initialize();
 
-        return new ResumeTailoringJobService(jobs, tailorings, tailoring, executor);
+        return new ResumeTailoringJobService(jobs, tailorings, tailoring, executor, events);
     }
 
     @AfterEach
@@ -94,6 +98,18 @@ class ResumeTailoringJobServiceTest {
         assertEquals(resultId, terminal.getResumeTailoringId());
         assertNotNull(terminal.getStartedAt());
         assertNotNull(terminal.getCompletedAt());
+        verify(events).publishEvent(new ResumeTailoredEvent(userId, jobId, resultId, null));
+    }
+
+    @Test
+    void doesNotPublishResumeTailoredEventWhenTailoringFails() throws InterruptedException {
+        ResumeTailoringJobService service = service(1, 2, 10);
+        when(tailoring.tailor(userId, jobId, null)).thenReturn(Optional.empty());
+
+        ResumeTailoringJob job = service.enqueue(userId, jobId, null, ResumeTailoringJob.SOURCE_MANUAL);
+        awaitTerminal(job.getId());
+
+        verify(events, never()).publishEvent(any());
     }
 
     @Test

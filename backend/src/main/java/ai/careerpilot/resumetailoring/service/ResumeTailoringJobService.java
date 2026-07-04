@@ -4,8 +4,12 @@ import ai.careerpilot.domain.ResumeTailoring;
 import ai.careerpilot.domain.ResumeTailoringJob;
 import ai.careerpilot.repo.ResumeTailoringJobRepository;
 import ai.careerpilot.repo.ResumeTailoringRepository;
+import ai.careerpilot.resumetailoring.config.ResumeTailoringAsyncConfig;
+import ai.careerpilot.resumetailoring.event.ResumeTailoredEvent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.core.task.TaskRejectedException;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.stereotype.Service;
@@ -24,6 +28,11 @@ import java.util.UUID;
  * manual API path and {@link ResumeTailoringWorker}'s approve-triggered path share one bounded pool
  * and one observable job table (see queue/health diagnostics on {@code DiagnosticsController}).
  *
+ * <p>Phase 2D.2 — on a {@code SUCCEEDED} outcome, publishes {@link
+ * ai.careerpilot.resumetailoring.event.ResumeTailoredEvent} so downstream consumers (e.g. the ATS
+ * Optimization engine's {@code AtsOptimizationWorker}) have a real hook instead of each inventing
+ * their own trigger path off the tailoring table.
+ *
  * <p>A full queue throws {@link TaskRejectedException} from {@link
  * org.springframework.core.task.TaskExecutor#execute}; that is caught here and turned into an
  * immediate terminal {@code FAILED} row rather than letting callers see a raw 5xx or piling up
@@ -38,13 +47,17 @@ public class ResumeTailoringJobService {
     private final ResumeTailoringRepository tailorings;
     private final ResumeTailoringService tailoring;
     private final ThreadPoolTaskExecutor executor;
+    private final ApplicationEventPublisher events;
 
     public ResumeTailoringJobService(ResumeTailoringJobRepository jobs, ResumeTailoringRepository tailorings,
-                                     ResumeTailoringService tailoring, ThreadPoolTaskExecutor executor) {
+                                     ResumeTailoringService tailoring,
+                                     @Qualifier(ResumeTailoringAsyncConfig.EXECUTOR_BEAN_NAME) ThreadPoolTaskExecutor executor,
+                                     ApplicationEventPublisher events) {
         this.jobs = jobs;
         this.tailorings = tailorings;
         this.tailoring = tailoring;
         this.executor = executor;
+        this.events = events;
     }
 
     /** Enqueue a manual (or approve-triggered) tailoring generation. Always returns a job row, even on immediate rejection. */
@@ -89,6 +102,7 @@ public class ResumeTailoringJobService {
             if (result.isPresent()) {
                 job.setStatus(ResumeTailoringJob.STATUS_SUCCEEDED);
                 job.setResumeTailoringId(result.get().getId());
+                events.publishEvent(new ResumeTailoredEvent(userId, jobId, result.get().getId(), recommendationAuditIdHint));
             } else {
                 job.setStatus(ResumeTailoringJob.STATUS_FAILED);
                 job.setErrorReason("tailoring could not be generated (missing resume/job, or failed validation) — see resume_tailoring_audit");

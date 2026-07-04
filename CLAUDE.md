@@ -112,6 +112,28 @@ pgvector extension is enabled and `vector(768)` columns exist on `resumes.embedd
 - **`JobMatchingService.refreshForUser()`** is a separate, rule-based (no LLM) matcher: scores the discovered pool via `JobScoring` and upserts the top 50 into `job_recommendations` so the Recommended tab is a cheap indexed read. It is **source-agnostic** — the candidate signals (skills/target role/locations/experience/preferences/excluded roles) come from **[CandidateSignalResolver.java](backend/src/main/java/ai/careerpilot/jobdiscovery/CandidateSignalResolver.java)**, which is the Phase-1 single-source-of-truth switch: when `jobs.matching.profile-source-enabled=true` and a `candidate_profiles` row exists, every signal is read from the **canonical `CandidateProfile` only**; otherwise it falls back to the legacy `WorkflowRun` state + live `candidate_preferences` path (pre-Phase-1 behavior, unchanged). Flip the flag on only **after** profiles are backfilled (`POST /api/admin/candidate-profile/backfill?dryRun=false`, admin-role + flag gated); rollback is instant (flag off). The matcher also applies a **user-defined excluded-roles hard filter** (`JobMatchingService.isRoleExcluded`, whole-word title match + non-tech family match via `JobTaxonomy`) — empty exclusions are a no-op, so it is safe always-on. Excluded roles are edited in `candidate_preferences` (`excluded_roles`, added by `V9`) and snapshotted into the profile.
 - `JobController`'s `GET /api/jobs/discovered?scope=domestic|international&country=...` reads the global pool directly; `GET /api/jobs/recommended` reads the precomputed `job_recommendations`. The frontend's [Jobs.tsx](frontend/src/pages/Jobs.tsx) Domestic/International tabs call the former, separately from the existing org-scoped job list.
 
+### Resume tailoring is a 7-stage async event pipeline, not one service
+[resumetailoring/](backend/src/main/java/ai/careerpilot/resumetailoring/) implements Phase 2D: Resume Tailoring → ATS Optimization → Gap Analysis → ATS Explainability → Cover Letter → Application Package → Auto-Apply Preparation. Each stage is its own vertical slice (own sub-package, own job table, own bounded `ThreadPoolTaskExecutor`, own REST controller) chained by Spring `@TransactionalEventListener` — there is no shared orchestrator class. The chain: `RecommendationApprovedEvent → ResumeTailoringWorker → ResumeTailoredEvent → AtsOptimizationWorker → AtsOptimizedEvent → GapAnalysisWorker → GapAnalysisCompletedEvent → AtsExplainabilityWorker → AtsExplainabilityCompletedEvent → CoverLetterWorker → CoverLetterCompletedEvent → ApplicationPackageWorker → ApplicationPackageReadyEvent → AutoApplyPreparationWorker` (final stage, publishes nothing further). Events live in `resumetailoring/event/`.
+
+**Every worker follows the identical shape** — do not deviate when adding a stage:
+```java
+@Async(PipelineExecutorsConfig.<STAGE>_EXECUTOR)
+@TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
+public void on<PriorEvent>(<PriorEvent> event) {
+    if (!triggerEnabled || !service.isEnabled()) return;
+    try {
+        executor.execute(() -> service.doWork(...));
+    } catch (Exception e) {
+        log.warn("... worker failed ...: {}", e.toString());
+    }
+}
+```
+Two independent flags per stage (`<stage>.enabled` gates the engine itself; `<stage>.trigger....enabled` gates whether it auto-fires off the prior stage's event) — both default `false`. `PipelineExecutorsConfig` centralizes the bounded executors (one per stage, deliberately not shared, so one stage's saturated queue can't starve another's).
+
+**Do not wrap a worker's listener body in `@Transactional(propagation = REQUIRES_NEW)`.** This was a real, previously-shipped bug (`ResumeTailoringWorker`/`AtsOptimizationWorker`): the annotation opened a second transaction around the job-row insert, and the bounded-executor thread it then handed off to could read that row back *before* the wrapping transaction committed — a silent race that stranded jobs in `QUEUED` forever with zero error logs. The `@TransactionalEventListener(phase=AFTER_COMMIT)` already guarantees the triggering transaction has committed; no worker needs its own `@Transactional`.
+
+Each stage's job table (`resume_tailoring_jobs`, `ats_optimization_jobs`, `gap_analysis_jobs`, `ats_explainability_jobs`, `cover_letter_jobs`, `application_package_jobs`, `auto_apply_package_jobs` — migrations `V24`–`V30`) tracks `QUEUED`/`RUNNING`/`SUCCEEDED`/`FAILED` and is the only way to trace an async run; there is no synchronous fallback API for any stage. Poll a stage's status via its own `GET /api/diagnostics/<stage>` and `GET /api/diagnostics/<stage>/queue` endpoints ([DiagnosticsController.java](backend/src/main/java/ai/careerpilot/api/DiagnosticsController.java) for resume-tailoring/ATS-optimization, [PipelineDiagnosticsController.java](backend/src/main/java/ai/careerpilot/api/PipelineDiagnosticsController.java) for gap-analysis/ATS-explainability/cover-letter/application-package/auto-apply-package).
+
 ### Frontend data flow
 [lib/api.ts](frontend/src/lib/api.ts) is a single axios instance with a bearer-token request interceptor (reading from the zustand store in [lib/auth.ts](frontend/src/lib/auth.ts)) and a 401-→-logout response interceptor. Auth state persists to localStorage via zustand's `persist` middleware. Server state uses TanStack Query — refetches are explicit (`queryClient.invalidateQueries`) after mutations; there is no SSE/WebSocket, so the Workflow page only updates on user action.
 
@@ -133,6 +155,15 @@ pgvector extension is enabled and `vector(768)` columns exist on `resumes.embedd
 | `CANDIDATE_PROFILE_ENABLED` | Gates Candidate Profile generation, the `/api/candidate-profile*` endpoints, and the admin backfill. Default `false` (ships dark) |
 | `JOBS_MATCHING_PROFILE_SOURCE_ENABLED` | When `true`, `JobMatchingService` reads candidate signals from the canonical `CandidateProfile` (single source of truth) instead of the legacy `WorkflowRun`+`candidate_preferences` path. Default `false`. Flip on **after** backfill |
 | `CANDIDATE_PROFILE_BACKFILL_THROTTLE_MS` | Pause between LLM extractions during the one-time enablement backfill. Default `500` |
+| `RESUME_TAILORING_ENABLED` / `RESUME_TAILORING_TRIGGER_ON_APPROVE_ENABLED` | Phase 2D.1: enables the tailoring engine / auto-fires it when a recommendation is approved. Default `false` |
+| `ATS_OPTIMIZATION_ENABLED` / `ATS_OPTIMIZATION_TRIGGER_ON_TAILORING_ENABLED` | Phase 2D.2. Default `false` |
+| `GAP_ANALYSIS_ENABLED` / `GAP_ANALYSIS_TRIGGER_ENABLED` | Phase 2D.3. Default `false` |
+| `ATS_EXPLAINABILITY_ENABLED` / `ATS_EXPLAINABILITY_TRIGGER_ENABLED` | Phase 2D.4. Default `false` |
+| `COVER_LETTER_ENABLED` / `COVER_LETTER_TRIGGER_ENABLED` | Phase 2D.5. Default `false` |
+| `APPLICATION_PACKAGE_ENABLED` / `APPLICATION_PACKAGE_TRIGGER_ENABLED` | Phase 2D.6. Default `false` |
+| `AUTO_APPLY_PACKAGE_ENABLED` / `AUTO_APPLY_TRIGGER_ENABLED` | Phase 2D.7, final stage. Default `false` |
+
+Every Phase 2D stage above ships dark (all flags `false`) and is meant to be canaried one at a time — flip `<stage>_ENABLED` first, verify via its diagnostics endpoint, then flip `<stage>_TRIGGER...ENABLED` to chain it onto the prior stage's event.
 
 ## Provisioned-but-unused (do not assume these are integrated)
 

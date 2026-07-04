@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Bar, BarChart, CartesianGrid, Cell, ResponsiveContainer, Tooltip as RTooltip, XAxis, YAxis } from 'recharts';
-import { Activity, Copy, Database, Globe2, RefreshCw, Sparkles, Wand2 } from 'lucide-react';
+import { Activity, Copy, Database, Globe2, RefreshCw, Server, ShieldCheck, Sparkles, Trash2, Wand2 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { PageHeader } from '@/components/common/PageHeader';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
@@ -64,6 +64,24 @@ const STATUS_TONE: Record<string, 'success' | 'danger' | 'info' | 'neutral'> = {
   FAILED: 'danger',
   RUNNING: 'info',
 };
+
+const HEALTH_TONE: Record<string, 'success' | 'warning' | 'danger' | 'neutral'> = {
+  UP: 'success',
+  HEALTHY: 'success',
+  DEGRADED: 'warning',
+  DOWN: 'danger',
+  NOT_CONFIGURED: 'neutral',
+  UNKNOWN: 'neutral',
+};
+
+function healthTone(v?: string): 'success' | 'warning' | 'danger' | 'neutral' {
+  return HEALTH_TONE[(v ?? '').toUpperCase()] ?? 'neutral';
+}
+
+interface RetentionStatus {
+  enabled?: boolean;
+  purged?: Record<string, number>;
+}
 
 export default function AdminDashboard() {
   const qc = useQueryClient();
@@ -133,6 +151,37 @@ export default function AdminDashboard() {
     queryKey: ['admin', 'duplicates'],
     queryFn: async () => (await api.get('/api/admin/stats/duplicates')).data,
   });
+
+  const { data: observability, isLoading: observabilityLoading } = useQuery<Record<string, any>>({
+    queryKey: ['admin', 'observability'],
+    queryFn: async () => (await api.get('/api/diagnostics/observability')).data,
+    retry: false,
+    staleTime: 30_000,
+  });
+
+  const { data: retention } = useQuery<RetentionStatus | null>({
+    queryKey: ['admin', 'retention'],
+    queryFn: async () => {
+      try {
+        return (await api.get('/api/admin/retention/status')).data as RetentionStatus;
+      } catch {
+        return null; // 403 for non-admins or disabled — treated as "unavailable"
+      }
+    },
+    retry: false,
+  });
+
+  const runRetention = useMutation({
+    mutationFn: async () => (await api.post('/api/admin/retention/run')).data,
+    onSuccess: (data: RetentionStatus) => {
+      const total = Object.values(data?.purged ?? {}).reduce((s, n) => s + (n ?? 0), 0);
+      toast({ variant: 'success', title: 'Retention run complete', description: `${total} ledger rows purged.` });
+      qc.invalidateQueries({ queryKey: ['admin', 'retention'] });
+    },
+    onError: () => toast({ variant: 'error', title: 'Retention run failed', description: 'Enabled only when RETENTION_ENABLED=true.' }),
+  });
+
+  const providerChain = (observability?.providers?.providers ?? {}) as Record<string, string>;
 
   const embeddedPct = discovery && discovery.totalDiscovered > 0
     ? Math.round((discovery.totalEmbedded / discovery.totalDiscovered) * 100)
@@ -377,6 +426,94 @@ export default function AdminDashboard() {
           )}
         </CardContent>
       </Card>
+
+      {/* Phase 3B.6 — Platform observability rollup */}
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+        <Card>
+          <CardHeader className="flex-row items-center justify-between">
+            <CardTitle className="flex items-center gap-2">
+              <Server className="h-4 w-4 text-muted-foreground" /> Platform observability
+            </CardTitle>
+            {observability?.overall && (
+              <Badge tone={healthTone(observability.overall)}>{observability.overall}</Badge>
+            )}
+          </CardHeader>
+          <CardContent>
+            {observabilityLoading ? (
+              <Skeleton className="h-40 w-full" />
+            ) : !observability ? (
+              <EmptyState title="Unavailable" description="The observability rollup could not be loaded." />
+            ) : (
+              <div className="space-y-4 text-sm">
+                <div className="grid grid-cols-2 gap-2">
+                  {(['workflow', 'execution', 'providers', 'cache', 'retention'] as const).map((k) => (
+                    <div key={k} className="flex items-center justify-between rounded-lg border border-border px-3 py-2">
+                      <span className="capitalize text-muted-foreground">{k}</span>
+                      <Badge tone={healthTone(observability[k]?.health)}>{observability[k]?.health ?? '—'}</Badge>
+                    </div>
+                  ))}
+                </div>
+                {Object.keys(providerChain).length > 0 && (
+                  <div>
+                    <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Provider chain</p>
+                    <div className="flex flex-wrap gap-2">
+                      {Object.entries(providerChain).map(([name, h]) => (
+                        <Badge key={name} tone={healthTone(h)}>
+                          <span className="capitalize">{name}</span>: {h}
+                        </Badge>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Data retention */}
+        <Card>
+          <CardHeader className="flex-row items-center justify-between">
+            <CardTitle className="flex items-center gap-2">
+              <ShieldCheck className="h-4 w-4 text-muted-foreground" /> Data retention
+            </CardTitle>
+            <Button size="sm" variant="outline" onClick={() => runRetention.mutate()} loading={runRetention.isPending}>
+              <Trash2 className="h-3.5 w-3.5" /> Run purge
+            </Button>
+          </CardHeader>
+          <CardContent>
+            {retention == null ? (
+              <EmptyState
+                title="Retention status unavailable"
+                description="Requires an admin role. The retention scheduler purges aged audit/dead-letter ledgers when enabled."
+              />
+            ) : (
+              <div className="space-y-3 text-sm">
+                <div className="flex items-center justify-between rounded-lg border border-border px-3 py-2">
+                  <span className="text-muted-foreground">Scheduler</span>
+                  <Badge tone={retention.enabled ? 'success' : 'neutral'}>
+                    {retention.enabled ? 'enabled' : 'disabled (dark)'}
+                  </Badge>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Purges <code>workflow_dead_letter</code>, <code>workflow_correlation</code> (terminal only),
+                  and the recommendation / execution / resume-tailoring audit ledgers past their retention
+                  windows. Deletes are recoverable only from a DB backup — choose windows before enabling.
+                </p>
+                {retention.purged && Object.keys(retention.purged).length > 0 && (
+                  <div className="space-y-1">
+                    {Object.entries(retention.purged).map(([table, n]) => (
+                      <div key={table} className="flex items-center justify-between text-xs">
+                        <span className="font-mono text-muted-foreground">{table}</span>
+                        <span className="tabular-nums">{n}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
 
       {/* Duplicate clusters */}
       <Card>

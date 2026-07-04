@@ -22,7 +22,7 @@ import { cn } from '@/lib/cn';
 import { ExplainDialog } from '@/components/jobs/ExplainDialog';
 import { JobBadges } from '@/components/jobs/JobBadges';
 import { trackJobEvent } from '@/lib/jobTelemetry';
-import type { RecommendedFilter, RecommendedJob, RecommendedJobsResponse } from '@/types/workflow';
+import type { RecommendedFilter, RecommendedJob, RecommendedJobsResponse, ScoreBreakdown } from '@/types/workflow';
 
 const PAGE_SIZE = 10;
 
@@ -57,7 +57,12 @@ function confidenceTone(c?: string | null): 'success' | 'primary' | 'warning' {
 
 export function RecommendedJobs({ onApply, onSave, busy }: RecommendedJobsProps) {
   const [filter, setFilter] = useState<RecommendedFilter>('all');
-  const [explainJob, setExplainJob] = useState<{ id: string; title: string } | null>(null);
+  const [explainJob, setExplainJob] = useState<{
+    id: string;
+    title: string;
+    breakdown?: ScoreBreakdown | null;
+    matchScore?: number | null;
+  } | null>(null);
 
   const { data, isLoading, fetchNextPage, hasNextPage, isFetchingNextPage } =
     useInfiniteQuery<RecommendedJobsResponse>({
@@ -80,9 +85,14 @@ export function RecommendedJobs({ onApply, onSave, busy }: RecommendedJobsProps)
     trackJobEvent('save', { jobId });
     onSave(jobId);
   };
-  const openExplain = (id: string, title: string) => {
-    trackJobEvent('why_match', { jobId: id });
-    setExplainJob({ id, title });
+  const openExplain = (rec: RecommendedJob) => {
+    trackJobEvent('why_match', { jobId: rec.job.id });
+    setExplainJob({
+      id: rec.job.id,
+      title: rec.job.title,
+      breakdown: rec.scoreBreakdown ?? null,
+      matchScore: rec.matchScore,
+    });
   };
 
   if (isLoading) {
@@ -193,7 +203,7 @@ export function RecommendedJobs({ onApply, onSave, busy }: RecommendedJobsProps)
               index={i}
               onApply={handleApply}
               onSave={handleSave}
-              onExplain={() => openExplain(rec.job.id, rec.job.title)}
+              onExplain={() => openExplain(rec)}
               busy={busy}
             />
           ))}
@@ -210,6 +220,8 @@ export function RecommendedJobs({ onApply, onSave, busy }: RecommendedJobsProps)
       <ExplainDialog
         jobId={explainJob?.id ?? null}
         jobTitle={explainJob?.title}
+        breakdown={explainJob?.breakdown}
+        matchScore={explainJob?.matchScore}
         onClose={() => setExplainJob(null)}
       />
     </div>

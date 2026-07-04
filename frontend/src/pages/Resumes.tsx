@@ -3,10 +3,13 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import {
+  ChevronDown,
+  ChevronUp,
   Clock,
   Download,
   FileText,
   Grid2x2,
+  Layers,
   List,
   MoreVertical,
   Search,
@@ -30,7 +33,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { cn } from '@/lib/cn';
-import type { Resume } from '@/types/workflow';
+import type { Resume, ResumeVersion } from '@/types/workflow';
 
 type SortKey = 'recent' | 'name' | 'score';
 
@@ -282,8 +285,68 @@ function ResumeCard({ resume, index }: { resume: Resume; index: number }) {
             <Badge tone="neutral">Ready</Badge>
           </div>
         </div>
+        <ResumeVersionsStrip resumeId={resume.id} />
       </Card>
     </motion.div>
+  );
+}
+
+/**
+ * Lazy ATS-progression strip: v1 → vN with each version's post-optimization ATS score.
+ * Fetches `/api/resumes/{id}/versions` only when expanded, and degrades to a quiet
+ * "no optimized versions yet" line when the resume has never been through the pipeline.
+ */
+function ResumeVersionsStrip({ resumeId }: { resumeId: string }) {
+  const [open, setOpen] = useState(false);
+  const { data = [], isLoading, isError } = useQuery<ResumeVersion[]>({
+    queryKey: ['resume-versions', resumeId],
+    queryFn: async () => (await api.get(`/api/resumes/${resumeId}/versions`)).data,
+    enabled: open,
+    retry: false,
+  });
+
+  // Oldest → newest so the ATS trend reads left-to-right.
+  const ordered = [...data].sort((a, b) => a.versionNumber - b.versionNumber);
+
+  return (
+    <div className="mt-3 border-t border-border pt-3">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center justify-between text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
+      >
+        <span className="flex items-center gap-1.5">
+          <Layers className="h-3.5 w-3.5" /> Version history
+        </span>
+        {open ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+      </button>
+      {open && (
+        <div className="mt-2">
+          {isLoading ? (
+            <Skeleton className="h-10 w-full rounded-md" />
+          ) : isError || ordered.length === 0 ? (
+            <p className="text-xs text-muted-foreground">No optimized versions yet — run AI optimization to build history.</p>
+          ) : (
+            <div className="flex flex-wrap items-center gap-1.5">
+              {ordered.map((v, i) => (
+                <div key={v.id} className="flex items-center gap-1.5">
+                  <div className="flex flex-col items-center rounded-md border border-border bg-muted/30 px-2 py-1">
+                    <span className="text-[10px] font-medium text-muted-foreground">v{v.versionNumber}</span>
+                    <span className={cn('text-xs font-semibold tabular-nums', {
+                      'text-success': (v.atsAfter ?? 0) >= 80,
+                      'text-warning': (v.atsAfter ?? 0) >= 60 && (v.atsAfter ?? 0) < 80,
+                      'text-danger': (v.atsAfter ?? 100) < 60,
+                    })}>
+                      {v.atsAfter ?? '—'}
+                    </span>
+                  </div>
+                  {i < ordered.length - 1 && <span className="h-px w-3 bg-border" />}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 

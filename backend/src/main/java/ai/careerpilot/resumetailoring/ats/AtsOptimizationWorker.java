@@ -7,8 +7,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
-import org.springframework.transaction.annotation.Propagation;
-import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
 
@@ -46,8 +44,7 @@ public class AtsOptimizationWorker {
         this.triggerOnTailoring = triggerOnTailoring;
     }
 
-    @Async
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    @Async(AtsOptimizationAsyncConfig.EXECUTOR_BEAN_NAME)
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
     public void onResumeTailored(ResumeTailoredEvent event) {
         if (!triggerOnTailoring || !optimization.isEnabled()) return;

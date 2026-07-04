@@ -35,7 +35,7 @@ public class ApplicationPackageWorker {
         this.triggerEnabled = triggerEnabled;
     }
 
-    @Async
+    @Async(PipelineExecutorsConfig.APPLICATION_PACKAGE_EXECUTOR)
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
     public void onCoverLetterCompleted(CoverLetterCompletedEvent event) {
         if (!triggerEnabled || !packages.isEnabled()) return;

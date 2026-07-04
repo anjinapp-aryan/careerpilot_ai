@@ -36,7 +36,7 @@ public class AutoApplyPreparationWorker {
         this.triggerEnabled = triggerEnabled;
     }
 
-    @Async
+    @Async(PipelineExecutorsConfig.AUTO_APPLY_PREPARATION_EXECUTOR)
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
     public void onApplicationPackageReady(ApplicationPackageReadyEvent event) {
         if (!triggerEnabled || !preparation.isEnabled()) return;

@@ -37,7 +37,7 @@ public class GapAnalysisWorker {
         this.triggerEnabled = triggerEnabled;
     }
 
-    @Async
+    @Async(PipelineExecutorsConfig.GAP_ANALYSIS_EXECUTOR)
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
     public void onAtsOptimized(AtsOptimizedEvent event) {
         if (!triggerEnabled || !gapAnalysis.isEnabled()) return;

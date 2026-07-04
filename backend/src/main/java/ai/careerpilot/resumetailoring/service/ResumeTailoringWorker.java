@@ -1,14 +1,13 @@
 package ai.careerpilot.resumetailoring.service;
 
 import ai.careerpilot.domain.ResumeTailoringJob;
+import ai.careerpilot.resumetailoring.config.ResumeTailoringAsyncConfig;
 import ai.careerpilot.resumetailoring.event.RecommendationApprovedEvent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
-import org.springframework.transaction.annotation.Propagation;
-import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
 
@@ -54,8 +53,7 @@ public class ResumeTailoringWorker {
         this.triggerOnApprove = triggerOnApprove;
     }
 
-    @Async
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    @Async(ResumeTailoringAsyncConfig.EXECUTOR_BEAN_NAME)
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
     public void onRecommendationApproved(RecommendationApprovedEvent event) {
         if (!triggerOnApprove || !tailoring.isEnabled()) return;

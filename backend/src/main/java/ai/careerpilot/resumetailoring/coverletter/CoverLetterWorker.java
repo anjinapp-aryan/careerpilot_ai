@@ -35,7 +35,7 @@ public class CoverLetterWorker {
         this.triggerEnabled = triggerEnabled;
     }
 
-    @Async
+    @Async(PipelineExecutorsConfig.COVER_LETTER_EXECUTOR)
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
     public void onAtsExplainabilityCompleted(AtsExplainabilityCompletedEvent event) {
         if (!triggerEnabled || !coverLetter.isEnabled()) return;

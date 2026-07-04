@@ -35,7 +35,7 @@ public class AtsExplainabilityWorker {
         this.triggerEnabled = triggerEnabled;
     }
 
-    @Async
+    @Async(PipelineExecutorsConfig.ATS_EXPLAINABILITY_EXECUTOR)
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
     public void onGapAnalysisCompleted(GapAnalysisCompletedEvent event) {
         if (!triggerEnabled || !explainability.isEnabled()) return;

@@ -165,6 +165,24 @@ services:
       APPLICATION_TRACKING_TRIGGER_ENABLED: ${APPLICATION_TRACKING_TRIGGER_ENABLED:-false}
       APPLICATION_ANALYTICS_ENABLED: ${APPLICATION_ANALYTICS_ENABLED:-false}
       APPLICATION_ANALYTICS_TRIGGER_ENABLED: ${APPLICATION_ANALYTICS_TRIGGER_ENABLED:-false}
+      # ---- Phase 3A: Enterprise Application Tracking Workflow (ships DARK, isolated workflow.* namespace) ----
+      # 9-worker event-driven workflow tracking an application AFTER submission (Applied -> Offer ->
+      # Accepted/Rejected). ALL default false: with stock flags the WorkflowEntryBridge mints nothing, so
+      # creating an application produces ZERO Phase 3A rows. Migrations V36-V43 written but NOT applied.
+      # Canary one stage at a time: *_ENABLED first (verify /api/diagnostics/<stage>), then *_TRIGGER_ENABLED.
+      # Renamed from the 3A spec's APPLICATION_TRACKING_*/APPLICATION_ANALYTICS_* to dodge the 2E vars above.
+      WORKFLOW_TRACKING_ENABLED: ${WORKFLOW_TRACKING_ENABLED:-false}
+      WORKFLOW_TRACKING_TRIGGER_ENABLED: ${WORKFLOW_TRACKING_TRIGGER_ENABLED:-false}
+      WORKFLOW_TIMELINE_ENABLED: ${WORKFLOW_TIMELINE_ENABLED:-false}
+      WORKFLOW_TIMELINE_TRIGGER_ENABLED: ${WORKFLOW_TIMELINE_TRIGGER_ENABLED:-false}
+      EMAIL_INTELLIGENCE_ENABLED: ${EMAIL_INTELLIGENCE_ENABLED:-false}
+      EMAIL_INTELLIGENCE_TRIGGER_ENABLED: ${EMAIL_INTELLIGENCE_TRIGGER_ENABLED:-false}
+      INTERVIEW_TRACKING_ENABLED: ${INTERVIEW_TRACKING_ENABLED:-false}
+      INTERVIEW_TRACKING_TRIGGER_ENABLED: ${INTERVIEW_TRACKING_TRIGGER_ENABLED:-false}
+      WORKFLOW_ANALYTICS_ENABLED: ${WORKFLOW_ANALYTICS_ENABLED:-false}
+      WORKFLOW_ANALYTICS_TRIGGER_ENABLED: ${WORKFLOW_ANALYTICS_TRIGGER_ENABLED:-false}
+      CAREER_INTELLIGENCE_ENABLED: ${CAREER_INTELLIGENCE_ENABLED:-false}
+      CAREER_INTELLIGENCE_TRIGGER_ENABLED: ${CAREER_INTELLIGENCE_TRIGGER_ENABLED:-false}
       # Domestic/International scope derived server-side from the candidate (home/preferred countries).
       JOBS_DISCOVERY_SCOPE_STRICT_ENABLED: ${JOBS_DISCOVERY_SCOPE_STRICT_ENABLED:-false}
       # Adzuna keyed provider — sources jobs PER COUNTRY (incl. India 'in'). Empty keys = provider

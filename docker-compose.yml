@@ -149,6 +149,22 @@ services:
       APPLICATION_PACKAGE_TRIGGER_ENABLED: ${APPLICATION_PACKAGE_TRIGGER_ENABLED:-false}
       AUTO_APPLY_PACKAGE_ENABLED: ${AUTO_APPLY_PACKAGE_ENABLED:-false}
       AUTO_APPLY_TRIGGER_ENABLED: ${AUTO_APPLY_TRIGGER_ENABLED:-false}
+      # Phase 2E — Enterprise Auto-Apply Execution Engine (HIGH RISK). Ships DARK + INERT: nothing
+      # submits an application; browser automation is a throwing stub (no Playwright dep); every ATS
+      # connector is unconfigured. Safety/approval gates default ON (never skippable), pipeline-entry
+      # triggers default OFF, so completing a 2D pipeline creates ZERO 2E rows. Do NOT enable without
+      # the documented rollout plan.
+      APPLICATION_EXECUTION_ENABLED: ${APPLICATION_EXECUTION_ENABLED:-false}
+      APPLICATION_EXECUTION_TRIGGER_ENABLED: ${APPLICATION_EXECUTION_TRIGGER_ENABLED:-false}
+      BROWSER_AUTOMATION_ENABLED: ${BROWSER_AUTOMATION_ENABLED:-false}
+      ATS_CONNECTOR_ENABLED: ${ATS_CONNECTOR_ENABLED:-false}
+      APPLICATION_APPROVAL_ENABLED: ${APPLICATION_APPROVAL_ENABLED:-true}
+      APPLICATION_SAFETY_ENABLED: ${APPLICATION_SAFETY_ENABLED:-true}
+      APPLICATION_SAFETY_TRIGGER_ENABLED: ${APPLICATION_SAFETY_TRIGGER_ENABLED:-false}
+      APPLICATION_TRACKING_ENABLED: ${APPLICATION_TRACKING_ENABLED:-false}
+      APPLICATION_TRACKING_TRIGGER_ENABLED: ${APPLICATION_TRACKING_TRIGGER_ENABLED:-false}
+      APPLICATION_ANALYTICS_ENABLED: ${APPLICATION_ANALYTICS_ENABLED:-false}
+      APPLICATION_ANALYTICS_TRIGGER_ENABLED: ${APPLICATION_ANALYTICS_TRIGGER_ENABLED:-false}
       # Domestic/International scope derived server-side from the candidate (home/preferred countries).
       JOBS_DISCOVERY_SCOPE_STRICT_ENABLED: ${JOBS_DISCOVERY_SCOPE_STRICT_ENABLED:-false}
       # Adzuna keyed provider — sources jobs PER COUNTRY (incl. India 'in'). Empty keys = provider

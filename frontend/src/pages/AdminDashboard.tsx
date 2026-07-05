@@ -10,6 +10,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { EmptyState } from '@/components/ui/empty-state';
 import { KpiCard } from '@/components/dashboard/KpiCard';
 import { useToast } from '@/components/ui/toast';
+import { WorkflowTraceExplorer } from '@/components/workflow/WorkflowTraceExplorer';
 
 /** Bar-chart rows for an "Unknown" bucket are real data but not actionable — muted instead of the brand color. */
 const UNKNOWN_LABEL = 'Unknown';
@@ -81,6 +82,125 @@ function healthTone(v?: string): 'success' | 'warning' | 'danger' | 'neutral' {
 interface RetentionStatus {
   enabled?: boolean;
   purged?: Record<string, number>;
+}
+
+/** One row of the Phase 4G engine-health matrix — a diagnostics endpoint to poll + a display label. */
+const HEALTH_ENDPOINTS: { group: string; label: string; path: string }[] = [
+  // Phase 3A — workflow engine (WorkflowDiagnosticsController)
+  { group: 'Workflow', label: 'Application Tracking', path: '/api/diagnostics/application-tracking' },
+  { group: 'Workflow', label: 'Timeline', path: '/api/diagnostics/application-timeline' },
+  { group: 'Workflow', label: 'Email Intelligence', path: '/api/diagnostics/email-intelligence' },
+  { group: 'Workflow', label: 'Interview Tracking', path: '/api/diagnostics/interview-tracking' },
+  { group: 'Workflow', label: 'Application Analytics', path: '/api/diagnostics/application-analytics' },
+  { group: 'Workflow', label: 'Career Intelligence', path: '/api/diagnostics/career-intelligence' },
+  { group: 'Workflow', label: 'Correlation Ledger', path: '/api/diagnostics/workflow-correlation' },
+  { group: 'Workflow', label: 'Dead Letter Ledger', path: '/api/diagnostics/workflow-dead-letter' },
+  // Phase 2E — execution engine (ExecutionDiagnosticsController)
+  { group: 'Execution', label: 'Application Execution', path: '/api/diagnostics/application-execution' },
+  { group: 'Execution', label: 'Browser Automation', path: '/api/diagnostics/browser' },
+  { group: 'Execution', label: 'ATS Submission', path: '/api/diagnostics/ats' },
+  { group: 'Execution', label: 'Tracking', path: '/api/diagnostics/tracking' },
+  { group: 'Execution', label: 'Analytics', path: '/api/diagnostics/analytics' },
+  // Phase 2D — resume pipeline (DiagnosticsController + PipelineDiagnosticsController)
+  { group: 'Resume Pipeline', label: 'Resume Tailoring', path: '/api/diagnostics/resume-tailoring' },
+  { group: 'Resume Pipeline', label: 'ATS Optimization', path: '/api/diagnostics/ats-optimization' },
+  { group: 'Resume Pipeline', label: 'Gap Analysis', path: '/api/diagnostics/gap-analysis' },
+  { group: 'Resume Pipeline', label: 'ATS Explainability', path: '/api/diagnostics/ats-explainability' },
+  { group: 'Resume Pipeline', label: 'Cover Letter', path: '/api/diagnostics/cover-letter' },
+  { group: 'Resume Pipeline', label: 'Application Package', path: '/api/diagnostics/application-package' },
+  { group: 'Resume Pipeline', label: 'Auto-Apply Package', path: '/api/diagnostics/auto-apply-package' },
+];
+
+interface EngineHealthRow {
+  label: string;
+  group: string;
+  enabled?: boolean;
+  health: string;
+  queue?: string;
+}
+
+/**
+ * Phase 4G — one no-auth counts-only diagnostics call per engine stage, fetched in parallel and
+ * rendered as a single health matrix. Every call is independently dark-tolerant: a failed fetch
+ * (engine not registered, or a transient error) reads as NOT_CONFIGURED rather than an error row.
+ */
+function EngineHealthMatrix() {
+  const { data, isLoading } = useQuery<EngineHealthRow[]>({
+    queryKey: ['admin', 'engine-health-matrix'],
+    queryFn: async () => {
+      const results = await Promise.allSettled(HEALTH_ENDPOINTS.map((e) => api.get(e.path)));
+      return HEALTH_ENDPOINTS.map((e, i) => {
+        const r = results[i];
+        if (r.status !== 'fulfilled') return { label: e.label, group: e.group, health: 'NOT_CONFIGURED' };
+        const d = r.value.data as Record<string, unknown>;
+        const qSize = d.executorQueueSize;
+        const qCap = d.executorQueueCapacity;
+        return {
+          label: e.label,
+          group: e.group,
+          enabled: Boolean(d.enabled),
+          health: String(d.health ?? 'UNKNOWN'),
+          queue: typeof qSize === 'number' && typeof qCap === 'number' ? `${qSize} / ${qCap}` : undefined,
+        };
+      });
+    },
+    retry: false,
+    staleTime: 30_000,
+  });
+
+  const groups = ['Workflow', 'Execution', 'Resume Pipeline'];
+
+  return (
+    <Card>
+      <CardHeader className="flex-row items-center gap-2">
+        <Server className="h-4 w-4 text-muted-foreground" />
+        <CardTitle>Engine health matrix</CardTitle>
+      </CardHeader>
+      <CardContent>
+        {isLoading ? (
+          <Skeleton className="h-64 w-full" />
+        ) : (
+          <div className="space-y-5">
+            {groups.map((g) => {
+              const rows = (data ?? []).filter((r) => r.group === g);
+              if (rows.length === 0) return null;
+              return (
+                <div key={g}>
+                  <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">{g}</h4>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-muted-foreground">
+                          <th className="py-2 pr-4">Stage</th>
+                          <th className="py-2 pr-4">Flag</th>
+                          <th className="py-2 pr-4">Health</th>
+                          <th className="py-2 pr-4">Queue</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {rows.map((r) => (
+                          <tr key={r.label} className="border-b border-border/50">
+                            <td className="py-2 pr-4 font-medium">{r.label}</td>
+                            <td className="py-2 pr-4">
+                              <Badge tone={r.enabled ? 'info' : 'neutral'}>{r.enabled ? 'enabled' : 'off'}</Badge>
+                            </td>
+                            <td className="py-2 pr-4">
+                              <Badge tone={healthTone(r.health)}>{r.health}</Badge>
+                            </td>
+                            <td className="py-2 pr-4 tabular-nums text-muted-foreground">{r.queue ?? '—'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
 }
 
 export default function AdminDashboard() {
@@ -514,6 +634,12 @@ export default function AdminDashboard() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Phase 4G — Workflow (3A) + Execution (2E) + resume-pipeline (2D) diagnostics matrix. */}
+      <EngineHealthMatrix />
+
+      {/* Phase 4G — Correlation Explorer, shared with the Workflow page. */}
+      <WorkflowTraceExplorer />
 
       {/* Duplicate clusters */}
       <Card>

@@ -9,6 +9,7 @@ import {
   Download,
   FileText,
   Grid2x2,
+  History,
   Layers,
   List,
   MoreVertical,
@@ -20,7 +21,7 @@ import {
 import { api } from '@/lib/api';
 import { PageHeader } from '@/components/common/PageHeader';
 import { Button } from '@/components/ui/button';
-import { Card } from '@/components/ui/card';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -33,7 +34,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { cn } from '@/lib/cn';
-import type { Resume, ResumeVersion } from '@/types/workflow';
+import type { Resume, ResumeVersion, TailoredResumeVersion } from '@/types/workflow';
 
 type SortKey = 'recent' | 'name' | 'score';
 
@@ -189,6 +190,9 @@ export default function Resumes() {
           </div>
         </div>
       </div>
+
+      {/* Phase 4E — Phase 2D.1 async tailoring engine history, across all jobs. Dark by default. */}
+      <TailoringHistoryPanel />
 
       {/* Content */}
       {isLoading ? (
@@ -347,6 +351,77 @@ function ResumeVersionsStrip({ resumeId }: { resumeId: string }) {
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * Phase 4E — surfaces the Phase 2D.1 async Resume Tailoring engine's history across all jobs
+ * (GET /api/resume/tailored/history). Dark-tolerant: 404/empty renders "not enabled yet", not
+ * an error, since RESUME_TAILORING_ENABLED defaults to false.
+ */
+function TailoringHistoryPanel() {
+  const { data, isLoading, isError } = useQuery<{ versions: TailoredResumeVersion[] } | null>({
+    queryKey: ['resume', 'tailored-history'],
+    queryFn: async () => {
+      try {
+        return (await api.get('/api/resume/tailored/history')).data;
+      } catch {
+        return null;
+      }
+    },
+    retry: false,
+    staleTime: 30_000,
+  });
+  const versions = data?.versions ?? [];
+
+  return (
+    <Card>
+      <CardHeader className="flex-row items-center justify-between pb-2">
+        <CardTitle className="flex items-center gap-2 text-base">
+          <History className="h-4 w-4 text-muted-foreground" /> Tailoring history
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        {isLoading ? (
+          <Skeleton className="h-16 w-full" />
+        ) : isError || versions.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            No tailored resume versions yet — the AI tailoring engine generates one per job once enabled.
+          </p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-muted-foreground">
+                  <th className="py-2 pr-4">Version</th>
+                  <th className="py-2 pr-4">Job</th>
+                  <th className="py-2 pr-4">ATS before → after</th>
+                  <th className="py-2 pr-4">Status</th>
+                  <th className="py-2 pr-4">Created</th>
+                </tr>
+              </thead>
+              <tbody>
+                {versions.map((v) => (
+                  <tr key={v.id} className="border-b border-border/50">
+                    <td className="py-2 pr-4 font-medium">{v.version}</td>
+                    <td className="py-2 pr-4 font-mono text-xs text-muted-foreground">{v.jobId.slice(0, 8)}</td>
+                    <td className="py-2 pr-4 tabular-nums">
+                      {v.atsBefore ?? '—'} → {v.atsAfter ?? '—'}
+                    </td>
+                    <td className="py-2 pr-4">
+                      <Badge tone={v.status === 'COMPLETED' ? 'success' : v.status === 'FAILED' ? 'danger' : 'neutral'}>
+                        {v.status}
+                      </Badge>
+                    </td>
+                    <td className="py-2 pr-4 text-muted-foreground">{new Date(v.createdAt).toLocaleDateString()}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

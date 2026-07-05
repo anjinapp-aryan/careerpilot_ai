@@ -31,6 +31,7 @@ import {
   Star,
   Target,
   TrendingUp,
+  Trophy,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/lib/auth';
@@ -41,7 +42,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { EmptyState } from '@/components/ui/empty-state';
 import { KpiCard } from '@/components/dashboard/KpiCard';
 import { CopilotAvatar } from '@/components/copilot/CopilotAvatar';
-import type { RecommendedJobsResponse, WorkflowRun } from '@/types/workflow';
+import type { CareerIntelligenceRow, RecommendedJobsResponse, WorkflowRun } from '@/types/workflow';
 
 interface Snapshot {
   careerHealthScore: number;
@@ -176,6 +177,7 @@ export default function Dashboard() {
         <KpiCard label="Job Match" value={data.jobMatchScore} suffix="/100" icon={Briefcase} tone="primary" delta={deltas.match} />
         <KpiCard label="Applications" value={submitted} icon={Send} tone="info" hint={`${apps.saved ?? 0} saved`} />
         <KpiCard label="Interview Rate" value={interviewRate} suffix="%" icon={TrendingUp} tone="success" hint={`${apps.interviewing ?? 0} active`} />
+        <KpiCard label="Offer Probability" value={data.offerProbabilityScore} suffix="/100" icon={Trophy} tone={scoreTone(data.offerProbabilityScore) === 'success' ? 'success' : 'warning'} hint="Derived from match + interview readiness" />
       </div>
 
       {/* Charts */}
@@ -362,12 +364,6 @@ interface ObservabilitySnapshot {
   overall?: string;
 }
 
-interface CareerIntelligenceRow {
-  dimension?: string;
-  key?: string;
-  probability?: number;
-  sampleSize?: number;
-}
 
 const HEALTH_TONE: Record<string, 'success' | 'warning' | 'danger' | 'neutral'> = {
   UP: 'success',
@@ -395,6 +391,18 @@ function PlatformIntelligence() {
       (await api.get('/api/recommendations/must-apply', { params: { size: 1 } })).data as RecommendedJobsResponse,
     retry: false,
   });
+  const humanReview = useQuery({
+    queryKey: ['dashboard', 'human-review'],
+    queryFn: async () =>
+      (await api.get('/api/recommendations/human-review', { params: { size: 1 } })).data as RecommendedJobsResponse,
+    retry: false,
+  });
+  const highPriority = useQuery({
+    queryKey: ['dashboard', 'high-priority'],
+    queryFn: async () =>
+      (await api.get('/api/recommendations', { params: { filter: 'high-priority', size: 1 } })).data as RecommendedJobsResponse,
+    retry: false,
+  });
   const lake = useQuery({
     queryKey: ['dashboard', 'lake-status'],
     queryFn: async () => (await api.get('/api/jobs/discovery/lake/status')).data as LakeStatus,
@@ -413,6 +421,8 @@ function PlatformIntelligence() {
 
   const recTotal = rec.data?.total ?? rec.data?.jobs?.length ?? 0;
   const mustTotal = mustApply.data?.total ?? mustApply.data?.jobs?.length ?? 0;
+  const humanReviewTotal = humanReview.data?.total ?? humanReview.data?.jobs?.length ?? 0;
+  const highPriorityTotal = highPriority.data?.total ?? highPriority.data?.jobs?.length ?? 0;
   const counts = lake.data?.lakeCounts ?? {};
   const careerRows = (career.data ?? [])
     .filter((r) => typeof r.probability === 'number')
@@ -436,12 +446,14 @@ function PlatformIntelligence() {
                 <span className="text-3xl font-semibold tabular-nums">{recTotal}</span>
                 <span className="text-sm text-muted-foreground">matched jobs</span>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-1.5">
                 <Badge tone={mustTotal > 0 ? 'success' : 'neutral'}>{mustTotal} must-apply</Badge>
-                <Link to="/jobs" className="text-xs font-medium text-primary hover:underline">
-                  Review →
-                </Link>
+                <Badge tone={highPriorityTotal > 0 ? 'warning' : 'neutral'}>{highPriorityTotal} high priority</Badge>
+                <Badge tone={humanReviewTotal > 0 ? 'primary' : 'neutral'}>{humanReviewTotal} pending review</Badge>
               </div>
+              <Link to="/jobs" className="block text-xs font-medium text-primary hover:underline">
+                Review →
+              </Link>
             </div>
           )}
         </CardContent>
@@ -526,13 +538,16 @@ function PlatformIntelligence() {
           ) : (
             <div className="space-y-2">
               {careerRows.map((r, i) => (
-                <div key={`${r.dimension}-${r.key}-${i}`} className="text-sm">
+                <div key={`${r.dimension}-${r.dimensionKey}-${i}`} className="text-sm">
                   <div className="flex items-center justify-between">
-                    <span className="truncate text-muted-foreground">{r.key || r.dimension || 'Signal'}</span>
+                    <span className="truncate text-muted-foreground">{r.dimensionKey || r.dimension || 'Signal'}</span>
                     <span className="font-semibold tabular-nums">{Math.round((r.probability ?? 0) * 100)}%</span>
                   </div>
                 </div>
               ))}
+              <Link to="/career" className="block text-xs font-medium text-primary hover:underline">
+                Full breakdown →
+              </Link>
             </div>
           )}
         </CardContent>

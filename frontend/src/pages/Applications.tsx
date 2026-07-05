@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   DndContext,
@@ -12,15 +12,18 @@ import {
   type DragStartEvent,
 } from '@dnd-kit/core';
 import { motion } from 'framer-motion';
-import { Building2, Clock, GripVertical, Info, KanbanSquare, ListTree, Target } from 'lucide-react';
+import { Building2, Clock, GripVertical, Info, KanbanSquare, ListTree, Sparkles, Target } from 'lucide-react';
 import { api } from '@/lib/api';
 import { PageHeader } from '@/components/common/PageHeader';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { EmptyState } from '@/components/ui/empty-state';
 import { useToast } from '@/components/ui/toast';
+import { Tabs } from '@/components/ui/tabs';
 import { Dialog, DialogBody, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
+import { WorkflowTraceExplorer } from '@/components/workflow/WorkflowTraceExplorer';
 import { cn } from '@/lib/cn';
 import type { Application, Job, JobsPage } from '@/types/workflow';
 
@@ -328,6 +331,31 @@ function AppCard({
  */
 function ApplicationDetailDialog({ target, onClose }: { target: DetailTarget | null; onClose: () => void }) {
   const jobId = target?.jobId ?? null;
+  const { toast } = useToast();
+  const [tab, setTab] = useState<'timeline' | 'trace'>('timeline');
+  const [seededCorrelationId, setSeededCorrelationId] = useState<string | null>(null);
+
+  useEffect(() => {
+    setTab('timeline');
+    setSeededCorrelationId(null);
+  }, [jobId]);
+
+  const seed = useMutation({
+    mutationFn: async () => (await api.post(`/api/workflow/applications/${jobId}/seed`, {})).data as {
+      status: string;
+      correlationId?: string;
+    },
+    onSuccess: (data) => {
+      if (data.status === 'SEEDED' && data.correlationId) {
+        setSeededCorrelationId(data.correlationId);
+        setTab('trace');
+        toast({ variant: 'success', title: 'Workflow tracking seeded', description: 'Correlation id ready in the Trace tab.' });
+      } else {
+        toast({ variant: 'default', title: 'Workflow tracking is not enabled', description: 'Ask an admin to flip workflow.tracking.trigger.enabled.' });
+      }
+    },
+    onError: () => toast({ variant: 'error', title: 'Could not seed workflow tracking' }),
+  });
 
   const lifecycle = useQuery<LifecycleView | null>({
     queryKey: ['workflow', 'lifecycle', jobId],
@@ -368,8 +396,31 @@ function ApplicationDetailDialog({ target, onClose }: { target: DetailTarget | n
           {target?.company ? ` · ${target.company}` : ''}
         </DialogDescription>
       </DialogHeader>
-      <DialogBody className="space-y-5">
-        {loading ? (
+      <DialogBody className="space-y-4">
+        <Tabs
+          items={[
+            { value: 'timeline', label: 'Summary & Timeline' },
+            { value: 'trace', label: 'Trace' },
+          ]}
+          value={tab}
+          onChange={(v) => setTab(v as 'timeline' | 'trace')}
+        />
+
+        {tab === 'trace' ? (
+          <div className="space-y-4">
+            <div className="flex items-center justify-between gap-3 rounded-lg border border-border bg-muted/20 p-3">
+              <p className="text-xs text-muted-foreground">
+                Manually seed Phase 3A workflow tracking for this application (gated by
+                <code className="mx-1 rounded bg-muted px-1 py-0.5">workflow.tracking.trigger.enabled</code>
+                — a no-op with stock defaults).
+              </p>
+              <Button size="sm" variant="outline" onClick={() => seed.mutate()} loading={seed.isPending}>
+                <Sparkles className="h-3.5 w-3.5" /> Seed tracking
+              </Button>
+            </div>
+            <WorkflowTraceExplorer key={seededCorrelationId ?? 'empty'} initialCorrelationId={seededCorrelationId} compact />
+          </div>
+        ) : loading ? (
           <div className="space-y-3">
             {Array.from({ length: 3 }).map((_, i) => (
               <Skeleton key={i} className="h-14 rounded-lg" />

@@ -19,6 +19,7 @@ import { ErrorBoundary } from '@/components/common/ErrorBoundary';
 import { WorkflowForm } from '@/components/workflow/WorkflowForm';
 import { WorkflowStatusStepper } from '@/components/workflow/WorkflowStatusStepper';
 import { WorkflowInsights } from '@/components/workflow/WorkflowInsights';
+import { WorkflowTraceExplorer } from '@/components/workflow/WorkflowTraceExplorer';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge, type BadgeTone } from '@/components/ui/badge';
@@ -227,6 +228,9 @@ export default function Workflow() {
 
       {/* Phase 3B.5 — engine diagnostics: per-stage health + queue depth. */}
       <StageDiagnostics />
+
+      {/* Phase 4D — Phase 3A correlation trace explorer (timeline/graph/events/diagnostics/dead-letters). */}
+      <WorkflowTraceExplorer />
     </div>
   );
 }

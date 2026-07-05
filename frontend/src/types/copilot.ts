@@ -33,4 +33,4 @@ export interface CopilotStreamRequest {
 }
 
 /** App surfaces the Copilot is aware of (matches the backend page keys). */
-export type CopilotPageKey = 'resume' | 'jobs' | 'applications' | 'workflow' | 'dashboard';
+export type CopilotPageKey = 'resume' | 'jobs' | 'applications' | 'workflow' | 'dashboard' | 'career';

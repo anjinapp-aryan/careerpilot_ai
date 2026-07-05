@@ -320,6 +320,131 @@ export interface AgentExecutionEntry {
 // WorkflowStatusStepper component props
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Phase 3A follow-up — Workflow Correlation Trace API (WorkflowTraceController).
+// Read-only; mirrors WorkflowTraceDtos exactly. All engines ship dark, so a
+// correlation id with no data 404s — callers must treat that as "not found",
+// not an error.
+// ---------------------------------------------------------------------------
+
+export interface WorkflowStepTrace {
+  step: string;
+  status: 'SUCCESS' | 'FAILED' | 'RUNNING' | 'PENDING' | 'NOT_STARTED' | 'SKIPPED' | string;
+  startedAt?: string | null;
+  completedAt?: string | null;
+  durationMs?: number | null;
+}
+
+export interface WorkflowDeadLetterTrace {
+  worker: string;
+  stage: string;
+  error: string;
+  timestamp: string;
+}
+
+export interface WorkflowTrace {
+  correlationId: string;
+  workflowType: string;
+  status: 'RUNNING' | 'COMPLETED' | 'FAILED' | 'PARTIAL' | string;
+  startedAt?: string | null;
+  completedAt?: string | null;
+  durationMs?: number | null;
+  steps: WorkflowStepTrace[];
+  deadLetters: WorkflowDeadLetterTrace[];
+}
+
+export interface WorkflowSummary {
+  correlationId: string;
+  workflowType: string;
+  status: string;
+  totalSteps: number;
+  completedSteps: number;
+  failedSteps: number;
+  deadLetterCount: number;
+  durationMs?: number | null;
+}
+
+export interface CorrelationDiagnostics {
+  correlationId: string;
+  workflowType: string;
+  status: string;
+  totalEvents: number;
+  completedStages: number;
+  failedStages: number;
+  deadLetters: number;
+  workflowDurationMs?: number | null;
+}
+
+export interface WorkflowGraphNode {
+  id: string;
+  label: string;
+  status: string;
+  timestamp?: string | null;
+}
+
+export interface WorkflowGraphEdge {
+  from: string;
+  to: string;
+}
+
+export interface WorkflowGraph {
+  correlationId: string;
+  status: string;
+  nodes: WorkflowGraphNode[];
+  edges: WorkflowGraphEdge[];
+}
+
+export interface WorkflowEventTrace {
+  eventId: string;
+  correlationId: string;
+  eventType: string;
+  timestamp: string;
+  status: string;
+}
+
+/** One row of `GET /api/workflow/career-intelligence`. Mirrors the `CareerIntelligence` entity. */
+export interface CareerIntelligenceRow {
+  dimension: string;
+  dimensionKey?: string | null;
+  probability?: number | null;
+  sampleSize?: number | null;
+  computedAt?: string | null;
+}
+
+/** One row of `GET /api/resume/tailored/history` (`versions[]`). Mirrors `TailoredResumeResponse`. */
+export interface TailoredResumeVersion {
+  id: string;
+  jobId: string;
+  version: string;
+  atsBefore?: number | null;
+  atsAfter?: number | null;
+  improvementScore?: number | null;
+  status: string;
+  createdAt: string;
+}
+
+/** One row of `GET /api/resume/ats/history?jobId=`. Mirrors `AtsAnalysisResponse`. */
+export interface AtsAnalysisRow {
+  id: string;
+  jobId: string;
+  resumeTailoringId: string;
+  atsScore?: number | null;
+  matchedKeywords: string[];
+  missingKeywords: string[];
+  suggestions: string[];
+  status: string;
+  createdAt: string;
+}
+
+/** One row of `GET /api/workflow/analytics`. Mirrors the `ApplicationAnalytics` entity. */
+export interface ApplicationAnalyticsRow {
+  metric: string;
+  value?: number | null;
+  dimensionKey?: string | null;
+  windowStart?: string | null;
+  computedAt?: string | null;
+}
+
 export interface WorkflowStatusStepperProps {
   workflowId: string;
   agents?: WorkflowAgent[];

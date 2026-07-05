@@ -325,6 +325,16 @@ jobs:
     priority-enabled: ${RECOMMENDATION_PRIORITY_ENABLED:false}
   explain:
     enabled: ${JOB_EXPLAIN_ENABLED:true}         # "Why am I a match?" LLM endpoint
+  # ---- Phase 3B.1: career-relevance keyword configuration (ai.careerpilot.discovery.relevance) ----
+  # Comma-separated keyword overrides for RoleFamilyResolver/DomainPreferenceService. All optional —
+  # each has a sensible built-in default matching the Phase 3B.1 spec's example mappings.
+  relevance:
+    role-family:
+      java-backend: ${JOB_RELEVANCE_JAVA_BACKEND_TITLES:}
+      data-engineering: ${JOB_RELEVANCE_DATA_ENGINEERING_TITLES:}
+      devops: ${JOB_RELEVANCE_DEVOPS_TITLES:}
+      frontend: ${JOB_RELEVANCE_FRONTEND_TITLES:}
+    excluded-domains: ${JOB_RELEVANCE_EXCLUDED_DOMAINS:}
   discovery:
     enabled: ${JOB_DISCOVERY_ENABLED:true}
     # When true, Domestic/International tabs derive their country set from the candidate's own
@@ -637,6 +647,41 @@ career.intelligence:
     core-pool-size: ${CAREER_INTELLIGENCE_EXECUTOR_CORE_POOL_SIZE:1}
     max-pool-size: ${CAREER_INTELLIGENCE_EXECUTOR_MAX_POOL_SIZE:2}
     queue-capacity: ${CAREER_INTELLIGENCE_EXECUTOR_QUEUE_CAPACITY:100}
+
+# ---- Phase 3B.1: Career-Relevant Domestic/International Job Feed Engine ----
+# Converts Domestic/International from location-only feeds into career-aware feeds (role + skill +
+# experience + domain relevance >= 70), while Browse stays the unfiltered "everything" tab. Ships
+# fully DARK: all four flags default false. career.relevance.enabled is the master switch (read by
+# CareerRelevanceEvaluator); the two per-scope filter flags are read by JobService.discovered and
+# only take effect when the master flag is also on, so Domestic and International can be canaried
+# independently. career.explainability.enabled gates GET /api/jobs/{id}/relevance (404 when off).
+# See docs/PHASE_3B_1.md, docs/PHASE_3B_1_FILTER_RULES.md, docs/PHASE_3B_1_ROLLBACK.md.
+#
+# ---- Phase 3B.1.1: Soft Relevance Threshold Engine ----
+# Replaces the flat "score < 70 => reject" cutoff with per-feed bands (CareerThresholdPolicy),
+# gated by career.soft-thresholds.enabled (default false). While off, CareerThresholdPolicy
+# reproduces the exact legacy >=70 cutoff, so Domestic/International behavior is unchanged until
+# this flag is explicitly flipped. career.relevance.thresholds.* configures the per-feed cutoffs
+# (recommended/domestic/international/hidden) used only once the flag is on.
+# See docs/PHASE_3B_1_1.md, docs/PHASE_3B_1_1_THRESHOLD_POLICY.md, docs/PHASE_3B_1_1_MATCH_STRENGTH.md.
+career:
+  relevance:
+    enabled: ${CAREER_RELEVANCE_ENABLED:false}
+    thresholds:
+      recommended: ${CAREER_THRESHOLD_RECOMMENDED:85}
+      domestic: ${CAREER_THRESHOLD_DOMESTIC:60}
+      international: ${CAREER_THRESHOLD_INTERNATIONAL:60}
+      hidden: ${CAREER_THRESHOLD_HIDDEN:60}
+  soft-thresholds:
+    enabled: ${CAREER_SOFT_THRESHOLDS_ENABLED:false}
+  domestic:
+    filter:
+      enabled: ${CAREER_DOMESTIC_FILTER_ENABLED:false}
+  international:
+    filter:
+      enabled: ${CAREER_INTERNATIONAL_FILTER_ENABLED:false}
+  explainability:
+    enabled: ${CAREER_EXPLAINABILITY_ENABLED:false}
 
 # ---- Data retention (Phase 3B prep) ----
 # Additive, flag-gated purge of append-only ledgers that otherwise grow unbounded. DISABLED by

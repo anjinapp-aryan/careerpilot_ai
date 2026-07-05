@@ -67,6 +67,10 @@ const COLUMNS: Column[] = [
   { id: 'INTERVIEWING', label: 'Interview', tone: 'primary', dot: 'bg-primary' },
   { id: 'OFFER', label: 'Offer', tone: 'success', dot: 'bg-success' },
   { id: 'REJECTED', label: 'Rejected', tone: 'danger', dot: 'bg-danger' },
+  // Phase 4.7 — WITHDRAWN is a real, writable status on the core `applications.status` column
+  // (see Application.java); unlike "Viewed"/"Archived" (which have no core-status backing and
+  // are deferred), this column is a full drag-and-drop target.
+  { id: 'WITHDRAWN', label: 'Withdrawn', tone: 'neutral', dot: 'bg-muted-foreground' },
 ];
 
 export default function Applications() {
@@ -143,7 +147,7 @@ export default function Applications() {
     return (
       <div className="space-y-6">
         <PageHeader title="Applications" description="Track every opportunity through your pipeline." />
-        <div className="grid grid-cols-2 gap-4 md:grid-cols-5">
+        <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-6">
           {COLUMNS.map((c) => (
             <Skeleton key={c.id} className="h-96 rounded-xl" />
           ))}
@@ -178,7 +182,7 @@ export default function Applications() {
       />
 
       <DndContext sensors={sensors} onDragStart={onDragStart} onDragEnd={onDragEnd}>
-        <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-5">
+        <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-6">
           {COLUMNS.map((col) => (
             <KanbanColumn
               key={col.id}

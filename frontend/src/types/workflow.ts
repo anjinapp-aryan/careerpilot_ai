@@ -107,6 +107,26 @@ export interface RecommendedJob {
   /** Nullable: present only on the v2 (persisted) path. */
   confidenceLevel?: 'HIGH' | 'MEDIUM' | 'LOW' | null;
   scoreBreakdown?: ScoreBreakdown | null;
+  /** Phase 2B-1 auto-categorization; null unless JOB_AUTO_CATEGORIZATION_ENABLED. */
+  category?: string | null;
+  /** Phase 2C priority engine; all three null unless the priority engine is enabled. */
+  priority?: 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW' | null;
+  priorityScore?: number | null;
+  mustApply?: boolean | null;
+}
+
+/** `GET /api/jobs/{id}/relevance` response (Phase 3B.1 explainability). Mirrors
+ *  `CareerRelevanceExplanation`. 404s when `career.explainability.enabled` is false —
+ *  callers must treat a failed fetch as "not available", not an error. */
+export interface JobRelevance {
+  relevanceScore: number;
+  /** Human-readable band, e.g. "Strong Match" / "Weak Match" / "Hidden". */
+  matchStrength: string;
+  roleMatch: boolean;
+  skillOverlap: number;
+  experienceFit: boolean;
+  domainFit: boolean;
+  reasons: string[];
 }
 
 /** Persistent job preferences. Mirrors `CandidatePreferencesDto`. */

@@ -19,6 +19,7 @@ import {
   ArrowRight,
   Brain,
   Briefcase,
+  CalendarClock,
   Database,
   FileText,
   Gauge,
@@ -253,6 +254,12 @@ export default function Dashboard() {
           workflow / career-intelligence engines. Each card degrades gracefully when its
           backend surface is dark (disabled flag → empty/"not enabled"). */}
       <PlatformIntelligence />
+
+      {/* Phase 4.1 — Today's opportunities + pending approvals widgets */}
+      <div className="grid gap-4 lg:grid-cols-2">
+        <TodaysOpportunities />
+        <PendingApprovals />
+      </div>
 
       {/* AI insights + recent runs */}
       <div className="grid gap-4 lg:grid-cols-3">
@@ -531,6 +538,98 @@ function PlatformIntelligence() {
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+/**
+ * Phase 4.1 — "Today's opportunities": new (last 24h) recommended jobs. Reuses the existing
+ * Recommended-tab endpoint with its "new" filter; dark-tolerant (empty candidate profile /
+ * disabled recommender both render as an empty state, not an error).
+ */
+function TodaysOpportunities() {
+  const { data, isLoading, isError } = useQuery({
+    queryKey: ['dashboard', 'todays-opportunities'],
+    queryFn: async () =>
+      (await api.get('/api/jobs/recommended', { params: { filter: 'new', size: 5 } })).data as RecommendedJobsResponse,
+    retry: false,
+  });
+  const jobs = data?.jobs ?? [];
+
+  return (
+    <Card>
+      <CardHeader className="flex-row items-center justify-between pb-2">
+        <CardTitle className="text-base">Today's opportunities</CardTitle>
+        <Sparkles className="h-4 w-4 text-muted-foreground" />
+      </CardHeader>
+      <CardContent>
+        {isLoading ? (
+          <Skeleton className="h-24 w-full" />
+        ) : isError || jobs.length === 0 ? (
+          <p className="text-sm text-muted-foreground">No new matches in the last 24 hours.</p>
+        ) : (
+          <div className="divide-y divide-border">
+            {jobs.slice(0, 5).map((rec) => (
+              <div key={rec.job.id} className="flex items-center justify-between gap-3 py-2 text-sm">
+                <div className="min-w-0">
+                  <p className="truncate font-medium text-foreground">{rec.job.title}</p>
+                  <p className="truncate text-xs text-muted-foreground">{rec.job.company}</p>
+                </div>
+                <Badge tone="primary" className="shrink-0">{rec.matchScore}%</Badge>
+              </div>
+            ))}
+          </div>
+        )}
+        <Link to="/jobs" className="mt-3 block text-xs font-medium text-primary hover:underline">
+          View all →
+        </Link>
+      </CardContent>
+    </Card>
+  );
+}
+
+/**
+ * Phase 4.1 — "Pending approvals": the Phase 2C human-review collection. Same dark-tolerance
+ * as every other Platform Intelligence card — an empty/errored response reads as "nothing
+ * pending", not a failure.
+ */
+function PendingApprovals() {
+  const { data, isLoading, isError } = useQuery({
+    queryKey: ['dashboard', 'pending-approvals'],
+    queryFn: async () =>
+      (await api.get('/api/recommendations/human-review', { params: { size: 5 } })).data as RecommendedJobsResponse,
+    retry: false,
+  });
+  const jobs = data?.jobs ?? [];
+
+  return (
+    <Card>
+      <CardHeader className="flex-row items-center justify-between pb-2">
+        <CardTitle className="text-base">Pending approvals</CardTitle>
+        <CalendarClock className="h-4 w-4 text-muted-foreground" />
+      </CardHeader>
+      <CardContent>
+        {isLoading ? (
+          <Skeleton className="h-24 w-full" />
+        ) : isError || jobs.length === 0 ? (
+          <p className="text-sm text-muted-foreground">Nothing awaiting your review right now.</p>
+        ) : (
+          <div className="divide-y divide-border">
+            {jobs.slice(0, 5).map((rec) => (
+              <div key={rec.job.id} className="flex items-center justify-between gap-3 py-2 text-sm">
+                <div className="min-w-0">
+                  <p className="truncate font-medium text-foreground">{rec.job.title}</p>
+                  <p className="truncate text-xs text-muted-foreground">{rec.job.company}</p>
+                </div>
+                <Badge tone="warning" className="shrink-0">Review</Badge>
+              </div>
+            ))}
+          </div>
+        )}
+        <Link to="/jobs" className="mt-3 block text-xs font-medium text-primary hover:underline">
+          Review now →
+        </Link>
+      </CardContent>
+    </Card>
   );
 }
 

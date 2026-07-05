@@ -20,6 +20,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { EmptyState } from '@/components/ui/empty-state';
 import { cn } from '@/lib/cn';
 import { ExplainDialog } from '@/components/jobs/ExplainDialog';
+import { RelevanceDrawer } from '@/components/jobs/RelevanceDrawer';
 import { JobBadges } from '@/components/jobs/JobBadges';
 import { trackJobEvent } from '@/lib/jobTelemetry';
 import type { RecommendedFilter, RecommendedJob, RecommendedJobsResponse, ScoreBreakdown } from '@/types/workflow';
@@ -63,6 +64,7 @@ export function RecommendedJobs({ onApply, onSave, busy }: RecommendedJobsProps)
     breakdown?: ScoreBreakdown | null;
     matchScore?: number | null;
   } | null>(null);
+  const [relevanceJob, setRelevanceJob] = useState<{ id: string; title: string } | null>(null);
 
   const { data, isLoading, fetchNextPage, hasNextPage, isFetchingNextPage } =
     useInfiniteQuery<RecommendedJobsResponse>({
@@ -93,6 +95,10 @@ export function RecommendedJobs({ onApply, onSave, busy }: RecommendedJobsProps)
       breakdown: rec.scoreBreakdown ?? null,
       matchScore: rec.matchScore,
     });
+  };
+  const openRelevance = (rec: RecommendedJob) => {
+    trackJobEvent('why_seeing', { jobId: rec.job.id });
+    setRelevanceJob({ id: rec.job.id, title: rec.job.title });
   };
 
   if (isLoading) {
@@ -204,6 +210,7 @@ export function RecommendedJobs({ onApply, onSave, busy }: RecommendedJobsProps)
               onApply={handleApply}
               onSave={handleSave}
               onExplain={() => openExplain(rec)}
+              onRelevance={() => openRelevance(rec)}
               busy={busy}
             />
           ))}
@@ -224,6 +231,11 @@ export function RecommendedJobs({ onApply, onSave, busy }: RecommendedJobsProps)
         matchScore={explainJob?.matchScore}
         onClose={() => setExplainJob(null)}
       />
+      <RelevanceDrawer
+        jobId={relevanceJob?.id ?? null}
+        jobTitle={relevanceJob?.title}
+        onClose={() => setRelevanceJob(null)}
+      />
     </div>
   );
 }
@@ -234,6 +246,7 @@ function RecommendedJobCard({
   onApply,
   onSave,
   onExplain,
+  onRelevance,
   busy,
 }: {
   rec: RecommendedJob;
@@ -241,6 +254,7 @@ function RecommendedJobCard({
   onApply: (jobId: string) => void;
   onSave: (jobId: string) => void;
   onExplain: () => void;
+  onRelevance: () => void;
   busy: boolean;
 }) {
   const { job, matchScore, matchedSkills, missingSkills, confidenceLevel } = rec;
@@ -271,7 +285,7 @@ function RecommendedJobCard({
           </div>
         </div>
 
-        <JobBadges job={job} className="mt-3" />
+        <JobBadges job={job} className="mt-3" priority={rec.priority} mustApply={rec.mustApply} />
 
         {meta.length > 0 && (
           <p className="mt-2 text-xs text-muted-foreground">{meta.join('  •  ')}</p>
@@ -309,6 +323,9 @@ function RecommendedJobCard({
           </Button>
           <Button size="sm" variant="ghost" onClick={onExplain}>
             <HelpCircle className="h-3.5 w-3.5" /> Why am I a match?
+          </Button>
+          <Button size="sm" variant="ghost" onClick={onRelevance}>
+            <HelpCircle className="h-3.5 w-3.5" /> Why am I seeing this?
           </Button>
           {missingSkills.length > 0 && (
             <Button size="sm" variant="ghost" onClick={onExplain}>

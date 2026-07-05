@@ -34,8 +34,14 @@ import java.util.UUID;
  * <p>All engines ship DARK: with stock flags every read returns an empty/absent result and the gated
  * {@code POST} mutations are no-ops (the underlying service short-circuits when its flag is off), so this
  * controller is inert until the operator canaries a stage on.
+ *
+ * <p>Explicitly named {@code workflowLifecycleController} (not the default {@code workflowController}) —
+ * it would otherwise collide, at full component-scan boot, with {@link ai.careerpilot.api.WorkflowController}
+ * (the pre-existing LangGraph run/resume/get/recent controller at {@code /api/workflows}), which also
+ * defaults to bean name {@code workflowController}. Same collision-avoidance convention already applied
+ * to {@code careerAnalyticsWorker}; the original controller is left untouched.
  */
-@RestController
+@RestController("workflowLifecycleController")
 @RequestMapping("/api/workflow")
 public class WorkflowController {
 

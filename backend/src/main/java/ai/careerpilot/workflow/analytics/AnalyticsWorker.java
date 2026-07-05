@@ -25,8 +25,13 @@ import org.springframework.transaction.event.TransactionalEventListener;
  * {@link ApplicationRejectedEvent} — exactly when success rates change) and emits
  * {@link AnalyticsComputedEvent} to feed career intelligence. Dedicated {@code careerAnalyticsExecutor};
  * failure-isolated; gated by {@code workflow.analytics.trigger.enabled}.
+ *
+ * <p>Explicitly named {@code careerAnalyticsWorker} (not the default {@code analyticsWorker}) — it
+ * would otherwise collide, at full component-scan boot, with {@link ai.careerpilot.execution.analytics.AnalyticsWorker}
+ * (Phase 2E), which also defaults to bean name {@code analyticsWorker}. Same collision-avoidance
+ * convention already applied to the {@code careerAnalyticsExecutor} bean; 2E is left untouched.
  */
-@Component
+@Component("careerAnalyticsWorker")
 public class AnalyticsWorker extends AbstractWorkflowWorker {
 
     static final String WORKFLOW = "application-analytics";

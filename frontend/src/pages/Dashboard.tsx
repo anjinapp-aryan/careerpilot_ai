@@ -451,7 +451,7 @@ function PlatformIntelligence() {
                 <Badge tone={highPriorityTotal > 0 ? 'warning' : 'neutral'}>{highPriorityTotal} high priority</Badge>
                 <Badge tone={humanReviewTotal > 0 ? 'primary' : 'neutral'}>{humanReviewTotal} pending review</Badge>
               </div>
-              <Link to="/jobs" className="block text-xs font-medium text-primary hover:underline">
+              <Link to="/recommendations" className="block text-xs font-medium text-primary hover:underline">
                 Review →
               </Link>
             </div>
@@ -640,7 +640,7 @@ function PendingApprovals() {
             ))}
           </div>
         )}
-        <Link to="/jobs" className="mt-3 block text-xs font-medium text-primary hover:underline">
+        <Link to="/recommendations" className="mt-3 block text-xs font-medium text-primary hover:underline">
           Review now →
         </Link>
       </CardContent>

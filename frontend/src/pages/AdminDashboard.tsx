@@ -203,6 +203,160 @@ function EngineHealthMatrix() {
   );
 }
 
+interface ProviderStatusRow {
+  name: string;
+  displayName?: string;
+  configured?: boolean;
+  model?: string | null;
+  status?: string;
+  circuitState?: string;
+  health?: string;
+}
+
+/**
+ * Phase 4.1 — AI provider analytics: the failover chain's per-provider status (GET /api/ai/providers)
+ * joined with the gateway's call/failure/latency/fallback counters (GET /api/diagnostics/ai →
+ * gateway_stats: {key}Calls/{key}Failures/{key}RateLimits/{key}AvgLatencyMs + fallbackCount).
+ */
+function ProviderAnalyticsPanel() {
+  const providers = useQuery<ProviderStatusRow[]>({
+    queryKey: ['admin', 'ai-providers'],
+    queryFn: async () => {
+      try {
+        return (await api.get('/api/ai/providers')).data;
+      } catch {
+        return [];
+      }
+    },
+    retry: false,
+    staleTime: 30_000,
+  });
+
+  const diag = useQuery<Record<string, any> | null>({
+    queryKey: ['admin', 'ai-diagnostics'],
+    queryFn: async () => {
+      try {
+        return (await api.get('/api/diagnostics/ai')).data;
+      } catch {
+        return null;
+      }
+    },
+    retry: false,
+    staleTime: 30_000,
+  });
+
+  const rows = providers.data ?? [];
+  const stats = (diag.data?.gateway_stats ?? {}) as Record<string, number>;
+  const fallbackCount = stats.fallbackCount ?? 0;
+
+  return (
+    <Card>
+      <CardHeader className="flex-row items-center justify-between">
+        <CardTitle className="flex items-center gap-2">
+          <Sparkles className="h-4 w-4 text-muted-foreground" /> AI provider analytics
+        </CardTitle>
+        <Badge tone={fallbackCount > 0 ? 'warning' : 'neutral'}>{fallbackCount} fallbacks</Badge>
+      </CardHeader>
+      <CardContent>
+        {providers.isLoading ? (
+          <Skeleton className="h-32 w-full" />
+        ) : rows.length === 0 ? (
+          <EmptyState title="Unavailable" description="The AI gateway's provider list could not be loaded." />
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-muted-foreground">
+                  <th className="py-2 pr-4">Provider</th>
+                  <th className="py-2 pr-4">Model</th>
+                  <th className="py-2 pr-4">Status</th>
+                  <th className="py-2 pr-4">Circuit</th>
+                  <th className="py-2 pr-4">Calls</th>
+                  <th className="py-2 pr-4">Failures</th>
+                  <th className="py-2 pr-4">Rate limits</th>
+                  <th className="py-2 pr-4">Avg latency</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((p) => (
+                  <tr key={p.name} className="border-b border-border/50">
+                    <td className="py-2 pr-4 font-medium capitalize">{p.displayName ?? p.name}</td>
+                    <td className="py-2 pr-4 text-xs text-muted-foreground">{p.model ?? '—'}</td>
+                    <td className="py-2 pr-4"><Badge tone={healthTone(p.status)}>{p.status ?? '—'}</Badge></td>
+                    <td className="py-2 pr-4 text-xs text-muted-foreground">{p.circuitState ?? '—'}</td>
+                    <td className="py-2 pr-4 tabular-nums">{stats[`${p.name}Calls`] ?? 0}</td>
+                    <td className="py-2 pr-4 tabular-nums">{stats[`${p.name}Failures`] ?? 0}</td>
+                    <td className="py-2 pr-4 tabular-nums">{stats[`${p.name}RateLimits`] ?? 0}</td>
+                    <td className="py-2 pr-4 tabular-nums text-muted-foreground">
+                      {stats[`${p.name}AvgLatencyMs`] != null ? `${Math.round(stats[`${p.name}AvgLatencyMs`])}ms` : '—'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+/** Phase 4.1 — MatchCache hit/miss diagnostics (GET /api/diagnostics/match-cache). */
+function CacheDiagnosticsPanel() {
+  const { data, isLoading } = useQuery<Record<string, any> | null>({
+    queryKey: ['admin', 'match-cache'],
+    queryFn: async () => {
+      try {
+        return (await api.get('/api/diagnostics/match-cache')).data;
+      } catch {
+        return null;
+      }
+    },
+    retry: false,
+    staleTime: 30_000,
+  });
+
+  const hits = Number(data?.matchCacheHits ?? 0);
+  const misses = Number(data?.matchCacheMisses ?? 0);
+  const total = hits + misses;
+  const hitRatio = total > 0 ? Math.round((hits / total) * 100) : null;
+
+  return (
+    <Card>
+      <CardHeader className="flex-row items-center justify-between">
+        <CardTitle className="flex items-center gap-2">
+          <Database className="h-4 w-4 text-muted-foreground" /> Match cache
+        </CardTitle>
+        {data && (
+          <Badge tone={data.enabled ? 'success' : 'neutral'}>{data.enabled ? 'enabled' : 'disabled (dark)'}</Badge>
+        )}
+      </CardHeader>
+      <CardContent>
+        {isLoading ? (
+          <Skeleton className="h-20 w-full" />
+        ) : !data ? (
+          <EmptyState title="Unavailable" description="Match-cache diagnostics could not be loaded." />
+        ) : (
+          <div className="grid grid-cols-3 gap-3 text-center">
+            <div className="rounded-lg border border-border px-3 py-2">
+              <p className="text-lg font-semibold tabular-nums text-foreground">{hits}</p>
+              <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Hits</p>
+            </div>
+            <div className="rounded-lg border border-border px-3 py-2">
+              <p className="text-lg font-semibold tabular-nums text-foreground">{misses}</p>
+              <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Misses</p>
+            </div>
+            <div className="rounded-lg border border-border px-3 py-2">
+              <p className="text-lg font-semibold tabular-nums text-foreground">{hitRatio != null ? `${hitRatio}%` : '—'}</p>
+              <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Hit ratio</p>
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 export default function AdminDashboard() {
   const qc = useQueryClient();
   const { toast } = useToast();
@@ -633,6 +787,12 @@ export default function AdminDashboard() {
             )}
           </CardContent>
         </Card>
+      </div>
+
+      {/* Phase 4.1 — AI provider chain analytics + match-cache diagnostics. */}
+      <ProviderAnalyticsPanel />
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+        <CacheDiagnosticsPanel />
       </div>
 
       {/* Phase 4G — Workflow (3A) + Execution (2E) + resume-pipeline (2D) diagnostics matrix. */}

@@ -34,7 +34,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { cn } from '@/lib/cn';
-import type { Resume, ResumeVersion, TailoredResumeVersion } from '@/types/workflow';
+import type { AtsAnalysisRow, Resume, ResumeVersion, TailoredResumeVersion } from '@/types/workflow';
 
 type SortKey = 'recent' | 'name' | 'score';
 
@@ -402,19 +402,7 @@ function TailoringHistoryPanel() {
               </thead>
               <tbody>
                 {versions.map((v) => (
-                  <tr key={v.id} className="border-b border-border/50">
-                    <td className="py-2 pr-4 font-medium">{v.version}</td>
-                    <td className="py-2 pr-4 font-mono text-xs text-muted-foreground">{v.jobId.slice(0, 8)}</td>
-                    <td className="py-2 pr-4 tabular-nums">
-                      {v.atsBefore ?? '—'} → {v.atsAfter ?? '—'}
-                    </td>
-                    <td className="py-2 pr-4">
-                      <Badge tone={v.status === 'COMPLETED' ? 'success' : v.status === 'FAILED' ? 'danger' : 'neutral'}>
-                        {v.status}
-                      </Badge>
-                    </td>
-                    <td className="py-2 pr-4 text-muted-foreground">{new Date(v.createdAt).toLocaleDateString()}</td>
-                  </tr>
+                  <TailoringRow key={v.id} version={v} />
                 ))}
               </tbody>
             </table>
@@ -422,6 +410,89 @@ function TailoringHistoryPanel() {
         )}
       </CardContent>
     </Card>
+  );
+}
+
+/** One tailored version row; expands to its per-job ATS analysis history (Phase 2D.2). */
+function TailoringRow({ version: v }: { version: TailoredResumeVersion }) {
+  const [open, setOpen] = useState(false);
+  const { data, isLoading } = useQuery<{ analyses: AtsAnalysisRow[] } | null>({
+    queryKey: ['resume', 'ats-history', v.jobId],
+    queryFn: async () => {
+      try {
+        return (await api.get('/api/resume/ats/history', { params: { jobId: v.jobId } })).data;
+      } catch {
+        return null;
+      }
+    },
+    enabled: open,
+    retry: false,
+    staleTime: 30_000,
+  });
+  const analyses = data?.analyses ?? [];
+
+  return (
+    <>
+      <tr
+        className="cursor-pointer border-b border-border/50 hover:bg-muted/40"
+        onClick={() => setOpen((o) => !o)}
+      >
+        <td className="py-2 pr-4 font-medium">
+          <span className="flex items-center gap-1.5">
+            {open ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+            {v.version}
+          </span>
+        </td>
+        <td className="py-2 pr-4 font-mono text-xs text-muted-foreground">{v.jobId.slice(0, 8)}</td>
+        <td className="py-2 pr-4 tabular-nums">
+          {v.atsBefore ?? '—'} → {v.atsAfter ?? '—'}
+        </td>
+        <td className="py-2 pr-4">
+          <Badge tone={v.status === 'COMPLETED' ? 'success' : v.status === 'FAILED' ? 'danger' : 'neutral'}>
+            {v.status}
+          </Badge>
+        </td>
+        <td className="py-2 pr-4 text-muted-foreground">{new Date(v.createdAt).toLocaleDateString()}</td>
+      </tr>
+      {open && (
+        <tr className="border-b border-border/50 bg-muted/20">
+          <td colSpan={5} className="px-4 py-3">
+            {isLoading ? (
+              <Skeleton className="h-14 w-full" />
+            ) : analyses.length === 0 ? (
+              <p className="text-xs text-muted-foreground">
+                No ATS analyses for this job yet — the ATS optimization engine (Phase 2D.2) runs after tailoring
+                once enabled.
+              </p>
+            ) : (
+              <div className="space-y-2">
+                {analyses.map((a) => (
+                  <div key={a.id} className="rounded-lg border border-border bg-card p-2.5 text-xs">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge tone={(a.atsScore ?? 0) >= 75 ? 'success' : (a.atsScore ?? 0) >= 50 ? 'primary' : 'warning'}>
+                        ATS {a.atsScore ?? '—'}/100
+                      </Badge>
+                      <Badge tone="neutral">{a.status}</Badge>
+                      <span className="ml-auto text-muted-foreground">{new Date(a.createdAt).toLocaleString()}</span>
+                    </div>
+                    {a.missingKeywords.length > 0 && (
+                      <p className="mt-1.5 text-warning">Missing: {a.missingKeywords.slice(0, 8).join(', ')}</p>
+                    )}
+                    {a.suggestions.length > 0 && (
+                      <ul className="mt-1 space-y-0.5 text-muted-foreground">
+                        {a.suggestions.slice(0, 3).map((s, i) => (
+                          <li key={i}>• {s}</li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </td>
+        </tr>
+      )}
+    </>
   );
 }
 

@@ -411,6 +411,69 @@ export interface CareerIntelligenceRow {
   computedAt?: string | null;
 }
 
+/** One row of `GET /api/recommendations/audit`. Mirrors the `recommendation_audit` entity. */
+export interface RecommendationAuditRow {
+  id: string;
+  jobId: string;
+  profileVersion?: string | null;
+  profileSource: string;
+  skillScore: number;
+  roleScore: number;
+  preferenceScore: number;
+  locationScore: number;
+  visaScore: number;
+  salaryScore: number;
+  finalScore: number;
+  decision?: string | null;
+  createdAt: string;
+}
+
+/** `GET /api/recommendations/behavior-profile`. Mirrors `CandidateBehaviorProfile` — the
+ *  preference fields are serialized text (JSON array or CSV), parsed client-side. */
+export interface BehaviorProfile {
+  userId?: string;
+  preferredRoles?: string | null;
+  rejectedRoles?: string | null;
+  preferredCountries?: string | null;
+  rejectedCountries?: string | null;
+  preferredWorkModes?: string | null;
+  rejectedWorkModes?: string | null;
+  preferredDomains?: string | null;
+  rejectedDomains?: string | null;
+  updatedAt?: string | null;
+}
+
+/** One row of `GET /api/recommendations/feedback`. Mirrors `RecommendationFeedback`. */
+export interface RecommendationFeedbackRow {
+  id: string;
+  jobId: string;
+  action: string;
+  reason?: string | null;
+  createdAt: string;
+}
+
+/** One entry of `GET /api/execution/pending` (Phase 2E approval queue). Mirrors `ApprovalQueueEntry`. */
+export interface ApprovalQueueItem {
+  id: string;
+  jobId: string;
+  applicationPackageId: string;
+  safetyVerdict: string;
+  status: 'PENDING' | 'APPROVED' | 'REJECTED' | 'EXPIRED' | string;
+  decidedBy?: string | null;
+  decisionNote?: string | null;
+  requestedAt: string;
+  decidedAt?: string | null;
+  expiresAt?: string | null;
+}
+
+/** One entry of `GET /api/candidate-profile/history`. Mirrors `CandidateProfileHistoryDto`. */
+export interface CandidateProfileHistoryEntry {
+  reason: string;
+  createdAt: string;
+  before?: CandidateProfile | null;
+  after?: CandidateProfile | null;
+}
+
 /** One row of `GET /api/resume/tailored/history` (`versions[]`). Mirrors `TailoredResumeResponse`. */
 export interface TailoredResumeVersion {
   id: string;

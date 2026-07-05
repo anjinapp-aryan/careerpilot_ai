@@ -24,6 +24,7 @@ import { useToast } from '@/components/ui/toast';
 import { Tabs } from '@/components/ui/tabs';
 import { Dialog, DialogBody, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { WorkflowTraceExplorer } from '@/components/workflow/WorkflowTraceExplorer';
+import { ExecutionApprovalsPanel } from '@/components/execution/ExecutionApprovalsPanel';
 import { cn } from '@/lib/cn';
 import type { Application, Job, JobsPage } from '@/types/workflow';
 
@@ -183,6 +184,9 @@ export default function Applications() {
           </Badge>
         }
       />
+
+      {/* Phase 2E — pending auto-apply approvals; renders nothing while the engine is dark. */}
+      <ExecutionApprovalsPanel />
 
       <DndContext sensors={sensors} onDragStart={onDragStart} onDragEnd={onDragEnd}>
         <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-6">

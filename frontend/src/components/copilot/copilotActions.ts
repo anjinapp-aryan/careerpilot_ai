@@ -82,6 +82,18 @@ export function pageConfigForPath(pathname: string): PageConfig {
       ],
     };
   }
+  if (pathname.startsWith('/recommendations')) {
+    return {
+      page: 'jobs',
+      label: 'Recommendations',
+      icon: Target,
+      actions: [
+        { key: 'recommendations', label: 'Explain My Recommendations', icon: Sparkles, prompt: 'Explain my current recommendations — why these jobs, in this priority order?' },
+        { key: 'job_matching', label: 'Match Analysis', icon: Target, prompt: 'How well do I match my top recommended jobs, and what gaps should I close?' },
+        { key: 'skills_gap', label: 'Skill Gaps', icon: ListChecks, prompt: 'Which missing skills appear most often across my recommendations?' },
+      ],
+    };
+  }
   if (pathname.startsWith('/career')) {
     return {
       page: 'career',

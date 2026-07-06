@@ -41,8 +41,9 @@ import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { EmptyState } from '@/components/ui/empty-state';
 import { KpiCard } from '@/components/dashboard/KpiCard';
+import { DailyDiscoveryPanel } from '@/components/dashboard/DailyDiscoveryPanel';
 import { CopilotAvatar } from '@/components/copilot/CopilotAvatar';
-import type { CareerIntelligenceRow, RecommendedJobsResponse, WorkflowRun } from '@/types/workflow';
+import type { CareerIntelligenceRow, DailyDiscoverySnapshot, RecommendedJobsResponse, WorkflowRun } from '@/types/workflow';
 
 interface Snapshot {
   careerHealthScore: number;
@@ -54,6 +55,8 @@ interface Snapshot {
   applications: Record<string, number>;
   resumes: number;
   recentRuns: WorkflowRun[];
+  /** Phase 5O — additive; null until the daily discovery agent has run for this user. */
+  dailyDiscovery?: DailyDiscoverySnapshot | null;
 }
 
 const RUN_TONE: Record<string, string> = {
@@ -256,6 +259,9 @@ export default function Dashboard() {
           workflow / career-intelligence engines. Each card degrades gracefully when its
           backend surface is dark (disabled flag → empty/"not enabled"). */}
       <PlatformIntelligence />
+
+      {/* Phase 5.1A — Daily Discovery Intelligence */}
+      <DailyDiscoveryPanel snapshot={data.dailyDiscovery} />
 
       {/* Phase 4.1 — Today's opportunities + pending approvals widgets */}
       <div className="grid gap-4 lg:grid-cols-2">

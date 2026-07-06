@@ -57,6 +57,8 @@ export function pageConfigForPath(pathname: string): PageConfig {
       actions: [
         { key: 'job_matching', label: 'Job Matching', icon: Target, prompt: 'How well do I match this job, and what gaps should I close?' },
         { key: 'job_explanation', label: 'Explain Job', icon: Sparkles, prompt: 'Explain this job and what it really involves.' },
+        { key: 'recommendations', label: "Today's Best Jobs", icon: Sparkles, prompt: "What are today's best jobs, and which are must-apply?" },
+        { key: 'skills_gap', label: 'Trending Skills', icon: ListChecks, prompt: 'What skills are trending in today’s discovered jobs?' },
       ],
     };
   }
@@ -91,6 +93,8 @@ export function pageConfigForPath(pathname: string): PageConfig {
         { key: 'recommendations', label: 'Explain My Recommendations', icon: Sparkles, prompt: 'Explain my current recommendations — why these jobs, in this priority order?' },
         { key: 'job_matching', label: 'Match Analysis', icon: Target, prompt: 'How well do I match my top recommended jobs, and what gaps should I close?' },
         { key: 'skills_gap', label: 'Skill Gaps', icon: ListChecks, prompt: 'Which missing skills appear most often across my recommendations?' },
+        { key: 'recommendations', label: 'Best Company Matches', icon: Sparkles, prompt: 'Which companies match me best based on today’s discovery run?' },
+        { key: 'recommendations', label: "What's Changed", icon: CalendarClock, prompt: "What changed in my recommendations since yesterday's discovery run?" },
       ],
     };
   }
@@ -113,6 +117,7 @@ export function pageConfigForPath(pathname: string): PageConfig {
     actions: [
       { key: 'career_guidance', label: 'Career Advice', icon: Brain, prompt: 'Give me career advice based on my current profile and activity.' },
       { key: 'recommendations', label: 'Explain My Recommendations', icon: Sparkles, prompt: 'Explain my current job recommendations and why they were prioritized this way.' },
+      { key: 'recommendations', label: "Today's Best Jobs", icon: Sparkles, prompt: "What are today's best jobs, and which are must-apply?" },
     ],
   };
 }

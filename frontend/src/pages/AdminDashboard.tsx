@@ -11,6 +11,7 @@ import { EmptyState } from '@/components/ui/empty-state';
 import { KpiCard } from '@/components/dashboard/KpiCard';
 import { useToast } from '@/components/ui/toast';
 import { WorkflowTraceExplorer } from '@/components/workflow/WorkflowTraceExplorer';
+import { DailyDiscoveryHealthPanel } from '@/components/admin/DailyDiscoveryHealthPanel';
 
 /** Bar-chart rows for an "Unknown" bucket are real data but not actionable — muted instead of the brand color. */
 const UNKNOWN_LABEL = 'Unknown';
@@ -797,6 +798,9 @@ export default function AdminDashboard() {
 
       {/* Phase 4G — Workflow (3A) + Execution (2E) + resume-pipeline (2D) diagnostics matrix. */}
       <EngineHealthMatrix />
+
+      {/* Phase 5.1D — Daily Discovery scheduler + provider health, with the manual trigger. */}
+      <DailyDiscoveryHealthPanel />
 
       {/* Phase 4G — Correlation Explorer, shared with the Workflow page. */}
       <WorkflowTraceExplorer />

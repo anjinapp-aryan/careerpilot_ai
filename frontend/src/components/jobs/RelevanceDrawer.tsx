@@ -6,14 +6,21 @@ import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Tabs } from '@/components/ui/tabs';
 import { Dialog, DialogBody, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
-import type { JobRelevance } from '@/types/workflow';
+import type { CareerIntelligenceRow, JobRelevance, RecommendedJob } from '@/types/workflow';
 
-type RelevanceTab = 'summary' | 'analysis' | 'reasons';
+type RelevanceTab = 'summary' | 'discovery' | 'analysis' | 'recommendation' | 'reasons' | 'career';
 
 interface RelevanceDrawerProps {
   jobId: string | null;
   jobTitle?: string;
   onClose: () => void;
+  /**
+   * Phase 5.1B — Daily Discovery Drawer: when the caller has a scored recommendation on hand
+   * (from the Recommended tab), pass it to unlock the Discovery/Recommendation/Career
+   * Intelligence tabs using data already fetched — no extra network calls beyond the existing
+   * relevance + career-intelligence endpoints.
+   */
+  rec?: RecommendedJob | null;
 }
 
 function strengthTone(strength: string): 'success' | 'primary' | 'warning' | 'danger' {
@@ -42,10 +49,10 @@ function Check({ ok, label }: { ok: boolean; label: string }) {
  * (Phase 3B.1 explainability). The endpoint 404s when career.explainability.enabled is
  * false, so a failed fetch renders a quiet "not available yet" state rather than an error.
  */
-export function RelevanceDrawer({ jobId, jobTitle, onClose }: RelevanceDrawerProps) {
+export function RelevanceDrawer({ jobId, jobTitle, onClose, rec }: RelevanceDrawerProps) {
   const [tab, setTab] = useState<RelevanceTab>('summary');
   useEffect(() => setTab('summary'), [jobId]);
-  const { data, isLoading, isError } = useQuery<JobRelevance | null>({
+  const { data, isLoading } = useQuery<JobRelevance | null>({
     queryKey: ['jobs', 'relevance', jobId],
     queryFn: async () => {
       try {
@@ -58,6 +65,23 @@ export function RelevanceDrawer({ jobId, jobTitle, onClose }: RelevanceDrawerPro
     retry: false,
     staleTime: 60_000,
   });
+
+  const career = useQuery<CareerIntelligenceRow[]>({
+    queryKey: ['jobs', 'relevance-career-intel'],
+    queryFn: async () => {
+      try {
+        return (await api.get('/api/workflow/career-intelligence')).data;
+      } catch {
+        return [];
+      }
+    },
+    enabled: !!jobId && tab === 'career',
+    retry: false,
+    staleTime: 60_000,
+  });
+
+  const job = rec?.job;
+  const discoveryDate = job?.postedDate ?? job?.createdAt;
 
   return (
     <Dialog open={!!jobId} onOpenChange={(o) => !o && onClose()} size="md">
@@ -76,45 +100,104 @@ export function RelevanceDrawer({ jobId, jobTitle, onClose }: RelevanceDrawerPro
               <Skeleton key={i} className="h-6 w-full rounded-md" />
             ))}
           </div>
-        ) : isError || !data ? (
-          <p className="text-sm text-muted-foreground">
-            Career relevance explainability isn't available for this role yet.
-          </p>
         ) : (
           <>
             <Tabs
               items={[
                 { value: 'summary', label: 'Summary' },
-                { value: 'analysis', label: 'Match Analysis' },
-                { value: 'reasons', label: 'Reasons', count: data.reasons.length },
+                ...(rec ? [{ value: 'discovery', label: 'Discovery' }] : []),
+                { value: 'analysis', label: 'Matching' },
+                ...(rec ? [{ value: 'recommendation', label: 'Recommendation' }] : []),
+                { value: 'reasons', label: 'Relevance', count: data?.reasons.length },
+                ...(rec ? [{ value: 'career', label: 'Career Intelligence' }] : []),
               ]}
               value={tab}
               onChange={(v) => setTab(v as RelevanceTab)}
             />
 
             {tab === 'summary' && (
-              <div className="flex items-center justify-between rounded-lg border border-border bg-muted/30 px-3 py-2.5">
-                <span className="flex items-center gap-1.5 text-sm font-medium text-foreground">
-                  <Sparkles className="h-4 w-4 text-primary" /> Relevance score
-                </span>
-                <div className="flex items-center gap-2">
-                  <span className="tabular-nums text-sm font-semibold text-foreground">{data.relevanceScore}%</span>
-                  <Badge tone={strengthTone(data.matchStrength)}>{data.matchStrength}</Badge>
+              data ? (
+                <div className="flex items-center justify-between rounded-lg border border-border bg-muted/30 px-3 py-2.5">
+                  <span className="flex items-center gap-1.5 text-sm font-medium text-foreground">
+                    <Sparkles className="h-4 w-4 text-primary" /> Relevance score
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <span className="tabular-nums text-sm font-semibold text-foreground">{data.relevanceScore}%</span>
+                    <Badge tone={strengthTone(data.matchStrength)}>{data.matchStrength}</Badge>
+                  </div>
                 </div>
-              </div>
+              ) : rec ? (
+                <div className="flex items-center justify-between rounded-lg border border-border bg-muted/30 px-3 py-2.5">
+                  <span className="text-sm font-medium text-foreground">Match score</span>
+                  <Badge tone="primary">{rec.matchScore}%</Badge>
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground">Career relevance explainability isn't available for this role yet.</p>
+              )
             )}
 
-            {tab === 'analysis' && (
-              <ul className="space-y-2 rounded-lg border border-border p-3">
-                <Check ok={data.roleMatch} label="Role match" />
-                <Check ok={data.skillOverlap > 0} label={`Skill overlap (${data.skillOverlap} matched)`} />
-                <Check ok={data.experienceFit} label="Experience fit" />
-                <Check ok={data.domainFit} label="Domain match" />
+            {tab === 'discovery' && rec && job && (
+              <ul className="space-y-2 rounded-lg border border-border p-3 text-sm">
+                <li className="flex justify-between"><span className="text-muted-foreground">Source</span><span className="font-medium text-foreground">{job.source ?? '—'}</span></li>
+                <li className="flex justify-between"><span className="text-muted-foreground">Discovery date</span><span className="font-medium text-foreground">{discoveryDate ? new Date(discoveryDate).toLocaleDateString() : '—'}</span></li>
+                <li className="flex justify-between"><span className="text-muted-foreground">Location</span><span className="font-medium text-foreground">{job.location ?? job.country ?? '—'}</span></li>
+                <li className="flex justify-between"><span className="text-muted-foreground">Remote type</span><span className="font-medium text-foreground">{job.remoteType ?? (job.remote ? 'REMOTE' : '—')}</span></li>
               </ul>
             )}
 
+            {tab === 'analysis' && (
+              data ? (
+                <ul className="space-y-2 rounded-lg border border-border p-3">
+                  <Check ok={data.roleMatch} label="Role match" />
+                  <Check ok={data.skillOverlap > 0} label={`Skill overlap (${data.skillOverlap} matched)`} />
+                  <Check ok={data.experienceFit} label="Experience fit" />
+                  <Check ok={data.domainFit} label="Domain match" />
+                </ul>
+              ) : rec ? (
+                <div className="space-y-2 rounded-lg border border-border p-3 text-sm">
+                  {rec.matchedSkills.length > 0 && (
+                    <p><span className="text-muted-foreground">Matched skills: </span>{rec.matchedSkills.join(', ')}</p>
+                  )}
+                  {rec.missingSkills.length > 0 && (
+                    <p><span className="text-muted-foreground">Missing skills: </span>{rec.missingSkills.join(', ')}</p>
+                  )}
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground">Not available for this role yet.</p>
+              )
+            )}
+
+            {tab === 'recommendation' && rec && (
+              <ul className="space-y-2 rounded-lg border border-border p-3 text-sm">
+                <li className="flex justify-between"><span className="text-muted-foreground">Category</span><span className="font-medium text-foreground">{rec.category?.replaceAll('_', ' ') ?? '—'}</span></li>
+                <li className="flex justify-between"><span className="text-muted-foreground">Priority</span><span className="font-medium text-foreground">{rec.priority ?? '—'}</span></li>
+                <li className="flex justify-between"><span className="text-muted-foreground">Must apply</span><span className="font-medium text-foreground">{rec.mustApply ? 'Yes' : 'No'}</span></li>
+                <li className="flex justify-between"><span className="text-muted-foreground">Confidence</span><span className="font-medium text-foreground">{rec.confidenceLevel ?? '—'}</span></li>
+              </ul>
+            )}
+
+            {tab === 'career' && (
+              career.isLoading ? (
+                <Skeleton className="h-20 w-full" />
+              ) : (career.data ?? []).filter((r) => typeof r.probability === 'number').length === 0 ? (
+                <p className="text-sm text-muted-foreground">Career intelligence isn't enabled yet.</p>
+              ) : (
+                <ul className="space-y-1.5">
+                  {(career.data ?? [])
+                    .filter((r) => typeof r.probability === 'number')
+                    .slice(0, 5)
+                    .map((r, i) => (
+                      <li key={i} className="flex items-center justify-between text-sm">
+                        <span className="text-muted-foreground">{r.dimensionKey || r.dimension}</span>
+                        <span className="font-semibold tabular-nums text-foreground">{Math.round((r.probability ?? 0) * 100)}%</span>
+                      </li>
+                    ))}
+                </ul>
+              )
+            )}
+
             {tab === 'reasons' && (
-              data.reasons.length > 0 ? (
+              data && data.reasons.length > 0 ? (
                 <ul className="space-y-1.5">
                   {data.reasons.map((r, i) => (
                     <li key={i} className="flex gap-2 text-sm text-muted-foreground">

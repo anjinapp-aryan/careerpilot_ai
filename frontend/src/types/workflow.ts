@@ -196,7 +196,10 @@ export type RecommendedFilter =
   | 'visa'
   | 'relocation'
   | 'high'
-  | 'new';
+  | 'new'
+  | 'must-apply'
+  | 'high-priority'
+  | 'human-review';
 
 /** `GET /api/jobs/recommended` response. `profile` is null until the user runs the AI workflow. */
 export interface RecommendedJobsResponse {
@@ -506,6 +509,110 @@ export interface ApplicationAnalyticsRow {
   dimensionKey?: string | null;
   windowStart?: string | null;
   computedAt?: string | null;
+}
+
+// ---------------------------------------------------------------------------
+// Phase 5 — Daily Job Discovery Agent. Ships dark; every field is nullable/
+// optional because the agent may never have run for a given user or at all.
+// ---------------------------------------------------------------------------
+
+/** The `dailyDiscovery` section of `GET /api/dashboard` (DashboardService additive field). Null when the agent has never run for this user. */
+export interface DailyDiscoverySnapshot {
+  computedAt?: string | null;
+  recommendedJobs?: number | null;
+  mustApplyJobs?: number | null;
+  highPriorityJobs?: number | null;
+  humanReviewJobs?: number | null;
+  domesticJobs?: number | null;
+  internationalJobs?: number | null;
+  averageScore?: number | null;
+  /** JSON-encoded `{label: count}` maps — parse client-side. */
+  industryDistribution?: string | null;
+  skillDistribution?: string | null;
+  companyDistribution?: string | null;
+  matchStrengthDistribution?: string | null;
+  summaryText?: string | null;
+  /** Comma-joined. */
+  topCompanies?: string | null;
+  topSkills?: string | null;
+  interviewProbabilityDelta?: number | null;
+  offerProbabilityDelta?: number | null;
+}
+
+/** `GET /api/daily-discovery/summary`. Mirrors the `DailyCareerSummary` entity. 404s until the agent has run once. */
+export interface DailyDiscoverySummary {
+  id: string;
+  runId: string;
+  userId: string;
+  summaryText?: string | null;
+  jobsFetched?: number | null;
+  jobsDeduped?: number | null;
+  recommendedCount?: number | null;
+  mustApplyCount?: number | null;
+  highPriorityCount?: number | null;
+  topCompanies?: string | null;
+  topSkills?: string | null;
+  interviewProbabilityDelta?: number | null;
+  offerProbabilityDelta?: number | null;
+  createdAt: string;
+}
+
+/** One row of `GET /api/daily-discovery/analytics` (user-scoped history). Mirrors `DailyDiscoveryAnalytics`. */
+export interface DailyDiscoveryAnalyticsRow {
+  id: string;
+  runId: string;
+  userId?: string | null;
+  domesticJobs?: number | null;
+  internationalJobs?: number | null;
+  recommendedJobs?: number | null;
+  mustApplyJobs?: number | null;
+  highPriorityJobs?: number | null;
+  humanReviewJobs?: number | null;
+  hiddenJobs?: number | null;
+  averageScore?: number | null;
+  industryDistribution?: string | null;
+  skillDistribution?: string | null;
+  companyDistribution?: string | null;
+  matchStrengthDistribution?: string | null;
+  computedAt: string;
+}
+
+/** `GET /api/diagnostics/daily-discovery`. No-auth scheduler health snapshot. */
+export interface DailyDiscoverySchedulerHealth {
+  schedulerEnabled: boolean;
+  analyticsEnabled: boolean;
+  summaryEnabled: boolean;
+  totalRuns: number;
+  successfulRuns: number;
+  failedRuns: number;
+  usersProcessed: number;
+  lastRunAt?: string | null;
+  lastSuccessAt?: string | null;
+  lastStatus: string;
+  lastDurationMs: number;
+  health: string;
+}
+
+/** One entry of `GET /api/diagnostics/daily-discovery/providers`. */
+export interface DailyDiscoveryProviderHealth {
+  configured: boolean;
+  flagEnabled?: boolean;
+  health: string;
+  lastStatus?: string | null;
+  lastStartedAt?: string | null;
+  lastFinishedAt?: string | null;
+  lastJobsFetched?: number | null;
+  lastJobsPersisted?: number | null;
+  reason?: string | null;
+  targetCompanies?: string[];
+}
+
+export interface DailyDiscoveryProvidersResponse {
+  greenhouse: DailyDiscoveryProviderHealth;
+  lever: DailyDiscoveryProviderHealth;
+  remoteok: DailyDiscoveryProviderHealth;
+  wellfound: DailyDiscoveryProviderHealth;
+  companyCareerSites: DailyDiscoveryProviderHealth;
 }
 
 export interface WorkflowStatusStepperProps {

@@ -35,13 +35,16 @@ interface RecommendedJobsProps {
 
 const FILTERS: { value: RecommendedFilter; label: string }[] = [
   { value: 'all', label: 'All' },
+  { value: 'new', label: "Today's Jobs" },
+  { value: 'must-apply', label: 'Must Apply' },
+  { value: 'high-priority', label: 'High Priority' },
+  { value: 'human-review', label: 'Human Review' },
   { value: 'remote', label: 'Remote' },
   { value: 'hybrid', label: 'Hybrid' },
   { value: 'onsite', label: 'Onsite' },
   { value: 'visa', label: 'Visa Sponsorship' },
   { value: 'relocation', label: 'Relocation Support' },
   { value: 'high', label: 'High Match (90%+)' },
-  { value: 'new', label: 'New (24h)' },
 ];
 
 function matchTone(score: number): 'success' | 'primary' | 'warning' {
@@ -64,7 +67,7 @@ export function RecommendedJobs({ onApply, onSave, busy }: RecommendedJobsProps)
     breakdown?: ScoreBreakdown | null;
     matchScore?: number | null;
   } | null>(null);
-  const [relevanceJob, setRelevanceJob] = useState<{ id: string; title: string } | null>(null);
+  const [relevanceJob, setRelevanceJob] = useState<RecommendedJob | null>(null);
 
   const { data, isLoading, fetchNextPage, hasNextPage, isFetchingNextPage } =
     useInfiniteQuery<RecommendedJobsResponse>({
@@ -98,7 +101,7 @@ export function RecommendedJobs({ onApply, onSave, busy }: RecommendedJobsProps)
   };
   const openRelevance = (rec: RecommendedJob) => {
     trackJobEvent('why_seeing', { jobId: rec.job.id });
-    setRelevanceJob({ id: rec.job.id, title: rec.job.title });
+    setRelevanceJob(rec);
   };
 
   if (isLoading) {
@@ -232,8 +235,9 @@ export function RecommendedJobs({ onApply, onSave, busy }: RecommendedJobsProps)
         onClose={() => setExplainJob(null)}
       />
       <RelevanceDrawer
-        jobId={relevanceJob?.id ?? null}
-        jobTitle={relevanceJob?.title}
+        jobId={relevanceJob?.job.id ?? null}
+        jobTitle={relevanceJob?.job.title}
+        rec={relevanceJob}
         onClose={() => setRelevanceJob(null)}
       />
     </div>
@@ -263,6 +267,9 @@ function RecommendedJobCard({
   if (job.country) meta.push(job.country);
   if (job.requiredExperience != null) meta.push(`${job.requiredExperience}+ yrs exp`);
   if (job.salaryRange) meta.push(job.salaryRange);
+  const discoveryDate = job.postedDate ?? job.createdAt;
+  if (job.source) meta.push(job.source);
+  if (discoveryDate) meta.push(`Discovered ${new Date(discoveryDate).toLocaleDateString()}`);
   return (
     <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: index * 0.04 }}>
       <Card className="p-5">
@@ -281,6 +288,9 @@ function RecommendedJobCard({
               <Badge tone={confidenceTone(confidenceLevel)} className="text-[10px]">
                 {confidenceLevel} confidence
               </Badge>
+            )}
+            {rec.category && (
+              <Badge tone="neutral" className="text-[10px]">{rec.category.replaceAll('_', ' ')}</Badge>
             )}
           </div>
         </div>

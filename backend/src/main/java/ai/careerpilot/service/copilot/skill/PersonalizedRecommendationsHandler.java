@@ -26,6 +26,11 @@ public class PersonalizedRecommendationsHandler extends AbstractSkillHandler {
         } catch (Exception e) {
             log.warn("Could not load context for recommendations: {}", e.getMessage());
         }
+        try {
+            context.dailyDiscovery(retriever.getDailyDiscoveryContext(context.user()));
+        } catch (Exception e) {
+            log.debug("No daily discovery context available: {}", e.getMessage());
+        }
     }
 
     @Override
@@ -66,6 +71,21 @@ public class PersonalizedRecommendationsHandler extends AbstractSkillHandler {
             sb.append("Resume Score: ").append(orNa(resume.resumeScore())).append("/100\n");
             sb.append("ATS Score: ").append(orNa(resume.atsScore())).append("/100\n");
             sb.append("Skills: ").append(truncate(nullSafe(resume.skillsJson()), MAX_SKILL_CHARS)).append("\n");
+        }
+
+        var daily = context.dailyDiscovery();
+        if (daily != null) {
+            sb.append("\nTODAY'S DISCOVERY (agent last ran ").append(daily.computedAt()).append(")\n");
+            sb.append("Recommended: ").append(orNa(daily.recommendedJobs()))
+                    .append(" | Must Apply: ").append(orNa(daily.mustApplyJobs()))
+                    .append(" | High Priority: ").append(orNa(daily.highPriorityJobs()))
+                    .append(" | Human Review: ").append(orNa(daily.humanReviewJobs())).append("\n");
+            if (daily.topCompanies() != null && !daily.topCompanies().isBlank()) {
+                sb.append("Top Companies Today: ").append(daily.topCompanies()).append("\n");
+            }
+            if (daily.topSkills() != null && !daily.topSkills().isBlank()) {
+                sb.append("Trending Skills Today: ").append(daily.topSkills()).append("\n");
+            }
         }
 
         return sb.toString();

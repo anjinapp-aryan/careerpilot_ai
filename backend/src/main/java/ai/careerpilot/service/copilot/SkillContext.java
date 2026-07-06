@@ -1,5 +1,6 @@
 package ai.careerpilot.service.copilot;
 
+import ai.careerpilot.service.CareerContextRetriever;
 import ai.careerpilot.service.CareerContextRetriever.*;
 import ai.careerpilot.security.AuthenticatedUser;
 
@@ -20,6 +21,7 @@ public class SkillContext {
     private ApplicationContext application;
     private WorkflowContext workflow;
     private UserProfileContext userProfile;
+    private CareerContextRetriever.DailyDiscoveryContext dailyDiscovery;
 
     private final Set<String> sources = new LinkedHashSet<>();
 
@@ -49,6 +51,12 @@ public class SkillContext {
 
     public UserProfileContext userProfile() { return userProfile; }
     public void userProfile(UserProfileContext p) { this.userProfile = p; if (p != null) sources.add("User Profile"); }
+
+    public CareerContextRetriever.DailyDiscoveryContext dailyDiscovery() { return dailyDiscovery; }
+    public void dailyDiscovery(CareerContextRetriever.DailyDiscoveryContext d) {
+        this.dailyDiscovery = d;
+        if (d != null) sources.add("Daily Discovery");
+    }
 
     public Set<String> sources() { return sources; }
     public void addSource(String source) { sources.add(source); }

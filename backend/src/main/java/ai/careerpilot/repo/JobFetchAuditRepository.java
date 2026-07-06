@@ -5,11 +5,15 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 public interface JobFetchAuditRepository extends JpaRepository<JobFetchAudit, UUID> {
 
     List<JobFetchAudit> findTop20ByOrderByStartedAtDesc();
+
+    /** Phase 5Q — most recent audit row for one named provider (used by the daily-discovery diagnostics). */
+    Optional<JobFetchAudit> findTopByProviderOrderByStartedAtDesc(String provider);
 
     // ── Admin Dashboard: discovery-provider health (Phase 2 Increment D) ─────────────
     // Distinct from AI-provider health (DeepSeek/Gemini/etc., already at GET /api/diagnostics/ai) —

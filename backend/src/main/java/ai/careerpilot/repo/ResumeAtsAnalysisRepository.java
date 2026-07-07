@@ -14,4 +14,7 @@ public interface ResumeAtsAnalysisRepository extends JpaRepository<ResumeAtsAnal
 
     /** All analyses for a (user, job) pair, newest first. */
     List<ResumeAtsAnalysis> findByUserIdAndJobIdOrderByCreatedAtDesc(UUID userId, UUID jobId);
+
+    /** Phase 6.5 — analyses produced by one specific tailoring run, for the resume learning engine. */
+    List<ResumeAtsAnalysis> findByUserIdAndResumeTailoringId(UUID userId, UUID resumeTailoringId);
 }

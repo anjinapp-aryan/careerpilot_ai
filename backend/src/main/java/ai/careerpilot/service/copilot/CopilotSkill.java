@@ -17,7 +17,8 @@ public enum CopilotSkill {
     PERSONALIZED_RECOMMENDATIONS("recommendations", "Recommendations"),
     EXPLAIN_LEARNING("explain_learning", "Explain learning"),
     EXPLAIN_APPLICATION_DECISION("explain_application_decision", "Explain application decision"),
-    EXPLAIN_APPLICATION_PACKAGE("explain_application_package", "Explain application package");
+    EXPLAIN_APPLICATION_PACKAGE("explain_application_package", "Explain application package"),
+    EXPLAIN_APPLICATION_REVIEW("explain_application_review", "Explain application review");
 
     private final String key;
     private final String displayName;

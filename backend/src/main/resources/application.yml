@@ -516,6 +516,31 @@ application:
       enabled: ${APPLICATION_PACKAGE_HISTORY_ENABLED:false}
     diagnostics:
       enabled: ${APPLICATION_PACKAGE_DIAGNOSTICS_ENABLED:false}
+  # ---- Phase 7.12 AI Review Pipeline (final quality gate; reviews the 7.11 package; dark) ----
+  # review.enabled gates the pipeline; review.trigger.enabled chains it onto ApplicationPackageValidatedEvent.
+  # Each reviewer has its own flag so they can be canaried one at a time.
+  review:
+    enabled: ${APPLICATION_REVIEW_ENABLED:false}
+    trigger:
+      enabled: ${APPLICATION_REVIEW_TRIGGER_ENABLED:false}
+    resume:
+      enabled: ${APPLICATION_REVIEW_RESUME_ENABLED:false}
+    ats:
+      enabled: ${APPLICATION_REVIEW_ATS_ENABLED:false}
+    company:
+      enabled: ${APPLICATION_REVIEW_COMPANY_ENABLED:false}
+    learning:
+      enabled: ${APPLICATION_REVIEW_LEARNING_ENABLED:false}
+    consistency:
+      enabled: ${APPLICATION_REVIEW_CONSISTENCY_ENABLED:false}
+    quality:
+      enabled: ${APPLICATION_REVIEW_QUALITY_ENABLED:false}
+    diagnostics:
+      enabled: ${APPLICATION_REVIEW_DIAGNOSTICS_ENABLED:false}
+    executor:
+      core-pool-size: ${APPLICATION_REVIEW_EXECUTOR_CORE_POOL_SIZE:2}
+      max-pool-size: ${APPLICATION_REVIEW_EXECUTOR_MAX_POOL_SIZE:4}
+      queue-capacity: ${APPLICATION_REVIEW_EXECUTOR_QUEUE_CAPACITY:200}
   # ---- Phase 7.1 Application Decision Engine (deterministic; dark) ----
   decision:
     enabled: ${APPLICATION_DECISION_ENABLED:false}

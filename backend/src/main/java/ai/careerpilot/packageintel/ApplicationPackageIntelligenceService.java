@@ -4,6 +4,7 @@ import ai.careerpilot.autopilot.decision.ApplicationDecisionEngine;
 import ai.careerpilot.autopilot.research.CompanyResearchEngine;
 import ai.careerpilot.autopilot.research.CompanyResearchEngine.CompanyResearch;
 import ai.careerpilot.domain.*;
+import ai.careerpilot.packageintel.event.ApplicationPackageValidatedEvent;
 import ai.careerpilot.packageintel.ApplicationPackageValidator.Check;
 import ai.careerpilot.packageintel.ApplicationPackageValidator.ValidationResult;
 import ai.careerpilot.packageintel.ApplicationPackageValidator.ValidationSignals;
@@ -54,6 +55,7 @@ public class ApplicationPackageIntelligenceService {
     private final ApplicationPackageValidator validator;
     private final WorkflowCorrelationService correlation;
     private final PackageIntelligenceMetrics metrics;
+    private final org.springframework.context.ApplicationEventPublisher events;
     private final ObjectMapper mapper = new ObjectMapper();
 
     private final boolean enabled;
@@ -71,6 +73,7 @@ public class ApplicationPackageIntelligenceService {
                                                  ApplicationPackageValidator validator,
                                                  WorkflowCorrelationService correlation,
                                                  PackageIntelligenceMetrics metrics,
+                                                 org.springframework.context.ApplicationEventPublisher events,
                                                  @Value("${application.package.validation.enabled:false}") boolean enabled,
                                                  @Value("${application.package.validation.require-learning:false}") boolean requireLearning) {
         this.packageService = packageService;
@@ -85,6 +88,7 @@ public class ApplicationPackageIntelligenceService {
         this.validator = validator;
         this.correlation = correlation;
         this.metrics = metrics;
+        this.events = events;
         this.enabled = enabled;
         this.requireLearning = requireLearning;
     }
@@ -177,6 +181,10 @@ public class ApplicationPackageIntelligenceService {
             correlation.advance(cid, "VALIDATED", result.status().name());
             log.info("APP_PACKAGE_INTEL validated user={} job={} version={} status={}",
                     userId, jobId, saved.getPackageVersion(), result.status());
+            // Phase 7.12 seam — chains the AI Review Pipeline after validation (consumer dark by default).
+            events.publishEvent(new ApplicationPackageValidatedEvent(userId, jobId, saved.getId(),
+                    saved.getPackageVersion() == null ? 0 : saved.getPackageVersion(),
+                    result.status().name(), cid));
             return Optional.of(saved);
         } catch (Exception e) {
             metrics.recordFailure();

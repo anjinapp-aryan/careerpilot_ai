@@ -56,7 +56,8 @@ class ApplicationPackageIntelligenceServiceTest {
     private ApplicationPackageIntelligenceService service(boolean enabled) {
         return new ApplicationPackageIntelligenceService(packageService, packages, mock(ApplicationPackageVersionRepository.class),
                 validations, decisionEngine, companyResearch, recommendations, atsAnalyses, jobs,
-                new ApplicationPackageValidator(), correlation, new PackageIntelligenceMetrics(), enabled, false);
+                new ApplicationPackageValidator(), correlation, new PackageIntelligenceMetrics(),
+                mock(org.springframework.context.ApplicationEventPublisher.class), enabled, false);
     }
 
     private ApplicationPackage completePackage() {

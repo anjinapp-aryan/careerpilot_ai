@@ -397,6 +397,12 @@ recommendation:
 # approval publishes RecommendationApprovedEvent, consumed async/after-commit by
 # ResumeTailoringWorker, so tailoring latency/failures can never affect the approval response.
 resume:
+  # ---- Phase 7.2/7.3 Resume Selection + autopilot tailoring trigger (dark) ----
+  selection:
+    enabled: ${RESUME_SELECTION_ENABLED:false}
+    ats-floor: ${RESUME_SELECTION_ATS_FLOOR:70}
+  autopilot:
+    enabled: ${RESUME_AUTOPILOT_ENABLED:false}
   tailoring:
     # Master switch for the engine itself (manual POST /api/resume/tailor + GET endpoints).
     enabled: ${RESUME_TAILORING_ENABLED:false}
@@ -495,6 +501,17 @@ application:
       core-pool-size: ${APPLICATION_PACKAGE_EXECUTOR_CORE_POOL_SIZE:2}
       max-pool-size: ${APPLICATION_PACKAGE_EXECUTOR_MAX_POOL_SIZE:4}
       queue-capacity: ${APPLICATION_PACKAGE_EXECUTOR_QUEUE_CAPACITY:100}
+  # ---- Phase 7.1 Application Decision Engine (deterministic; dark) ----
+  decision:
+    enabled: ${APPLICATION_DECISION_ENABLED:false}
+    auto-apply-min-score: ${APPLICATION_DECISION_AUTO_APPLY_MIN_SCORE:90}
+    review-min-score: ${APPLICATION_DECISION_REVIEW_MIN_SCORE:75}
+    save-min-score: ${APPLICATION_DECISION_SAVE_MIN_SCORE:60}
+    ats-floor: ${APPLICATION_DECISION_ATS_FLOOR:70}
+    failure-penalty-cap: ${APPLICATION_DECISION_FAILURE_PENALTY_CAP:-20}
+  # ---- Phase 7.4 Auto Apply Engine (fail-safe; no provider integration; dark) ----
+  auto:
+    enabled: ${APPLICATION_AUTO_ENABLED:false}
 
 # ---- Phase 2D.7 Auto Apply Package Preparation (deterministic; PREPARATION ONLY, no automation) ----
 # Triggered by ApplicationPackageReadyEvent. All default DARK.
@@ -665,6 +682,15 @@ career.intelligence:
 # (recommended/domestic/international/hidden) used only once the flag is on.
 # See docs/PHASE_3B_1_1.md, docs/PHASE_3B_1_1_THRESHOLD_POLICY.md, docs/PHASE_3B_1_1_MATCH_STRENGTH.md.
 career:
+  # ---- Phase 7.10 Career Orchestrator (autonomous apply-side pipeline; dark) ----
+  orchestrator:
+    enabled: ${CAREER_ORCHESTRATOR_ENABLED:false}
+    cron: ${CAREER_ORCHESTRATOR_CRON:0 30 2 * * *}
+    max-per-user: ${CAREER_ORCHESTRATOR_MAX_PER_USER:25}
+    executor:
+      core-pool-size: ${CAREER_ORCHESTRATOR_EXECUTOR_CORE_POOL_SIZE:2}
+      max-pool-size: ${CAREER_ORCHESTRATOR_EXECUTOR_MAX_POOL_SIZE:4}
+      queue-capacity: ${CAREER_ORCHESTRATOR_EXECUTOR_QUEUE_CAPACITY:200}
   relevance:
     enabled: ${CAREER_RELEVANCE_ENABLED:false}
     thresholds:
@@ -682,6 +708,17 @@ career:
       enabled: ${CAREER_INTERNATIONAL_FILTER_ENABLED:false}
   explainability:
     enabled: ${CAREER_EXPLAINABILITY_ENABLED:false}
+
+# ---- Phase 7.8/7.9/7.7 Company research, interview prep, calendar (dark) ----
+company:
+  research:
+    enabled: ${COMPANY_RESEARCH_ENABLED:false}
+interview:
+  prep:
+    enabled: ${INTERVIEW_PREP_ENABLED:false}
+calendar:
+  integration:
+    enabled: ${CALENDAR_INTEGRATION_ENABLED:false}
 
 # ---- Data retention (Phase 3B prep) ----
 # Additive, flag-gated purge of append-only ledgers that otherwise grow unbounded. DISABLED by

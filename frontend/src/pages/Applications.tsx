@@ -12,7 +12,7 @@ import {
   type DragStartEvent,
 } from '@dnd-kit/core';
 import { motion } from 'framer-motion';
-import { Building2, Clock, GripVertical, Info, KanbanSquare, ListTree, Sparkles, Target } from 'lucide-react';
+import { Building2, Clock, GripVertical, Info, KanbanSquare, ListTree, PackageCheck, Sparkles, Target } from 'lucide-react';
 import { api } from '@/lib/api';
 import { PageHeader } from '@/components/common/PageHeader';
 import { Card } from '@/components/ui/card';
@@ -25,6 +25,8 @@ import { Tabs } from '@/components/ui/tabs';
 import { Dialog, DialogBody, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { WorkflowTraceExplorer } from '@/components/workflow/WorkflowTraceExplorer';
 import { ExecutionApprovalsPanel } from '@/components/execution/ExecutionApprovalsPanel';
+import { ApplicationPackageDrawer } from '@/components/applications/ApplicationPackageDrawer';
+import { generatePackage } from '@/lib/applicationPackage';
 import { cn } from '@/lib/cn';
 import type { Application, Job, JobsPage } from '@/types/workflow';
 
@@ -338,10 +340,20 @@ function ApplicationDetailDialog({ target, onClose }: { target: DetailTarget | n
   const { toast } = useToast();
   const [tab, setTab] = useState<'timeline' | 'trace'>('timeline');
   const [seededCorrelationId, setSeededCorrelationId] = useState<string | null>(null);
+  const [packageId, setPackageId] = useState<string | null>(null);
+
+  // Phase 7.11 — assemble (never submit) + open the Application Package drawer. Dark → 404 → toast.
+  const genPackage = useMutation({
+    mutationFn: () => generatePackage(jobId as string),
+    onSuccess: (pkg) => setPackageId(pkg.id),
+    onError: () =>
+      toast({ variant: 'default', title: 'Application package not available', description: 'Enable application.package.validation.enabled to assemble packages.' }),
+  });
 
   useEffect(() => {
     setTab('timeline');
     setSeededCorrelationId(null);
+    setPackageId(null);
   }, [jobId]);
 
   const seed = useMutation({
@@ -409,6 +421,17 @@ function ApplicationDetailDialog({ target, onClose }: { target: DetailTarget | n
           value={tab}
           onChange={(v) => setTab(v as 'timeline' | 'trace')}
         />
+
+        {/* Phase 7.11 — open the canonical Application Package (assembles on demand; dark-safe). */}
+        <div className="flex items-center justify-between gap-3 rounded-lg border border-border bg-muted/20 p-3">
+          <p className="text-xs text-muted-foreground">
+            View the validated Application Package assembled for this job (resume, ATS, recommendation,
+            company, learning + validation verdict).
+          </p>
+          <Button size="sm" variant="outline" onClick={() => genPackage.mutate()} loading={genPackage.isPending}>
+            <PackageCheck className="h-3.5 w-3.5" /> Application package
+          </Button>
+        </div>
 
         {tab === 'trace' ? (
           <div className="space-y-4">
@@ -502,6 +525,7 @@ function ApplicationDetailDialog({ target, onClose }: { target: DetailTarget | n
           </>
         )}
       </DialogBody>
+      <ApplicationPackageDrawer packageId={packageId} open={!!packageId} onOpenChange={(o) => !o && setPackageId(null)} />
     </Dialog>
   );
 }

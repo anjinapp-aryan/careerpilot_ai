@@ -13,6 +13,7 @@ import { useToast } from '@/components/ui/toast';
 import { WorkflowTraceExplorer } from '@/components/workflow/WorkflowTraceExplorer';
 import { DailyDiscoveryHealthPanel } from '@/components/admin/DailyDiscoveryHealthPanel';
 import { AutopilotHealthPanel } from '@/components/admin/AutopilotHealthPanel';
+import { PackageIntelligencePanel } from '@/components/admin/PackageIntelligencePanel';
 
 /** Bar-chart rows for an "Unknown" bucket are real data but not actionable — muted instead of the brand color. */
 const UNKNOWN_LABEL = 'Unknown';
@@ -805,6 +806,9 @@ export default function AdminDashboard() {
 
       {/* Phase 7 — Application Agent (autopilot) health + provider registry. */}
       <AutopilotHealthPanel />
+
+      {/* Phase 7.11 — Application Package Intelligence: validation verdicts + generation metrics. */}
+      <PackageIntelligencePanel />
 
       {/* Phase 4G — Correlation Explorer, shared with the Workflow page. */}
       <WorkflowTraceExplorer />

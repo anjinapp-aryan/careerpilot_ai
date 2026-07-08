@@ -12,7 +12,7 @@ import {
   type DragStartEvent,
 } from '@dnd-kit/core';
 import { motion } from 'framer-motion';
-import { Building2, Clock, GripVertical, Info, KanbanSquare, ListTree, PackageCheck, Sparkles, Target } from 'lucide-react';
+import { Building2, ClipboardCheck, Clock, GripVertical, Info, KanbanSquare, ListTree, PackageCheck, Sparkles, Target } from 'lucide-react';
 import { api } from '@/lib/api';
 import { PageHeader } from '@/components/common/PageHeader';
 import { Card } from '@/components/ui/card';
@@ -26,7 +26,9 @@ import { Dialog, DialogBody, DialogHeader, DialogTitle, DialogDescription } from
 import { WorkflowTraceExplorer } from '@/components/workflow/WorkflowTraceExplorer';
 import { ExecutionApprovalsPanel } from '@/components/execution/ExecutionApprovalsPanel';
 import { ApplicationPackageDrawer } from '@/components/applications/ApplicationPackageDrawer';
+import { ApplicationReviewDrawer } from '@/components/applications/ApplicationReviewDrawer';
 import { generatePackage } from '@/lib/applicationPackage';
+import { runReview } from '@/lib/applicationReview';
 import { cn } from '@/lib/cn';
 import type { Application, Job, JobsPage } from '@/types/workflow';
 
@@ -350,10 +352,24 @@ function ApplicationDetailDialog({ target, onClose }: { target: DetailTarget | n
       toast({ variant: 'default', title: 'Application package not available', description: 'Enable application.package.validation.enabled to assemble packages.' }),
   });
 
+  // Phase 7.12 — assemble (if needed) then run the AI review, and open the review drawer. Dark → 404 → toast.
+  const [reviewPackageId, setReviewPackageId] = useState<string | null>(null);
+  const runReviewMut = useMutation({
+    mutationFn: async () => {
+      const pkg = await generatePackage(jobId as string);
+      await runReview(pkg.id);
+      return pkg.id;
+    },
+    onSuccess: (id) => setReviewPackageId(id),
+    onError: () =>
+      toast({ variant: 'default', title: 'AI review not available', description: 'Enable application.review.enabled to run reviews.' }),
+  });
+
   useEffect(() => {
     setTab('timeline');
     setSeededCorrelationId(null);
     setPackageId(null);
+    setReviewPackageId(null);
   }, [jobId]);
 
   const seed = useMutation({
@@ -428,9 +444,14 @@ function ApplicationDetailDialog({ target, onClose }: { target: DetailTarget | n
             View the validated Application Package assembled for this job (resume, ATS, recommendation,
             company, learning + validation verdict).
           </p>
-          <Button size="sm" variant="outline" onClick={() => genPackage.mutate()} loading={genPackage.isPending}>
-            <PackageCheck className="h-3.5 w-3.5" /> Application package
-          </Button>
+          <div className="flex shrink-0 items-center gap-2">
+            <Button size="sm" variant="outline" onClick={() => genPackage.mutate()} loading={genPackage.isPending}>
+              <PackageCheck className="h-3.5 w-3.5" /> Application package
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => runReviewMut.mutate()} loading={runReviewMut.isPending}>
+              <ClipboardCheck className="h-3.5 w-3.5" /> AI review
+            </Button>
+          </div>
         </div>
 
         {tab === 'trace' ? (
@@ -526,6 +547,7 @@ function ApplicationDetailDialog({ target, onClose }: { target: DetailTarget | n
         )}
       </DialogBody>
       <ApplicationPackageDrawer packageId={packageId} open={!!packageId} onOpenChange={(o) => !o && setPackageId(null)} />
+      <ApplicationReviewDrawer packageId={reviewPackageId} open={!!reviewPackageId} onOpenChange={(o) => !o && setReviewPackageId(null)} />
     </Dialog>
   );
 }

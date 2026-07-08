@@ -32,6 +32,7 @@ public class CopilotSkillRouter {
             PersonalizedRecommendationsHandler recommendations,
             ExplainLearningHandler explainLearning,
             ExplainApplicationDecisionHandler explainApplicationDecision,
+            ExplainApplicationPackageHandler explainApplicationPackage,
             GeneralAssistantHandler generalAssistant) {
 
         this.handlers = new EnumMap<>(CopilotSkill.class);
@@ -47,6 +48,7 @@ public class CopilotSkillRouter {
         this.handlers.put(CopilotSkill.PERSONALIZED_RECOMMENDATIONS, recommendations);
         this.handlers.put(CopilotSkill.EXPLAIN_LEARNING, explainLearning);
         this.handlers.put(CopilotSkill.EXPLAIN_APPLICATION_DECISION, explainApplicationDecision);
+        this.handlers.put(CopilotSkill.EXPLAIN_APPLICATION_PACKAGE, explainApplicationPackage);
 
         this.fallback = generalAssistant;
 
@@ -115,6 +117,10 @@ public class CopilotSkillRouter {
         if ((lower.contains("auto") && lower.contains("apply")) || lower.contains("application decision")
                 || (lower.contains("why") && lower.contains("human review")) || lower.contains("autopilot")) {
             return CopilotSkill.EXPLAIN_APPLICATION_DECISION;
+        }
+        if (lower.contains("package") && (lower.contains("application") || lower.contains("validation")
+                || lower.contains("ready") || lower.contains("quality") || lower.contains("explain"))) {
+            return CopilotSkill.EXPLAIN_APPLICATION_PACKAGE;
         }
         if (lower.contains("learning") || lower.contains("learned") || lower.contains("success pattern")
                 || lower.contains("failure pattern") || (lower.contains("boost") && lower.contains("why"))) {

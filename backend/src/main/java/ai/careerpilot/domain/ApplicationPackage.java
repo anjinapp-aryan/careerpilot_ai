@@ -43,6 +43,17 @@ public class ApplicationPackage {
     @Column(nullable = false) private String status;
     @Column(columnDefinition = "text") private String metadata;
 
+    // Phase 7.11 — intelligence enrichment lineage (populated only by ApplicationPackageIntelligenceService,
+    // NULL for stock 2D.6 packages). See V52.
+    @Column(name = "application_decision_id") private UUID applicationDecisionId;
+    @Column(name = "company_research_available") private Boolean companyResearchAvailable;
+    @Column(name = "company_research_summary", columnDefinition = "text") private String companyResearchSummary;
+    @Column(name = "learning_boost") private Integer learningBoost;
+    @Column(name = "recommendation_strength") private String recommendationStrength;
+    @Column(name = "match_summary", columnDefinition = "text") private String matchSummary;
+    @Column(name = "correlation_id") private UUID correlationId;
+    @Column(name = "validation_status") private String validationStatus; // READY | HUMAN_REVIEW | BLOCKED
+
     @CreationTimestamp @Column(name = "created_at", updatable = false) private Instant createdAt;
     @UpdateTimestamp @Column(name = "updated_at") private Instant updatedAt;
 }

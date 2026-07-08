@@ -16,7 +16,8 @@ public enum CopilotSkill {
     SKILLS_GAP_ANALYSIS("skills_gap", "Skills gap"),
     PERSONALIZED_RECOMMENDATIONS("recommendations", "Recommendations"),
     EXPLAIN_LEARNING("explain_learning", "Explain learning"),
-    EXPLAIN_APPLICATION_DECISION("explain_application_decision", "Explain application decision");
+    EXPLAIN_APPLICATION_DECISION("explain_application_decision", "Explain application decision"),
+    EXPLAIN_APPLICATION_PACKAGE("explain_application_package", "Explain application package");
 
     private final String key;
     private final String displayName;

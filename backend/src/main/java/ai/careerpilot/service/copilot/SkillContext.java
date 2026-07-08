@@ -23,6 +23,7 @@ public class SkillContext {
     private UserProfileContext userProfile;
     private CareerContextRetriever.DailyDiscoveryContext dailyDiscovery;
     private ai.careerpilot.learning.api.LearningExplainContextService.LearningExplainContext learning;
+    private ai.careerpilot.autopilot.api.AutopilotExplainContextService.AutopilotExplainContext autopilot;
 
     private final Set<String> sources = new LinkedHashSet<>();
 
@@ -63,6 +64,12 @@ public class SkillContext {
     public void learning(ai.careerpilot.learning.api.LearningExplainContextService.LearningExplainContext l) {
         this.learning = l;
         if (l != null) sources.add("Learning Engine");
+    }
+
+    public ai.careerpilot.autopilot.api.AutopilotExplainContextService.AutopilotExplainContext autopilot() { return autopilot; }
+    public void autopilot(ai.careerpilot.autopilot.api.AutopilotExplainContextService.AutopilotExplainContext a) {
+        this.autopilot = a;
+        if (a != null) sources.add("Application Agent");
     }
 
     public Set<String> sources() { return sources; }

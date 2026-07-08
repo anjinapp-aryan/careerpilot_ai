@@ -2,6 +2,7 @@ package ai.careerpilot.resumetailoring.service;
 
 import ai.careerpilot.ai.AiGatewayService;
 import ai.careerpilot.domain.*;
+import ai.careerpilot.learning.resume.LearningResumeOrdering;
 import ai.careerpilot.repo.*;
 import ai.careerpilot.resumetailoring.audit.ResumeTailoringAuditService;
 import ai.careerpilot.resumetailoring.cache.ResumeTailoringCache;
@@ -56,6 +57,7 @@ public class ResumeTailoringService {
     private final ResumeTailoringCacheMetrics metrics;
     private final ResumeTailoringAuditService audit;
     private final AiGatewayService ai;
+    private final LearningResumeOrdering learningOrdering;
     private final boolean enabled;
     private final List<String> preferredProviders;
 
@@ -75,6 +77,7 @@ public class ResumeTailoringService {
                                   ResumeTailoringCacheMetrics metrics,
                                   ResumeTailoringAuditService audit,
                                   AiGatewayService ai,
+                                  LearningResumeOrdering learningOrdering,
                                   @Value("${resume.tailoring.enabled:false}") boolean enabled,
                                   @Value("${resume.tailoring.preferred-providers:}") List<String> preferredProviders) {
         this.resumes = resumes;
@@ -94,6 +97,7 @@ public class ResumeTailoringService {
         this.metrics = metrics;
         this.audit = audit;
         this.ai = ai;
+        this.learningOrdering = learningOrdering;
         this.enabled = enabled;
         this.preferredProviders = preferredProviders;
     }
@@ -228,11 +232,17 @@ public class ResumeTailoringService {
                                           UUID profileVersionId) {
         List<String> jobSkills = jobEnrichment != null ? JsonLists.toList(jobEnrichment.getNormalizedSkillsJson()) : List.of();
         List<String> jobDomains = jobEnrichment != null ? JsonLists.toList(jobEnrichment.getDomainsJson()) : List.of();
+        List<String> profileSkills = profile != null ? JsonLists.toList(profile.getSkillsJson()) : List.of();
+        // Phase 6.5: reorder (never drop/invent) skills by learned success weight, most successful
+        // first, so the LLM sees the candidate's historically-winning skills foregrounded. No-op when
+        // learning.adaptive-resume.enabled is off.
+        profileSkills = learningOrdering.orderSkills(userId, profileSkills);
+        jobSkills = learningOrdering.orderSkills(userId, jobSkills);
         return new TailoringContext(
                 userId, jobId, resume.getId(), resume.getParsedText(),
                 recommendationAuditId, profileVersionId,
                 behavior != null ? behavior.getUpdatedAt() : null,
-                profile != null ? JsonLists.toList(profile.getSkillsJson()) : List.of(),
+                profileSkills,
                 profile != null ? JsonLists.toList(profile.getTargetRolesJson()) : List.of(),
                 profile != null ? profile.getYearsExperience() : null,
                 profile != null ? JsonLists.toList(profile.getTechnologiesJson()) : List.of(),

@@ -30,6 +30,7 @@ public class CopilotSkillRouter {
             SalaryGuidanceHandler salaryGuidance,
             SkillsGapHandler skillsGap,
             PersonalizedRecommendationsHandler recommendations,
+            ExplainLearningHandler explainLearning,
             GeneralAssistantHandler generalAssistant) {
 
         this.handlers = new EnumMap<>(CopilotSkill.class);
@@ -43,6 +44,7 @@ public class CopilotSkillRouter {
         this.handlers.put(CopilotSkill.SALARY_GUIDANCE, salaryGuidance);
         this.handlers.put(CopilotSkill.SKILLS_GAP_ANALYSIS, skillsGap);
         this.handlers.put(CopilotSkill.PERSONALIZED_RECOMMENDATIONS, recommendations);
+        this.handlers.put(CopilotSkill.EXPLAIN_LEARNING, explainLearning);
 
         this.fallback = generalAssistant;
 
@@ -107,6 +109,10 @@ public class CopilotSkillRouter {
         }
         if (lower.contains("career") && (lower.contains("guidance") || lower.contains("advice"))) {
             return CopilotSkill.CAREER_GUIDANCE;
+        }
+        if (lower.contains("learning") || lower.contains("learned") || lower.contains("success pattern")
+                || lower.contains("failure pattern") || (lower.contains("boost") && lower.contains("why"))) {
+            return CopilotSkill.EXPLAIN_LEARNING;
         }
         if (lower.contains("recommend")) {
             return CopilotSkill.PERSONALIZED_RECOMMENDATIONS;

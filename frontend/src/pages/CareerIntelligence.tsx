@@ -9,14 +9,14 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
-import { Brain, Briefcase, Building2, Globe2, Sparkles, Target, TrendingUp } from 'lucide-react';
+import { Brain, Briefcase, Building2, GraduationCap, Globe2, Sparkles, Target, TrendingUp } from 'lucide-react';
 import { api } from '@/lib/api';
 import { PageHeader } from '@/components/common/PageHeader';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { EmptyState } from '@/components/ui/empty-state';
-import type { ApplicationAnalyticsRow, CareerIntelligenceRow } from '@/types/workflow';
+import type { ApplicationAnalyticsRow, CareerIntelligenceRow, CareerLearningView } from '@/types/workflow';
 
 const PROBABILITY_DIMENSIONS: { key: string; label: string; icon: typeof Brain }[] = [
   { key: 'CAREER_SUCCESS', label: 'Career Success Probability', icon: Brain },
@@ -67,9 +67,25 @@ export default function CareerIntelligence() {
     retry: false,
   });
 
+  const learning = useQuery<CareerLearningView | null>({
+    queryKey: ['career-intelligence', 'learning'],
+    queryFn: async () => {
+      try {
+        return (await api.get('/api/workflow/career-learning')).data;
+      } catch {
+        return null;
+      }
+    },
+    retry: false,
+  });
+
   const rows = career.data ?? [];
   const analyticsRows = analytics.data ?? [];
-  const isEmpty = !career.isLoading && rows.length === 0 && !analytics.isLoading && analyticsRows.length === 0;
+  const learningView = learning.data;
+  const hasLearning = !!learningView && (!!learningView.strategy || learningView.topCompanies.length > 0
+    || learningView.topSkills.length > 0);
+  const isEmpty = !career.isLoading && rows.length === 0 && !analytics.isLoading && analyticsRows.length === 0
+    && !learning.isLoading && !hasLearning;
 
   const byDimension = useMemo(() => {
     const m = new Map<string, CareerIntelligenceRow[]>();
@@ -200,6 +216,76 @@ export default function CareerIntelligence() {
                       ))}
                     </tbody>
                   </table>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Phase 6.5 — Learned career trend (Adaptive Career Engine), additive to the deterministic
+              engine above; empty/absent unless learning.adaptive-career.enabled is on. */}
+          <Card>
+            <CardHeader className="flex-row items-center gap-2">
+              <GraduationCap className="h-4 w-4 text-muted-foreground" />
+              <CardTitle className="text-base">Career learning trend</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {learning.isLoading ? (
+                <Skeleton className="h-24 w-full" />
+              ) : !hasLearning ? (
+                <p className="text-sm text-muted-foreground">
+                  Not enough learned history yet — this builds up from your tracked application outcomes.
+                </p>
+              ) : (
+                <div className="space-y-4">
+                  {learningView!.strategy && (
+                    <div className="grid gap-4 sm:grid-cols-3">
+                      <div>
+                        <p className="text-xs text-muted-foreground">Learned career success</p>
+                        <p className="text-2xl font-semibold tabular-nums text-foreground">
+                          {pct(learningView!.strategy.careerSuccessProbability)}%
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-muted-foreground">Learned growth probability</p>
+                        <p className="text-2xl font-semibold tabular-nums text-foreground">
+                          {pct(learningView!.strategy.careerGrowthProbability)}%
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-muted-foreground">Market demand score</p>
+                        <p className="text-2xl font-semibold tabular-nums text-foreground">
+                          {pct(learningView!.strategy.marketDemandScore)}%
+                        </p>
+                      </div>
+                    </div>
+                  )}
+                  {learningView!.strategy?.recommendedTrajectory && (
+                    <p className="rounded-lg border border-border bg-muted/30 px-3 py-2.5 text-sm text-foreground">
+                      {learningView!.strategy.recommendedTrajectory}
+                    </p>
+                  )}
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    {learningView!.topCompanies.length > 0 && (
+                      <div>
+                        <p className="mb-1.5 text-xs font-medium text-muted-foreground">Best-performing companies</p>
+                        <div className="flex flex-wrap gap-1.5">
+                          {learningView!.topCompanies.slice(0, 6).map((c, i) => (
+                            <Badge key={i} tone="success">{c.dimensionKey}</Badge>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {learningView!.topSkills.length > 0 && (
+                      <div>
+                        <p className="mb-1.5 text-xs font-medium text-muted-foreground">Best-performing skills</p>
+                        <div className="flex flex-wrap gap-1.5">
+                          {learningView!.topSkills.slice(0, 6).map((s, i) => (
+                            <Badge key={i} tone="primary">{s.dimensionKey}</Badge>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
             </CardContent>

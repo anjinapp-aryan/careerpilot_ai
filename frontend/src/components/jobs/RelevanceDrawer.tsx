@@ -6,9 +6,9 @@ import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Tabs } from '@/components/ui/tabs';
 import { Dialog, DialogBody, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
-import type { CareerIntelligenceRow, JobRelevance, RecommendedJob } from '@/types/workflow';
+import type { CareerIntelligenceRow, CareerLearningView, JobRelevance, RecommendedJob } from '@/types/workflow';
 
-type RelevanceTab = 'summary' | 'discovery' | 'analysis' | 'recommendation' | 'reasons' | 'career';
+type RelevanceTab = 'summary' | 'discovery' | 'analysis' | 'recommendation' | 'reasons' | 'career' | 'learning';
 
 interface RelevanceDrawerProps {
   jobId: string | null;
@@ -21,6 +21,10 @@ interface RelevanceDrawerProps {
    * relevance + career-intelligence endpoints.
    */
   rec?: RecommendedJob | null;
+}
+
+function pct(v?: number | null): string {
+  return v == null ? '—' : `${Math.round(v * 100)}%`;
 }
 
 function strengthTone(strength: string): 'success' | 'primary' | 'warning' | 'danger' {
@@ -80,6 +84,20 @@ export function RelevanceDrawer({ jobId, jobTitle, onClose, rec }: RelevanceDraw
     staleTime: 60_000,
   });
 
+  const learning = useQuery<CareerLearningView | null>({
+    queryKey: ['jobs', 'relevance-career-learning'],
+    queryFn: async () => {
+      try {
+        return (await api.get('/api/workflow/career-learning')).data as CareerLearningView;
+      } catch {
+        return null;
+      }
+    },
+    enabled: !!jobId && tab === 'learning',
+    retry: false,
+    staleTime: 60_000,
+  });
+
   const job = rec?.job;
   const discoveryDate = job?.postedDate ?? job?.createdAt;
 
@@ -110,6 +128,7 @@ export function RelevanceDrawer({ jobId, jobTitle, onClose, rec }: RelevanceDraw
                 ...(rec ? [{ value: 'recommendation', label: 'Recommendation' }] : []),
                 { value: 'reasons', label: 'Relevance', count: data?.reasons.length },
                 ...(rec ? [{ value: 'career', label: 'Career Intelligence' }] : []),
+                ...(rec ? [{ value: 'learning', label: 'Learning' }] : []),
               ]}
               value={tab}
               onChange={(v) => setTab(v as RelevanceTab)}
@@ -193,6 +212,51 @@ export function RelevanceDrawer({ jobId, jobTitle, onClose, rec }: RelevanceDraw
                       </li>
                     ))}
                 </ul>
+              )
+            )}
+
+            {tab === 'learning' && (
+              learning.isLoading ? (
+                <Skeleton className="h-20 w-full" />
+              ) : !learning.data || (!learning.data.strategy && learning.data.topCompanies.length === 0
+                  && learning.data.topSkills.length === 0) ? (
+                <p className="text-sm text-muted-foreground">
+                  Learning-based insights aren't enabled yet — they build up from your application history.
+                </p>
+              ) : (
+                <div className="space-y-3">
+                  {rec?.scoreBreakdown?.learningBoost != null && rec.scoreBreakdown.learningBoost !== 0 && (
+                    <div className="flex items-center justify-between rounded-lg border border-border bg-muted/30 px-3 py-2.5 text-sm">
+                      <span className="text-muted-foreground">Learning boost on this job</span>
+                      <span className="font-semibold tabular-nums text-foreground">
+                        {rec.scoreBreakdown.learningBoost > 0 ? '+' : ''}{rec.scoreBreakdown.learningBoost}
+                      </span>
+                    </div>
+                  )}
+                  {learning.data.strategy && (
+                    <ul className="space-y-1.5 rounded-lg border border-border p-3 text-sm">
+                      <li className="flex justify-between"><span className="text-muted-foreground">Career success probability</span><span className="font-medium text-foreground">{pct(learning.data.strategy.careerSuccessProbability)}</span></li>
+                      <li className="flex justify-between"><span className="text-muted-foreground">Offer probability</span><span className="font-medium text-foreground">{pct(learning.data.strategy.offerProbability)}</span></li>
+                      <li className="flex justify-between"><span className="text-muted-foreground">Interview probability</span><span className="font-medium text-foreground">{pct(learning.data.strategy.interviewProbability)}</span></li>
+                    </ul>
+                  )}
+                  {learning.data.topSkills.length > 0 && (
+                    <div>
+                      <p className="mb-1 text-xs font-medium text-muted-foreground">Your historically-successful skills</p>
+                      <p className="text-sm text-foreground">
+                        {learning.data.topSkills.slice(0, 5).map((s) => s.dimensionKey).filter(Boolean).join(', ')}
+                      </p>
+                    </div>
+                  )}
+                  {learning.data.topCompanies.length > 0 && (
+                    <div>
+                      <p className="mb-1 text-xs font-medium text-muted-foreground">Your historically-successful companies</p>
+                      <p className="text-sm text-foreground">
+                        {learning.data.topCompanies.slice(0, 5).map((c) => c.dimensionKey).filter(Boolean).join(', ')}
+                      </p>
+                    </div>
+                  )}
+                </div>
               )
             )}
 

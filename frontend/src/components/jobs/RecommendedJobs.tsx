@@ -10,6 +10,7 @@ import {
   HelpCircle,
   Send,
   Sparkles,
+  TrendingUp,
   XCircle,
 } from 'lucide-react';
 import { api } from '@/lib/api';
@@ -263,6 +264,7 @@ function RecommendedJobCard({
 }) {
   const { job, matchScore, matchedSkills, missingSkills, confidenceLevel } = rec;
   const isHighMatch = matchScore >= 90;
+  const learningBoost = rec.scoreBreakdown?.learningBoost ?? 0;
   const meta: string[] = [];
   if (job.country) meta.push(job.country);
   if (job.requiredExperience != null) meta.push(`${job.requiredExperience}+ yrs exp`);
@@ -291,6 +293,15 @@ function RecommendedJobCard({
             )}
             {rec.category && (
               <Badge tone="neutral" className="text-[10px]">{rec.category.replaceAll('_', ' ')}</Badge>
+            )}
+            {learningBoost !== 0 && (
+              <Badge
+                tone={learningBoost > 0 ? 'success' : 'warning'}
+                className="flex items-center gap-1 text-[10px]"
+                title="Improved using historical learning."
+              >
+                <TrendingUp className="h-3 w-3" /> Learning {learningBoost > 0 ? '+' : ''}{learningBoost}
+              </Badge>
             )}
           </div>
         </div>

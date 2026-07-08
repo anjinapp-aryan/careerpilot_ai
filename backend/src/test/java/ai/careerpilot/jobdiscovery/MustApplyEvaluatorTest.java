@@ -20,7 +20,7 @@ class MustApplyEvaluatorTest {
 
     private static JobScoring.ScoreResultV2 result(int role, int workMode, int matchedRoleCount) {
         return new JobScoring.ScoreResultV2(95, List.of(), List.of(),
-                new JobScoring.ScoreBreakdown(90, 90, role, 90, 90, 100, workMode), "HIGH", 4, matchedRoleCount);
+                new JobScoring.ScoreBreakdown(90, 90, role, 90, 90, 100, workMode, 0), "HIGH", 4, matchedRoleCount);
     }
 
     private static Job job(boolean visa, Instant posted) {

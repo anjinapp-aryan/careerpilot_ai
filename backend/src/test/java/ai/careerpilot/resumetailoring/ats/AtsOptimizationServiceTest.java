@@ -5,8 +5,12 @@ import ai.careerpilot.ai.AiGatewayService;
 import ai.careerpilot.domain.Job;
 import ai.careerpilot.domain.ResumeAtsAnalysis;
 import ai.careerpilot.domain.ResumeTailoring;
+import ai.careerpilot.learning.recommendation.AdaptiveRecommendationEngine;
+import ai.careerpilot.learning.resume.AdaptiveResumeEngine;
+import ai.careerpilot.learning.resume.LearningResumeOrdering;
 import ai.careerpilot.repo.JobRepository;
 import ai.careerpilot.repo.ResumeAtsAnalysisRepository;
+import ai.careerpilot.repo.ResumeLearningRepository;
 import ai.careerpilot.repo.ResumeTailoringRepository;
 import ai.careerpilot.resumetailoring.scoring.ResumeImprovementCalculator;
 import org.junit.jupiter.api.Test;
@@ -50,8 +54,11 @@ class AtsOptimizationServiceTest {
             return a;
         });
 
+        LearningResumeOrdering learningOrdering = new LearningResumeOrdering(
+                new AdaptiveResumeEngine(mock(ResumeLearningRepository.class), false),
+                mock(AdaptiveRecommendationEngine.class));
         return new AtsOptimizationService(tailorings, jobs, analyses, new ResumeImprovementCalculator(),
-                ai, aiProps, new AtsOptimizationMetrics(), enabled);
+                ai, aiProps, new AtsOptimizationMetrics(), learningOrdering, enabled);
     }
 
     private void stubTailoringAndJob(String tailoredText) {
@@ -141,7 +148,10 @@ class AtsOptimizationServiceTest {
             return a;
         });
         AtsOptimizationService service = new AtsOptimizationService(tailorings, jobs, analyses,
-                new ResumeImprovementCalculator(), ai, props, new AtsOptimizationMetrics(), true);
+                new ResumeImprovementCalculator(), ai, props, new AtsOptimizationMetrics(),
+                new LearningResumeOrdering(new AdaptiveResumeEngine(mock(ResumeLearningRepository.class), false),
+                        mock(AdaptiveRecommendationEngine.class)),
+                true);
         stubTailoringAndJob("Backend engineer with Java experience.");
         when(ai.chat(anyList(), anyString(), anyList())).thenReturn("{}");
 

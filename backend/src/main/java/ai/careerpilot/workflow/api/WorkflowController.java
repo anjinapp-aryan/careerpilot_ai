@@ -5,7 +5,10 @@ import ai.careerpilot.domain.ApplicationLifecycle;
 import ai.careerpilot.domain.ApplicationStatusHistory;
 import ai.careerpilot.domain.ApplicationTimeline;
 import ai.careerpilot.domain.CareerIntelligence;
+import ai.careerpilot.domain.CareerLearning;
+import ai.careerpilot.domain.CareerStrategy;
 import ai.careerpilot.domain.Interview;
+import ai.careerpilot.learning.career.CareerLearningFacade;
 import ai.careerpilot.security.AuthenticatedUser;
 import ai.careerpilot.workflow.analytics.ApplicationAnalyticsService;
 import ai.careerpilot.workflow.career.CareerIntelligenceService;
@@ -51,16 +54,19 @@ public class WorkflowController {
     private final ApplicationAnalyticsService analytics;
     private final CareerIntelligenceService career;
     private final WorkflowEntryBridge entry;
+    private final CareerLearningFacade careerLearning;
 
     public WorkflowController(ApplicationLifecycleService lifecycle, TimelineService timeline,
                               InterviewService interviews, ApplicationAnalyticsService analytics,
-                              CareerIntelligenceService career, WorkflowEntryBridge entry) {
+                              CareerIntelligenceService career, WorkflowEntryBridge entry,
+                              CareerLearningFacade careerLearning) {
         this.lifecycle = lifecycle;
         this.timeline = timeline;
         this.interviews = interviews;
         this.analytics = analytics;
         this.career = career;
         this.entry = entry;
+        this.careerLearning = careerLearning;
     }
 
     /** Lifecycle row + append-only status history for one (user, job). 404 when no lifecycle exists. */
@@ -94,6 +100,29 @@ public class WorkflowController {
     public List<CareerIntelligence> careerIntelligence(AuthenticatedUser user) {
         return career.forUser(user.userId());
     }
+
+    /**
+     * Phase 6.5 — the learned career strategy (probabilities + recommended trajectory) plus top
+     * learned companies/skills/industries/locations/salary bands, additive alongside the existing
+     * {@code career-intelligence} endpoint above. Empty/absent fields when
+     * {@code learning.adaptive-career.enabled} is off (the dark default).
+     */
+    @GetMapping("/career-learning")
+    public CareerLearningView careerLearning(AuthenticatedUser user) {
+        UUID userId = user.userId();
+        return new CareerLearningView(
+                careerLearning.strategy(userId).orElse(null),
+                careerLearning.top(userId, CareerLearning.DIM_COMPANY),
+                careerLearning.top(userId, CareerLearning.DIM_SKILL),
+                careerLearning.top(userId, CareerLearning.DIM_INDUSTRY),
+                careerLearning.top(userId, CareerLearning.DIM_LOCATION),
+                careerLearning.top(userId, CareerLearning.DIM_SALARY));
+    }
+
+    /** Read shape for {@code GET /career-learning}. */
+    public record CareerLearningView(CareerStrategy strategy, List<CareerLearning> topCompanies,
+                                     List<CareerLearning> topSkills, List<CareerLearning> topIndustries,
+                                     List<CareerLearning> topLocations, List<CareerLearning> topSalaryBands) {}
 
     /**
      * Gated manual status advance. Validated by the state machine; a no-op (empty) when tracking is

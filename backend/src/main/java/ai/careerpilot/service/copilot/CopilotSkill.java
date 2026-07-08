@@ -14,7 +14,8 @@ public enum CopilotSkill {
     WORKFLOW_EXPLANATION("workflow_explanation", "Workflow explanation"),
     SALARY_GUIDANCE("salary_guidance", "Salary guidance"),
     SKILLS_GAP_ANALYSIS("skills_gap", "Skills gap"),
-    PERSONALIZED_RECOMMENDATIONS("recommendations", "Recommendations");
+    PERSONALIZED_RECOMMENDATIONS("recommendations", "Recommendations"),
+    EXPLAIN_LEARNING("explain_learning", "Explain learning");
 
     private final String key;
     private final String displayName;

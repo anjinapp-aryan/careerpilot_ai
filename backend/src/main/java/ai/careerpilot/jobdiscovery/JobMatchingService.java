@@ -6,6 +6,7 @@ import ai.careerpilot.domain.JobRecommendation;
 import ai.careerpilot.domain.RecommendationAudit;
 import ai.careerpilot.jobdiscovery.CandidateSignalResolver.CandidateMatchSignals;
 import ai.careerpilot.jobdiscovery.cache.MatchCache;
+import ai.careerpilot.learning.recommendation.LearningRecommendationBooster;
 import ai.careerpilot.repo.CandidateProfileVersionRepository;
 import ai.careerpilot.repo.JobAiEnrichmentRepository;
 import ai.careerpilot.repo.JobRecommendationRepository;
@@ -56,6 +57,7 @@ public class JobMatchingService {
     private final MatchCache matchCache;
     private final ai.careerpilot.jobdiscovery.priority.PriorityEngine priorityEngine;
     private final MustApplyEvaluator mustApplyEvaluator;
+    private final LearningRecommendationBooster learningBooster;
     private final ObjectMapper mapper = new ObjectMapper();
 
     /** Full-spec Recommended gate: score >= minScore AND >= 1 role family AND >= 3 skill families. */
@@ -108,6 +110,7 @@ public class JobMatchingService {
                               MatchCache matchCache,
                               ai.careerpilot.jobdiscovery.priority.PriorityEngine priorityEngine,
                               MustApplyEvaluator mustApplyEvaluator,
+                              LearningRecommendationBooster learningBooster,
                               @Value("${jobs.recommendation.strict-gate-enabled:true}") boolean strictGateEnabled,
                               @Value("${jobs.recommendation.gate-min-score:70}") int gateMinScore,
                               @Value("${jobs.recommendation.gate-min-skills:3}") int gateMinSkillFamilies,
@@ -130,6 +133,7 @@ public class JobMatchingService {
         this.matchCache = matchCache;
         this.priorityEngine = priorityEngine;
         this.mustApplyEvaluator = mustApplyEvaluator;
+        this.learningBooster = learningBooster;
         this.strictGateEnabled = strictGateEnabled;
         this.gateMinScore = gateMinScore;
         this.gateMinSkillFamilies = gateMinSkillFamilies;
@@ -194,7 +198,7 @@ public class JobMatchingService {
                     int rs = scoring.roleSimilarity(j, effectiveSkills(j, enrichedSkills), skills, targetRole);
                     return rs < 0 || rs >= roleRelevanceMin;
                 })
-                .map(j -> new Scored(j, scoring.scoreV2(j, effectiveSkills(j, enrichedSkills), ctx, prefs)))
+                .map(j -> new Scored(j, applyLearningBoost(userId, j, scoring.scoreV2(j, effectiveSkills(j, enrichedSkills), ctx, prefs))))
                 .filter(s -> passesGate(s.result()))
                 .toList();
         List<Scored> ranked = scored.stream()
@@ -278,6 +282,21 @@ public class JobMatchingService {
             if (!sk.isEmpty()) out.put(e.getJobId(), String.join(",", sk));
         }
         return out;
+    }
+
+    /**
+     * Phase 6.5 — applies the additive learning boost/penalty on top of an already-computed v2 score,
+     * clamped back to 0-100. Returns {@code base} unchanged (same object) when no learning source is
+     * active, so stock (dark) behavior is byte-for-byte identical to before this integration.
+     */
+    private JobScoring.ScoreResultV2 applyLearningBoost(UUID userId, Job job, JobScoring.ScoreResultV2 base) {
+        if (!learningBooster.isActive()) return base;
+        int boost = learningBooster.computeBoost(userId, job, base.matchedSkills());
+        if (boost == 0) return base;
+        int adjusted = Math.min(100, Math.max(0, base.matchScore() + boost));
+        return new JobScoring.ScoreResultV2(adjusted, base.matchedSkills(), base.missingSkills(),
+                base.breakdown().withLearningBoost(boost), base.confidence(),
+                base.matchedSkillFamilyCount(), base.matchedRoleCount());
     }
 
     /** The skill signal to score a job against: enriched normalized_skills when present, else the raw column. */

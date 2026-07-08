@@ -96,6 +96,8 @@ export interface ScoreBreakdown {
   salary: number;
   visa: number;
   workMode: number;
+  /** Phase 6.5 — additive learning boost/penalty already folded into matchScore; 0/absent on older rows. */
+  learningBoost?: number;
 }
 
 /** A job ranked by the deterministic recommender. Mirrors `RecommendedJob`. */
@@ -412,6 +414,37 @@ export interface CareerIntelligenceRow {
   probability?: number | null;
   sampleSize?: number | null;
   computedAt?: string | null;
+}
+
+/** One row of `career_learning`. Mirrors the `CareerLearning` entity. */
+export interface CareerLearningRow {
+  dimension: string;
+  dimensionKey?: string | null;
+  score?: number | null;
+  sampleSize?: number | null;
+  computedAt?: string | null;
+}
+
+/** Learned career strategy snapshot. Mirrors the `CareerStrategy` entity. */
+export interface CareerStrategySnapshot {
+  careerSuccessProbability?: number | null;
+  interviewProbability?: number | null;
+  offerProbability?: number | null;
+  careerGrowthProbability?: number | null;
+  marketDemandScore?: number | null;
+  recommendedTrajectory?: string | null;
+  computedAt?: string | null;
+}
+
+/** `GET /api/workflow/career-learning` response (Phase 6.5). Absent/empty fields when
+ *  `learning.adaptive-career.enabled` is off. */
+export interface CareerLearningView {
+  strategy?: CareerStrategySnapshot | null;
+  topCompanies: CareerLearningRow[];
+  topSkills: CareerLearningRow[];
+  topIndustries: CareerLearningRow[];
+  topLocations: CareerLearningRow[];
+  topSalaryBands: CareerLearningRow[];
 }
 
 /** One row of `GET /api/recommendations/audit`. Mirrors the `recommendation_audit` entity. */

@@ -65,9 +65,17 @@ public class JobScoring {
     /**
      * Per-factor 0-100 sub-scores behind a v2 match score. Serialized to JSON for the UI.
      * Weights: skills 35, experience 20, role 15, location 10, salary 10, visa 5, workMode 5.
+     *
+     * <p>{@code learningBoost} (Phase 6.5) is always 0 out of {@link #scoreV2}; it is populated only
+     * by {@code JobMatchingService} after applying {@code LearningRecommendationBooster}, so this
+     * class's deterministic scoring formula is untouched.
      */
     public record ScoreBreakdown(int skills, int experience, int role, int location,
-                                 int salary, int visa, int workMode) {}
+                                 int salary, int visa, int workMode, int learningBoost) {
+        public ScoreBreakdown withLearningBoost(int boost) {
+            return new ScoreBreakdown(skills, experience, role, location, salary, visa, workMode, boost);
+        }
+    }
 
     /**
      * Full v2 result: total + matched/missing skills + breakdown + confidence (HIGH|MEDIUM|LOW).
@@ -237,7 +245,7 @@ public class JobScoring {
 
         String confidence = signals >= 4 ? "HIGH" : signals >= 2 ? "MEDIUM" : "LOW";
         return new ScoreResultV2(total, matchedSkills, missingSkills,
-                new ScoreBreakdown(skills, experience, role, location, salary, visa, workMode), confidence,
+                new ScoreBreakdown(skills, experience, role, location, salary, visa, workMode, 0), confidence,
                 matchedFamilies.size(), matchedRoleCount);
     }
 

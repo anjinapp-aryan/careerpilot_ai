@@ -22,6 +22,7 @@ public class SkillContext {
     private WorkflowContext workflow;
     private UserProfileContext userProfile;
     private CareerContextRetriever.DailyDiscoveryContext dailyDiscovery;
+    private ai.careerpilot.learning.api.LearningExplainContextService.LearningExplainContext learning;
 
     private final Set<String> sources = new LinkedHashSet<>();
 
@@ -56,6 +57,12 @@ public class SkillContext {
     public void dailyDiscovery(CareerContextRetriever.DailyDiscoveryContext d) {
         this.dailyDiscovery = d;
         if (d != null) sources.add("Daily Discovery");
+    }
+
+    public ai.careerpilot.learning.api.LearningExplainContextService.LearningExplainContext learning() { return learning; }
+    public void learning(ai.careerpilot.learning.api.LearningExplainContextService.LearningExplainContext l) {
+        this.learning = l;
+        if (l != null) sources.add("Learning Engine");
     }
 
     public Set<String> sources() { return sources; }

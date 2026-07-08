@@ -66,6 +66,7 @@ class JobMatchingCacheTest {
                 mock(RecommendationAuditRepository.class), mock(JobAiEnrichmentRepository.class),
                 new JobCategorizer(false), new PreferenceGate(new JobScoring(taxonomy)), cache,
                 new ai.careerpilot.jobdiscovery.priority.PriorityEngine(false), new MustApplyEvaluator(),
+                mock(ai.careerpilot.learning.recommendation.LearningRecommendationBooster.class),
                 false, 0, 0, false, false, false, 0, false);   // strict gate off so the seeded job always persists
     }
 

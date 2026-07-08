@@ -56,6 +56,12 @@ function ScoreBreakdownSection({ breakdown, matchScore }: { breakdown: ScoreBrea
           );
         })}
       </div>
+      {!!breakdown.learningBoost && (
+        <p className="mt-2 text-xs text-muted-foreground">
+          Includes a learning-based adjustment of {breakdown.learningBoost > 0 ? '+' : ''}
+          {breakdown.learningBoost} from your historical application outcomes.
+        </p>
+      )}
     </div>
   );
 }

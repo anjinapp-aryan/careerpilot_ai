@@ -149,6 +149,49 @@ services:
       APPLICATION_PACKAGE_TRIGGER_ENABLED: ${APPLICATION_PACKAGE_TRIGGER_ENABLED:-false}
       AUTO_APPLY_PACKAGE_ENABLED: ${AUTO_APPLY_PACKAGE_ENABLED:-false}
       AUTO_APPLY_TRIGGER_ENABLED: ${AUTO_APPLY_TRIGGER_ENABLED:-false}
+      # Phase 2E — Enterprise Auto-Apply Execution Engine (HIGH RISK). Ships DARK + INERT: nothing
+      # submits an application; browser automation is a throwing stub (no Playwright dep); every ATS
+      # connector is unconfigured. Safety/approval gates default ON (never skippable), pipeline-entry
+      # triggers default OFF, so completing a 2D pipeline creates ZERO 2E rows. Do NOT enable without
+      # the documented rollout plan.
+      APPLICATION_EXECUTION_ENABLED: ${APPLICATION_EXECUTION_ENABLED:-false}
+      APPLICATION_EXECUTION_TRIGGER_ENABLED: ${APPLICATION_EXECUTION_TRIGGER_ENABLED:-false}
+      BROWSER_AUTOMATION_ENABLED: ${BROWSER_AUTOMATION_ENABLED:-false}
+      ATS_CONNECTOR_ENABLED: ${ATS_CONNECTOR_ENABLED:-false}
+      APPLICATION_APPROVAL_ENABLED: ${APPLICATION_APPROVAL_ENABLED:-true}
+      APPLICATION_SAFETY_ENABLED: ${APPLICATION_SAFETY_ENABLED:-true}
+      APPLICATION_SAFETY_TRIGGER_ENABLED: ${APPLICATION_SAFETY_TRIGGER_ENABLED:-false}
+      APPLICATION_TRACKING_ENABLED: ${APPLICATION_TRACKING_ENABLED:-false}
+      APPLICATION_TRACKING_TRIGGER_ENABLED: ${APPLICATION_TRACKING_TRIGGER_ENABLED:-false}
+      APPLICATION_ANALYTICS_ENABLED: ${APPLICATION_ANALYTICS_ENABLED:-false}
+      APPLICATION_ANALYTICS_TRIGGER_ENABLED: ${APPLICATION_ANALYTICS_TRIGGER_ENABLED:-false}
+      # ---- Phase 3A: Enterprise Application Tracking Workflow (ships DARK, isolated workflow.* namespace) ----
+      # 9-worker event-driven workflow tracking an application AFTER submission (Applied -> Offer ->
+      # Accepted/Rejected). ALL default false: with stock flags the WorkflowEntryBridge mints nothing, so
+      # creating an application produces ZERO Phase 3A rows. Migrations V36-V43 written but NOT applied.
+      # Canary one stage at a time: *_ENABLED first (verify /api/diagnostics/<stage>), then *_TRIGGER_ENABLED.
+      # Renamed from the 3A spec's APPLICATION_TRACKING_*/APPLICATION_ANALYTICS_* to dodge the 2E vars above.
+      WORKFLOW_TRACKING_ENABLED: ${WORKFLOW_TRACKING_ENABLED:-false}
+      WORKFLOW_TRACKING_TRIGGER_ENABLED: ${WORKFLOW_TRACKING_TRIGGER_ENABLED:-false}
+      WORKFLOW_TIMELINE_ENABLED: ${WORKFLOW_TIMELINE_ENABLED:-false}
+      WORKFLOW_TIMELINE_TRIGGER_ENABLED: ${WORKFLOW_TIMELINE_TRIGGER_ENABLED:-false}
+      EMAIL_INTELLIGENCE_ENABLED: ${EMAIL_INTELLIGENCE_ENABLED:-false}
+      EMAIL_INTELLIGENCE_TRIGGER_ENABLED: ${EMAIL_INTELLIGENCE_TRIGGER_ENABLED:-false}
+      INTERVIEW_TRACKING_ENABLED: ${INTERVIEW_TRACKING_ENABLED:-false}
+      INTERVIEW_TRACKING_TRIGGER_ENABLED: ${INTERVIEW_TRACKING_TRIGGER_ENABLED:-false}
+      WORKFLOW_ANALYTICS_ENABLED: ${WORKFLOW_ANALYTICS_ENABLED:-false}
+      WORKFLOW_ANALYTICS_TRIGGER_ENABLED: ${WORKFLOW_ANALYTICS_TRIGGER_ENABLED:-false}
+      CAREER_INTELLIGENCE_ENABLED: ${CAREER_INTELLIGENCE_ENABLED:-false}
+      CAREER_INTELLIGENCE_TRIGGER_ENABLED: ${CAREER_INTELLIGENCE_TRIGGER_ENABLED:-false}
+      # Data retention (Phase 3B prep) — additive, disabled by default. With RETENTION_ENABLED=false
+      # the daily scheduler fires but purges nothing. Per-target age windows override as needed.
+      RETENTION_ENABLED: ${RETENTION_ENABLED:-false}
+      RETENTION_CRON: ${RETENTION_CRON:-0 30 3 * * *}
+      RETENTION_WORKFLOW_DEAD_LETTER_DAYS: ${RETENTION_WORKFLOW_DEAD_LETTER_DAYS:-90}
+      RETENTION_WORKFLOW_CORRELATION_DAYS: ${RETENTION_WORKFLOW_CORRELATION_DAYS:-180}
+      RETENTION_RECOMMENDATION_AUDIT_DAYS: ${RETENTION_RECOMMENDATION_AUDIT_DAYS:-365}
+      RETENTION_EXECUTION_AUDIT_DAYS: ${RETENTION_EXECUTION_AUDIT_DAYS:-365}
+      RETENTION_RESUME_TAILORING_AUDIT_DAYS: ${RETENTION_RESUME_TAILORING_AUDIT_DAYS:-365}
       # Domestic/International scope derived server-side from the candidate (home/preferred countries).
       JOBS_DISCOVERY_SCOPE_STRICT_ENABLED: ${JOBS_DISCOVERY_SCOPE_STRICT_ENABLED:-false}
       # Adzuna keyed provider — sources jobs PER COUNTRY (incl. India 'in'). Empty keys = provider

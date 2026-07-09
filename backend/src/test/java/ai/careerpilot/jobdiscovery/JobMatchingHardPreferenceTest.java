@@ -58,6 +58,8 @@ class JobMatchingHardPreferenceTest {
                 new JobCategorizer(false), new PreferenceGate(new JobScoring(taxonomy)),
                 new MatchCache(mock(StringRedisTemplate.class), new MatchCacheMetrics(), false),
                 new ai.careerpilot.jobdiscovery.priority.PriorityEngine(false), new MustApplyEvaluator(),
+                mock(ai.careerpilot.learning.recommendation.LearningRecommendationBooster.class),
+                mock(ai.careerpilot.companyintel.CompanyKnowledgeBooster.class),
                 false, 0, 0, false, false, false, 0, hardPreference);   // strict gate off so scoring alone wouldn't drop the job
     }
 

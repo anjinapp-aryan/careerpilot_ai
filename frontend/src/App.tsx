@@ -8,6 +8,8 @@ import ResumeOptimization from '@/pages/ResumeOptimization';
 import Jobs from '@/pages/Jobs';
 import Applications from '@/pages/Applications';
 import Workflow from '@/pages/Workflow';
+import CareerIntelligence from '@/pages/CareerIntelligence';
+import Recommendations from '@/pages/Recommendations';
 import AdminDashboard from '@/pages/AdminDashboard';
 import AppShell from '@/components/app-shell/AppShell';
 
@@ -43,6 +45,8 @@ export default function App() {
         <Route path="jobs" element={<Jobs />} />
         <Route path="applications" element={<Applications />} />
         <Route path="workflow" element={<Workflow />} />
+        <Route path="career" element={<CareerIntelligence />} />
+        <Route path="recommendations" element={<Recommendations />} />
         <Route
           path="admin"
           element={

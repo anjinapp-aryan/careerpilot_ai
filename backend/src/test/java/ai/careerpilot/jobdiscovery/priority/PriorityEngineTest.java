@@ -21,7 +21,7 @@ class PriorityEngineTest {
     /** breakdown with tunable role/salary; other factors neutral. */
     private static JobScoring.ScoreResultV2 result(int score, int role, int salary) {
         return new JobScoring.ScoreResultV2(score, List.of(), List.of(),
-                new JobScoring.ScoreBreakdown(50, 50, role, 50, salary, 50, 50), "HIGH", 3, 1);
+                new JobScoring.ScoreBreakdown(50, 50, role, 50, salary, 50, 50, 0), "HIGH", 3, 1);
     }
 
     private static Job job(boolean visa, String remoteType, Instant posted) {

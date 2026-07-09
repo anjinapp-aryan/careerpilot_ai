@@ -90,6 +90,39 @@ if (Test-Path $out) { "OK size=$((Get-Item $out).Length) bytes" } else { "NO SCR
 The PNG lands at `.claude/skills/run-careerpilot-ai/frontend-login.png`. Open it — you should
 see the "Your AI copilot for the entire career journey" splash and a working sign-in form.
 
+### 4b. Check Phase 2D resume-tailoring pipeline health (if those flags are enabled)
+
+The 7-stage async pipeline (Resume Tailoring → ATS Optimization → Gap Analysis → ATS
+Explainability → Cover Letter → Application Package → Auto-Apply Prep) ships dark by default;
+if `.env` has any of the `RESUME_TAILORING_ENABLED` / `ATS_OPTIMIZATION_ENABLED` / etc. flags
+set to `true`, verify each stage's async job queue isn't stuck rather than assuming success from
+a 202:
+
+```bash
+curl -s http://localhost:8080/api/diagnostics/resume-tailoring
+curl -s http://localhost:8080/api/diagnostics/gap-analysis
+curl -s http://localhost:8080/api/diagnostics/ats-explainability
+curl -s http://localhost:8080/api/diagnostics/cover-letter
+curl -s http://localhost:8080/api/diagnostics/application-package
+curl -s http://localhost:8080/api/diagnostics/auto-apply-package
+```
+
+Each returns `enabled`/`triggerEnabled`, total/success/failure counts, avg latency, and
+(for the `PipelineDiagnosticsController`-owned ones) `executorActiveCount` /
+`executorQueueSize` / `health` (`UP`/`DEGRADED`/`DOWN`). These, plus `resume-tailoring`
+and `ats-optimization` (owned by the older `DiagnosticsController`), are all **public, no
+auth required** — safe to poll repeatedly while watching a job move through the pipeline.
+
+### 4c. Authorize Swagger UI with a bearer token
+
+Swagger UI at `http://localhost:8080/swagger-ui.html` has a working **Authorize** button
+(`OpenApiConfig.java` registers a `bearerAuth` HTTP-bearer `SecurityScheme`, verified live via
+`GET /v3/api-docs` → `components.securitySchemes.bearerAuth`). To use it: `POST /api/auth/login`
+for a token, click **Authorize**, paste the raw JWT (no `Bearer ` prefix), then every
+`try it out` call carries it automatically. Tokens expire after 60 minutes — a stale
+"Authorized" checkmark in the UI does not mean the token is still valid; re-login and
+re-authorize if endpoints start returning 401.
+
 ### 5. Tear down
 
 ```bash

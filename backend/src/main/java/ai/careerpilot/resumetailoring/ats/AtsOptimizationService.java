@@ -6,6 +6,7 @@ import ai.careerpilot.ai.ChatMessage;
 import ai.careerpilot.domain.Job;
 import ai.careerpilot.domain.ResumeAtsAnalysis;
 import ai.careerpilot.domain.ResumeTailoring;
+import ai.careerpilot.learning.resume.LearningResumeOrdering;
 import ai.careerpilot.repo.JobRepository;
 import ai.careerpilot.repo.ResumeAtsAnalysisRepository;
 import ai.careerpilot.repo.ResumeTailoringRepository;
@@ -68,6 +69,7 @@ public class AtsOptimizationService {
     private final AiGatewayService ai;
     private final AiGatewayProperties aiProps;
     private final AtsOptimizationMetrics metrics;
+    private final LearningResumeOrdering learningOrdering;
     private final ObjectMapper mapper = new ObjectMapper();
     private final boolean enabled;
 
@@ -76,6 +78,7 @@ public class AtsOptimizationService {
                                   ResumeImprovementCalculator improvementCalculator,
                                   AiGatewayService ai, AiGatewayProperties aiProps,
                                   AtsOptimizationMetrics metrics,
+                                  LearningResumeOrdering learningOrdering,
                                   @Value("${ats.optimization.enabled:false}") boolean enabled) {
         this.tailorings = tailorings;
         this.jobs = jobs;
@@ -84,6 +87,7 @@ public class AtsOptimizationService {
         this.ai = ai;
         this.aiProps = aiProps;
         this.metrics = metrics;
+        this.learningOrdering = learningOrdering;
         this.enabled = enabled;
     }
 
@@ -116,12 +120,16 @@ public class AtsOptimizationService {
             metrics.recordProviderUsed(model);
 
             AnalysisResult parsed = parse(raw);
+            // Phase 6.5: surface the user's historically-successful keywords first (never adds/drops
+            // a keyword — pure reorder). No-op when learning.adaptive-resume.enabled is off.
+            List<String> matchedKeywords = learningOrdering.orderSkills(userId, parsed.matchedKeywords());
+            List<String> missingKeywords = learningOrdering.orderSkills(userId, parsed.missingKeywords());
 
             ResumeAtsAnalysis saved = analyses.save(ResumeAtsAnalysis.builder()
                     .userId(userId).jobId(jobId).resumeTailoringId(tailoring.getId())
                     .atsScore(atsScore)
-                    .matchedKeywords(join(parsed.matchedKeywords()))
-                    .missingKeywords(join(parsed.missingKeywords()))
+                    .matchedKeywords(join(matchedKeywords))
+                    .missingKeywords(join(missingKeywords))
                     .suggestions(join(parsed.suggestions()))
                     .modelUsed(model)
                     .status(ResumeAtsAnalysis.STATUS_GENERATED)

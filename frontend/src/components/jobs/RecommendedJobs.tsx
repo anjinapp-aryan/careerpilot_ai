@@ -10,6 +10,7 @@ import {
   HelpCircle,
   Send,
   Sparkles,
+  TrendingUp,
   XCircle,
 } from 'lucide-react';
 import { api } from '@/lib/api';
@@ -20,9 +21,10 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { EmptyState } from '@/components/ui/empty-state';
 import { cn } from '@/lib/cn';
 import { ExplainDialog } from '@/components/jobs/ExplainDialog';
+import { RelevanceDrawer } from '@/components/jobs/RelevanceDrawer';
 import { JobBadges } from '@/components/jobs/JobBadges';
 import { trackJobEvent } from '@/lib/jobTelemetry';
-import type { RecommendedFilter, RecommendedJob, RecommendedJobsResponse } from '@/types/workflow';
+import type { RecommendedFilter, RecommendedJob, RecommendedJobsResponse, ScoreBreakdown } from '@/types/workflow';
 
 const PAGE_SIZE = 10;
 
@@ -34,13 +36,16 @@ interface RecommendedJobsProps {
 
 const FILTERS: { value: RecommendedFilter; label: string }[] = [
   { value: 'all', label: 'All' },
+  { value: 'new', label: "Today's Jobs" },
+  { value: 'must-apply', label: 'Must Apply' },
+  { value: 'high-priority', label: 'High Priority' },
+  { value: 'human-review', label: 'Human Review' },
   { value: 'remote', label: 'Remote' },
   { value: 'hybrid', label: 'Hybrid' },
   { value: 'onsite', label: 'Onsite' },
   { value: 'visa', label: 'Visa Sponsorship' },
   { value: 'relocation', label: 'Relocation Support' },
   { value: 'high', label: 'High Match (90%+)' },
-  { value: 'new', label: 'New (24h)' },
 ];
 
 function matchTone(score: number): 'success' | 'primary' | 'warning' {
@@ -57,7 +62,13 @@ function confidenceTone(c?: string | null): 'success' | 'primary' | 'warning' {
 
 export function RecommendedJobs({ onApply, onSave, busy }: RecommendedJobsProps) {
   const [filter, setFilter] = useState<RecommendedFilter>('all');
-  const [explainJob, setExplainJob] = useState<{ id: string; title: string } | null>(null);
+  const [explainJob, setExplainJob] = useState<{
+    id: string;
+    title: string;
+    breakdown?: ScoreBreakdown | null;
+    matchScore?: number | null;
+  } | null>(null);
+  const [relevanceJob, setRelevanceJob] = useState<RecommendedJob | null>(null);
 
   const { data, isLoading, fetchNextPage, hasNextPage, isFetchingNextPage } =
     useInfiniteQuery<RecommendedJobsResponse>({
@@ -80,9 +91,18 @@ export function RecommendedJobs({ onApply, onSave, busy }: RecommendedJobsProps)
     trackJobEvent('save', { jobId });
     onSave(jobId);
   };
-  const openExplain = (id: string, title: string) => {
-    trackJobEvent('why_match', { jobId: id });
-    setExplainJob({ id, title });
+  const openExplain = (rec: RecommendedJob) => {
+    trackJobEvent('why_match', { jobId: rec.job.id });
+    setExplainJob({
+      id: rec.job.id,
+      title: rec.job.title,
+      breakdown: rec.scoreBreakdown ?? null,
+      matchScore: rec.matchScore,
+    });
+  };
+  const openRelevance = (rec: RecommendedJob) => {
+    trackJobEvent('why_seeing', { jobId: rec.job.id });
+    setRelevanceJob(rec);
   };
 
   if (isLoading) {
@@ -193,7 +213,8 @@ export function RecommendedJobs({ onApply, onSave, busy }: RecommendedJobsProps)
               index={i}
               onApply={handleApply}
               onSave={handleSave}
-              onExplain={() => openExplain(rec.job.id, rec.job.title)}
+              onExplain={() => openExplain(rec)}
+              onRelevance={() => openRelevance(rec)}
               busy={busy}
             />
           ))}
@@ -210,7 +231,15 @@ export function RecommendedJobs({ onApply, onSave, busy }: RecommendedJobsProps)
       <ExplainDialog
         jobId={explainJob?.id ?? null}
         jobTitle={explainJob?.title}
+        breakdown={explainJob?.breakdown}
+        matchScore={explainJob?.matchScore}
         onClose={() => setExplainJob(null)}
+      />
+      <RelevanceDrawer
+        jobId={relevanceJob?.job.id ?? null}
+        jobTitle={relevanceJob?.job.title}
+        rec={relevanceJob}
+        onClose={() => setRelevanceJob(null)}
       />
     </div>
   );
@@ -222,6 +251,7 @@ function RecommendedJobCard({
   onApply,
   onSave,
   onExplain,
+  onRelevance,
   busy,
 }: {
   rec: RecommendedJob;
@@ -229,14 +259,19 @@ function RecommendedJobCard({
   onApply: (jobId: string) => void;
   onSave: (jobId: string) => void;
   onExplain: () => void;
+  onRelevance: () => void;
   busy: boolean;
 }) {
   const { job, matchScore, matchedSkills, missingSkills, confidenceLevel } = rec;
   const isHighMatch = matchScore >= 90;
+  const learningBoost = rec.scoreBreakdown?.learningBoost ?? 0;
   const meta: string[] = [];
   if (job.country) meta.push(job.country);
   if (job.requiredExperience != null) meta.push(`${job.requiredExperience}+ yrs exp`);
   if (job.salaryRange) meta.push(job.salaryRange);
+  const discoveryDate = job.postedDate ?? job.createdAt;
+  if (job.source) meta.push(job.source);
+  if (discoveryDate) meta.push(`Discovered ${new Date(discoveryDate).toLocaleDateString()}`);
   return (
     <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: index * 0.04 }}>
       <Card className="p-5">
@@ -256,10 +291,22 @@ function RecommendedJobCard({
                 {confidenceLevel} confidence
               </Badge>
             )}
+            {rec.category && (
+              <Badge tone="neutral" className="text-[10px]">{rec.category.replaceAll('_', ' ')}</Badge>
+            )}
+            {learningBoost !== 0 && (
+              <Badge
+                tone={learningBoost > 0 ? 'success' : 'warning'}
+                className="flex items-center gap-1 text-[10px]"
+                title="Improved using historical learning."
+              >
+                <TrendingUp className="h-3 w-3" /> Learning {learningBoost > 0 ? '+' : ''}{learningBoost}
+              </Badge>
+            )}
           </div>
         </div>
 
-        <JobBadges job={job} className="mt-3" />
+        <JobBadges job={job} className="mt-3" priority={rec.priority} mustApply={rec.mustApply} />
 
         {meta.length > 0 && (
           <p className="mt-2 text-xs text-muted-foreground">{meta.join('  •  ')}</p>
@@ -297,6 +344,9 @@ function RecommendedJobCard({
           </Button>
           <Button size="sm" variant="ghost" onClick={onExplain}>
             <HelpCircle className="h-3.5 w-3.5" /> Why am I a match?
+          </Button>
+          <Button size="sm" variant="ghost" onClick={onRelevance}>
+            <HelpCircle className="h-3.5 w-3.5" /> Why am I seeing this?
           </Button>
           {missingSkills.length > 0 && (
             <Button size="sm" variant="ghost" onClick={onExplain}>

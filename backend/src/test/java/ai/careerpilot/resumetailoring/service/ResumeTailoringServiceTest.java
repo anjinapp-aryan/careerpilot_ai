@@ -2,6 +2,9 @@ package ai.careerpilot.resumetailoring.service;
 
 import ai.careerpilot.ai.AiGatewayService;
 import ai.careerpilot.domain.*;
+import ai.careerpilot.learning.recommendation.AdaptiveRecommendationEngine;
+import ai.careerpilot.learning.resume.AdaptiveResumeEngine;
+import ai.careerpilot.learning.resume.LearningResumeOrdering;
 import ai.careerpilot.repo.*;
 import ai.careerpilot.resumetailoring.audit.ResumeTailoringAuditService;
 import ai.careerpilot.resumetailoring.cache.ResumeTailoringCache;
@@ -73,11 +76,14 @@ class ResumeTailoringServiceTest {
             return t;
         });
 
+        LearningResumeOrdering learningOrdering = new LearningResumeOrdering(
+                new AdaptiveResumeEngine(mock(ResumeLearningRepository.class), false),
+                mock(AdaptiveRecommendationEngine.class));
         return new ResumeTailoringService(resumes, jobs, profiles, profileVersions, behaviorProfiles,
                 enrichment, explanations, recommendationAudit, tailorings,
                 new ResumeTailoringPromptBuilder(), new ResumeTailoringValidator(10, 20000),
                 new ResumeImprovementCalculator(), new ResumeVersionManager(tailorings),
-                cache, new ResumeTailoringCacheMetrics(), auditService, ai, enabled, List.of());
+                cache, new ResumeTailoringCacheMetrics(), auditService, ai, learningOrdering, mock(ai.careerpilot.companyintel.CompanyResumeHints.class), enabled, List.of());
     }
 
     private void stubResumeAndJob(String originalText) {

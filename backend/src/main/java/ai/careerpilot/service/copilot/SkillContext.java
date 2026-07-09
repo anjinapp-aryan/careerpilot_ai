@@ -1,5 +1,6 @@
 package ai.careerpilot.service.copilot;
 
+import ai.careerpilot.service.CareerContextRetriever;
 import ai.careerpilot.service.CareerContextRetriever.*;
 import ai.careerpilot.security.AuthenticatedUser;
 
@@ -20,6 +21,12 @@ public class SkillContext {
     private ApplicationContext application;
     private WorkflowContext workflow;
     private UserProfileContext userProfile;
+    private CareerContextRetriever.DailyDiscoveryContext dailyDiscovery;
+    private ai.careerpilot.learning.api.LearningExplainContextService.LearningExplainContext learning;
+    private ai.careerpilot.autopilot.api.AutopilotExplainContextService.AutopilotExplainContext autopilot;
+    private ai.careerpilot.packageintel.api.PackageExplainContextService.PackageExplainContext applicationPackage;
+    private ai.careerpilot.review.api.ReviewExplainContextService.ReviewExplainContext applicationReview;
+    private ai.careerpilot.companyintel.api.CompanyExplainContextService.CompanyExplainContext companyIntel;
 
     private final Set<String> sources = new LinkedHashSet<>();
 
@@ -49,6 +56,42 @@ public class SkillContext {
 
     public UserProfileContext userProfile() { return userProfile; }
     public void userProfile(UserProfileContext p) { this.userProfile = p; if (p != null) sources.add("User Profile"); }
+
+    public CareerContextRetriever.DailyDiscoveryContext dailyDiscovery() { return dailyDiscovery; }
+    public void dailyDiscovery(CareerContextRetriever.DailyDiscoveryContext d) {
+        this.dailyDiscovery = d;
+        if (d != null) sources.add("Daily Discovery");
+    }
+
+    public ai.careerpilot.learning.api.LearningExplainContextService.LearningExplainContext learning() { return learning; }
+    public void learning(ai.careerpilot.learning.api.LearningExplainContextService.LearningExplainContext l) {
+        this.learning = l;
+        if (l != null) sources.add("Learning Engine");
+    }
+
+    public ai.careerpilot.autopilot.api.AutopilotExplainContextService.AutopilotExplainContext autopilot() { return autopilot; }
+    public void autopilot(ai.careerpilot.autopilot.api.AutopilotExplainContextService.AutopilotExplainContext a) {
+        this.autopilot = a;
+        if (a != null) sources.add("Application Agent");
+    }
+
+    public ai.careerpilot.packageintel.api.PackageExplainContextService.PackageExplainContext applicationPackage() { return applicationPackage; }
+    public void applicationPackage(ai.careerpilot.packageintel.api.PackageExplainContextService.PackageExplainContext p) {
+        this.applicationPackage = p;
+        if (p != null) sources.add("Application Package");
+    }
+
+    public ai.careerpilot.review.api.ReviewExplainContextService.ReviewExplainContext applicationReview() { return applicationReview; }
+    public void applicationReview(ai.careerpilot.review.api.ReviewExplainContextService.ReviewExplainContext r) {
+        this.applicationReview = r;
+        if (r != null) sources.add("AI Review");
+    }
+
+    public ai.careerpilot.companyintel.api.CompanyExplainContextService.CompanyExplainContext companyIntel() { return companyIntel; }
+    public void companyIntel(ai.careerpilot.companyintel.api.CompanyExplainContextService.CompanyExplainContext c) {
+        this.companyIntel = c;
+        if (c != null && c.enabled()) sources.add("Company Intelligence");
+    }
 
     public Set<String> sources() { return sources; }
     public void addSource(String source) { sources.add(source); }

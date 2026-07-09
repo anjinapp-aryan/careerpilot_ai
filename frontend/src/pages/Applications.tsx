@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   DndContext,
@@ -12,16 +12,56 @@ import {
   type DragStartEvent,
 } from '@dnd-kit/core';
 import { motion } from 'framer-motion';
-import { Building2, GripVertical, KanbanSquare, Target } from 'lucide-react';
+import { Building2, ClipboardCheck, Clock, GripVertical, Info, KanbanSquare, ListTree, PackageCheck, Sparkles, Target } from 'lucide-react';
 import { api } from '@/lib/api';
 import { PageHeader } from '@/components/common/PageHeader';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { EmptyState } from '@/components/ui/empty-state';
 import { useToast } from '@/components/ui/toast';
+import { Tabs } from '@/components/ui/tabs';
+import { Dialog, DialogBody, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
+import { WorkflowTraceExplorer } from '@/components/workflow/WorkflowTraceExplorer';
+import { ExecutionApprovalsPanel } from '@/components/execution/ExecutionApprovalsPanel';
+import { ApplicationPackageDrawer } from '@/components/applications/ApplicationPackageDrawer';
+import { ApplicationReviewDrawer } from '@/components/applications/ApplicationReviewDrawer';
+import { generatePackage } from '@/lib/applicationPackage';
+import { runReview } from '@/lib/applicationReview';
+import { CompanyIntelPanel } from '@/components/company/CompanyIntelPanel';
 import { cn } from '@/lib/cn';
 import type { Application, Job, JobsPage } from '@/types/workflow';
+
+/** GET /api/workflow/applications/{jobId}/lifecycle — Phase 3A lifecycle row + status history. */
+interface LifecycleView {
+  lifecycle?: {
+    currentStatus?: string;
+    previousStatus?: string | null;
+    company?: string | null;
+    country?: string | null;
+    applicationDate?: string | null;
+    source?: string | null;
+    updatedAt?: string | null;
+  } | null;
+  history?: { fromStatus?: string | null; toStatus?: string | null; createdAt?: string | null }[];
+}
+
+/** GET /api/workflow/applications/{jobId}/timeline — Phase 3A observable-event timeline. */
+interface TimelineEntry {
+  id: string;
+  eventType: string;
+  eventSource?: string | null;
+  confidence?: number | null;
+  details?: string | null;
+  occurredAt?: string | null;
+}
+
+interface DetailTarget {
+  jobId: string;
+  title: string;
+  company: string;
+}
 
 interface Column {
   id: string;
@@ -36,12 +76,17 @@ const COLUMNS: Column[] = [
   { id: 'INTERVIEWING', label: 'Interview', tone: 'primary', dot: 'bg-primary' },
   { id: 'OFFER', label: 'Offer', tone: 'success', dot: 'bg-success' },
   { id: 'REJECTED', label: 'Rejected', tone: 'danger', dot: 'bg-danger' },
+  // Phase 4.7 — WITHDRAWN is a real, writable status on the core `applications.status` column
+  // (see Application.java); unlike "Viewed"/"Archived" (which have no core-status backing and
+  // are deferred), this column is a full drag-and-drop target.
+  { id: 'WITHDRAWN', label: 'Withdrawn', tone: 'neutral', dot: 'bg-muted-foreground' },
 ];
 
 export default function Applications() {
   const qc = useQueryClient();
   const { toast } = useToast();
   const [activeId, setActiveId] = useState<string | null>(null);
+  const [detail, setDetail] = useState<DetailTarget | null>(null);
 
   const { data: apps = [], isLoading } = useQuery<Application[]>({
     queryKey: ['applications'],
@@ -111,7 +156,7 @@ export default function Applications() {
     return (
       <div className="space-y-6">
         <PageHeader title="Applications" description="Track every opportunity through your pipeline." />
-        <div className="grid grid-cols-2 gap-4 md:grid-cols-5">
+        <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-6">
           {COLUMNS.map((c) => (
             <Skeleton key={c.id} className="h-96 rounded-xl" />
           ))}
@@ -145,14 +190,21 @@ export default function Applications() {
         }
       />
 
+      {/* Phase 2E — pending auto-apply approvals; renders nothing while the engine is dark. */}
+      <ExecutionApprovalsPanel />
+
       <DndContext sensors={sensors} onDragStart={onDragStart} onDragEnd={onDragEnd}>
-        <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-5">
+        <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-6">
           {COLUMNS.map((col) => (
             <KanbanColumn
               key={col.id}
               column={col}
               apps={byStatus[col.id] ?? []}
               jobMap={jobMap}
+              onDetails={(app) => {
+                const job = jobMap.get(app.jobId);
+                setDetail({ jobId: app.jobId, title: job?.title ?? 'Application', company: job?.company ?? '' });
+              }}
             />
           ))}
         </div>
@@ -161,6 +213,8 @@ export default function Applications() {
           {activeApp ? <AppCard app={activeApp} job={jobMap.get(activeApp.jobId)} overlay /> : null}
         </DragOverlay>
       </DndContext>
+
+      <ApplicationDetailDialog target={detail} onClose={() => setDetail(null)} />
     </div>
   );
 }
@@ -169,10 +223,12 @@ function KanbanColumn({
   column,
   apps,
   jobMap,
+  onDetails,
 }: {
   column: Column;
   apps: Application[];
   jobMap: Map<string, Job>;
+  onDetails: (app: Application) => void;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: column.id });
   return (
@@ -194,7 +250,7 @@ function KanbanColumn({
         )}
       >
         {apps.map((app) => (
-          <AppCard key={app.id} app={app} job={jobMap.get(app.jobId)} />
+          <AppCard key={app.id} app={app} job={jobMap.get(app.jobId)} onDetails={() => onDetails(app)} />
         ))}
         {apps.length === 0 && (
           <div className="flex flex-1 items-center justify-center py-8 text-center text-xs text-muted-foreground">
@@ -210,10 +266,12 @@ function AppCard({
   app,
   job,
   overlay,
+  onDetails,
 }: {
   app: Application;
   job?: Job;
   overlay?: boolean;
+  onDetails?: () => void;
 }) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({ id: app.id });
 
@@ -244,8 +302,8 @@ function AppCard({
         <GripVertical className="h-4 w-4 shrink-0 text-muted-foreground/40 group-hover:text-muted-foreground" />
       </div>
 
-      {(app.matchScore != null || app.atsScore != null) && (
-        <div className="mt-2.5 flex items-center gap-1.5">
+      <div className="mt-2.5 flex items-center justify-between gap-1.5">
+        <div className="flex items-center gap-1.5">
           {app.matchScore != null && (
             <Badge tone="primary" className="text-[10px]">Match {app.matchScore}</Badge>
           )}
@@ -253,7 +311,247 @@ function AppCard({
             <Badge tone="info" className="text-[10px]">ATS {app.atsScore}</Badge>
           )}
         </div>
-      )}
+        {!overlay && onDetails && (
+          <button
+            type="button"
+            // Pointer events must not reach the draggable listeners, or a click starts a drag.
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.stopPropagation();
+              onDetails();
+            }}
+            aria-label="View workflow details"
+            className="rounded-md p-1 text-muted-foreground/60 transition-colors hover:bg-muted hover:text-foreground"
+          >
+            <Info className="h-3.5 w-3.5" />
+          </button>
+        )}
+      </div>
     </motion.div>
+  );
+}
+
+/**
+ * Phase 3B.4 — application workflow drawer. Reads the Phase 3A read-model
+ * (lifecycle row + status history + observable-event timeline) for one job.
+ * All three engines ship dark, so the endpoints 404 / return empty on a stock
+ * stack — the drawer degrades to a "workflow tracking not enabled" message
+ * rather than erroring.
+ */
+function ApplicationDetailDialog({ target, onClose }: { target: DetailTarget | null; onClose: () => void }) {
+  const jobId = target?.jobId ?? null;
+  const { toast } = useToast();
+  const [tab, setTab] = useState<'timeline' | 'trace'>('timeline');
+  const [seededCorrelationId, setSeededCorrelationId] = useState<string | null>(null);
+  const [packageId, setPackageId] = useState<string | null>(null);
+
+  // Phase 7.11 — assemble (never submit) + open the Application Package drawer. Dark → 404 → toast.
+  const genPackage = useMutation({
+    mutationFn: () => generatePackage(jobId as string),
+    onSuccess: (pkg) => setPackageId(pkg.id),
+    onError: () =>
+      toast({ variant: 'default', title: 'Application package not available', description: 'Enable application.package.validation.enabled to assemble packages.' }),
+  });
+
+  // Phase 7.12 — assemble (if needed) then run the AI review, and open the review drawer. Dark → 404 → toast.
+  const [reviewPackageId, setReviewPackageId] = useState<string | null>(null);
+  const runReviewMut = useMutation({
+    mutationFn: async () => {
+      const pkg = await generatePackage(jobId as string);
+      await runReview(pkg.id);
+      return pkg.id;
+    },
+    onSuccess: (id) => setReviewPackageId(id),
+    onError: () =>
+      toast({ variant: 'default', title: 'AI review not available', description: 'Enable application.review.enabled to run reviews.' }),
+  });
+
+  useEffect(() => {
+    setTab('timeline');
+    setSeededCorrelationId(null);
+    setPackageId(null);
+    setReviewPackageId(null);
+  }, [jobId]);
+
+  const seed = useMutation({
+    mutationFn: async () => (await api.post(`/api/workflow/applications/${jobId}/seed`, {})).data as {
+      status: string;
+      correlationId?: string;
+    },
+    onSuccess: (data) => {
+      if (data.status === 'SEEDED' && data.correlationId) {
+        setSeededCorrelationId(data.correlationId);
+        setTab('trace');
+        toast({ variant: 'success', title: 'Workflow tracking seeded', description: 'Correlation id ready in the Trace tab.' });
+      } else {
+        toast({ variant: 'default', title: 'Workflow tracking is not enabled', description: 'Ask an admin to flip workflow.tracking.trigger.enabled.' });
+      }
+    },
+    onError: () => toast({ variant: 'error', title: 'Could not seed workflow tracking' }),
+  });
+
+  const lifecycle = useQuery<LifecycleView | null>({
+    queryKey: ['workflow', 'lifecycle', jobId],
+    queryFn: async () => {
+      try {
+        return (await api.get(`/api/workflow/applications/${jobId}/lifecycle`)).data as LifecycleView;
+      } catch {
+        return null; // 404 when no lifecycle row exists (dark flags or never tracked)
+      }
+    },
+    enabled: !!jobId,
+    retry: false,
+  });
+
+  const timeline = useQuery<TimelineEntry[]>({
+    queryKey: ['workflow', 'timeline', jobId],
+    queryFn: async () => (await api.get(`/api/workflow/applications/${jobId}/timeline`)).data,
+    enabled: !!jobId,
+    retry: false,
+  });
+
+  const life = lifecycle.data?.lifecycle ?? null;
+  const history = lifecycle.data?.history ?? [];
+  const events = timeline.data ?? [];
+  const loading = lifecycle.isLoading || timeline.isLoading;
+  const nothing = !loading && !life && events.length === 0;
+
+  return (
+    <Dialog open={!!target} onOpenChange={(o) => !o && onClose()} size="lg">
+      <DialogHeader onClose={onClose}>
+        <DialogTitle>
+          <span className="flex items-center gap-2">
+            <ListTree className="h-4 w-4 text-primary" /> Application workflow
+          </span>
+        </DialogTitle>
+        <DialogDescription>
+          {target?.title}
+          {target?.company ? ` · ${target.company}` : ''}
+        </DialogDescription>
+      </DialogHeader>
+      <DialogBody className="space-y-4">
+        <Tabs
+          items={[
+            { value: 'timeline', label: 'Summary & Timeline' },
+            { value: 'trace', label: 'Trace' },
+          ]}
+          value={tab}
+          onChange={(v) => setTab(v as 'timeline' | 'trace')}
+        />
+
+        {/* Phase 7.11 — open the canonical Application Package (assembles on demand; dark-safe). */}
+        <div className="flex items-center justify-between gap-3 rounded-lg border border-border bg-muted/20 p-3">
+          <p className="text-xs text-muted-foreground">
+            View the validated Application Package assembled for this job (resume, ATS, recommendation,
+            company, learning + validation verdict).
+          </p>
+          <div className="flex shrink-0 items-center gap-2">
+            <Button size="sm" variant="outline" onClick={() => genPackage.mutate()} loading={genPackage.isPending}>
+              <PackageCheck className="h-3.5 w-3.5" /> Application package
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => runReviewMut.mutate()} loading={runReviewMut.isPending}>
+              <ClipboardCheck className="h-3.5 w-3.5" /> AI review
+            </Button>
+          </div>
+        </div>
+
+        {/* Phase 7.13 — Company Intelligence + timeline for this application's company (dark-safe). */}
+        <CompanyIntelPanel companyName={target?.company} showTimeline />
+
+        {tab === 'trace' ? (
+          <div className="space-y-4">
+            <div className="flex items-center justify-between gap-3 rounded-lg border border-border bg-muted/20 p-3">
+              <p className="text-xs text-muted-foreground">
+                Manually seed Phase 3A workflow tracking for this application (gated by
+                <code className="mx-1 rounded bg-muted px-1 py-0.5">workflow.tracking.trigger.enabled</code>
+                — a no-op with stock defaults).
+              </p>
+              <Button size="sm" variant="outline" onClick={() => seed.mutate()} loading={seed.isPending}>
+                <Sparkles className="h-3.5 w-3.5" /> Seed tracking
+              </Button>
+            </div>
+            <WorkflowTraceExplorer key={seededCorrelationId ?? 'empty'} initialCorrelationId={seededCorrelationId} compact />
+          </div>
+        ) : loading ? (
+          <div className="space-y-3">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <Skeleton key={i} className="h-14 rounded-lg" />
+            ))}
+          </div>
+        ) : nothing ? (
+          <div className="rounded-lg border border-border bg-muted/20 p-4 text-sm text-muted-foreground">
+            <Info className="mb-1.5 h-4 w-4" />
+            No workflow tracking for this application yet. The Phase 3A lifecycle engine is dark by
+            default — once enabled, its status transitions and event timeline appear here.
+          </div>
+        ) : (
+          <>
+            {life && (
+              <div>
+                <h4 className="mb-2 text-sm font-semibold text-foreground">Lifecycle</h4>
+                <div className="flex flex-wrap items-center gap-2">
+                  {life.previousStatus && <Badge tone="neutral">{life.previousStatus}</Badge>}
+                  {life.previousStatus && <span className="text-muted-foreground">→</span>}
+                  <Badge tone="primary">{life.currentStatus ?? 'UNKNOWN'}</Badge>
+                </div>
+                <dl className="mt-3 grid grid-cols-2 gap-x-6 gap-y-1 text-xs text-muted-foreground">
+                  {life.country && (
+                    <div className="flex gap-1.5"><dt className="font-medium text-foreground">Country:</dt><dd>{life.country}</dd></div>
+                  )}
+                  {life.source && (
+                    <div className="flex gap-1.5"><dt className="font-medium text-foreground">Source:</dt><dd>{life.source}</dd></div>
+                  )}
+                  {life.updatedAt && (
+                    <div className="flex gap-1.5"><dt className="font-medium text-foreground">Updated:</dt><dd>{new Date(life.updatedAt).toLocaleString()}</dd></div>
+                  )}
+                </dl>
+              </div>
+            )}
+
+            {history.length > 0 && (
+              <div>
+                <h4 className="mb-2 text-sm font-semibold text-foreground">Status history</h4>
+                <div className="space-y-1.5">
+                  {history.map((h, i) => (
+                    <div key={i} className="flex items-center gap-2 text-xs text-muted-foreground">
+                      <span className="tabular-nums">{h.fromStatus ?? '—'} → <span className="font-medium text-foreground">{h.toStatus ?? '—'}</span></span>
+                      {h.createdAt && <span className="ml-auto">{new Date(h.createdAt).toLocaleString()}</span>}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {events.length > 0 && (
+              <div>
+                <h4 className="mb-2 text-sm font-semibold text-foreground">Event timeline</h4>
+                <ol className="space-y-2.5 border-l border-border pl-4">
+                  {events.map((e) => (
+                    <li key={e.id} className="relative">
+                      <span className="absolute -left-[21px] top-1 h-2 w-2 rounded-full bg-primary" />
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-medium text-foreground">{e.eventType}</span>
+                        {e.eventSource && <Badge tone="neutral" className="text-[10px]">{e.eventSource}</Badge>}
+                        {typeof e.confidence === 'number' && (
+                          <span className="text-[11px] text-muted-foreground">{Math.round(e.confidence * 100)}% conf</span>
+                        )}
+                      </div>
+                      {e.details && <p className="text-xs text-muted-foreground">{e.details}</p>}
+                      {e.occurredAt && (
+                        <p className="flex items-center gap-1 text-[11px] text-muted-foreground">
+                          <Clock className="h-3 w-3" /> {new Date(e.occurredAt).toLocaleString()}
+                        </p>
+                      )}
+                    </li>
+                  ))}
+                </ol>
+              </div>
+            )}
+          </>
+        )}
+      </DialogBody>
+      <ApplicationPackageDrawer packageId={packageId} open={!!packageId} onOpenChange={(o) => !o && setPackageId(null)} />
+      <ApplicationReviewDrawer packageId={reviewPackageId} open={!!reviewPackageId} onOpenChange={(o) => !o && setReviewPackageId(null)} />
+    </Dialog>
   );
 }

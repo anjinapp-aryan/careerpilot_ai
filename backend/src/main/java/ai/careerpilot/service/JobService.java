@@ -1,5 +1,9 @@
 package ai.careerpilot.service;
 
+import ai.careerpilot.discovery.relevance.CareerRelevanceEvaluator;
+import ai.careerpilot.discovery.relevance.CareerRelevanceScore;
+import ai.careerpilot.discovery.relevance.CareerThresholdPolicy;
+import ai.careerpilot.discovery.relevance.RelevanceCandidateContext;
 import ai.careerpilot.domain.Job;
 import ai.careerpilot.jobdiscovery.CandidateSignalResolver;
 import ai.careerpilot.jobdiscovery.RoleExclusionFilter;
@@ -13,6 +17,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.Comparator;
 import java.util.List;
 import java.util.UUID;
 
@@ -25,25 +30,44 @@ public class JobService {
     private final JobScopeStrategyResolver scopeResolver;
     private final RoleExclusionFilter roleExclusion;
     private final CandidateSignalResolver signalResolver;
+    private final CareerRelevanceEvaluator relevanceEvaluator;
+    private final CareerThresholdPolicy thresholdPolicy;
     /**
      * When true, Domestic/International are derived strictly from the candidate's own profile
      * (home country / preferred countries) and excluded roles are filtered out. When false, the
      * legacy client-country behavior is used verbatim — instant rollback, zero regression.
      */
     private final boolean scopeStrictEnabled;
+    /**
+     * Phase 3B.1 — additive career-relevance feed filter. Both default false; when on (and the
+     * {@link CareerRelevanceEvaluator} master flag {@code career.relevance.enabled} is also on),
+     * Domestic/International additionally require {@code relevanceScore >= 70} and sort by
+     * relevance desc, postedDate desc. Independent flags so Domestic and International can be
+     * canaried separately.
+     */
+    private final boolean domesticRelevanceFilterEnabled;
+    private final boolean internationalRelevanceFilterEnabled;
 
     public JobService(JobRepository jobs,
                       JobScopeStrategyResolver scopeResolver,
                       RoleExclusionFilter roleExclusion,
                       CandidateSignalResolver signalResolver,
+                      CareerRelevanceEvaluator relevanceEvaluator,
+                      CareerThresholdPolicy thresholdPolicy,
                       @Value("${jobs.recommendation.threshold:75}") int recommendThreshold,
-                      @Value("${jobs.discovery.scope-strict-enabled:false}") boolean scopeStrictEnabled) {
+                      @Value("${jobs.discovery.scope-strict-enabled:false}") boolean scopeStrictEnabled,
+                      @Value("${career.domestic.filter.enabled:false}") boolean domesticRelevanceFilterEnabled,
+                      @Value("${career.international.filter.enabled:false}") boolean internationalRelevanceFilterEnabled) {
         this.jobs = jobs;
         this.scopeResolver = scopeResolver;
         this.roleExclusion = roleExclusion;
         this.signalResolver = signalResolver;
+        this.relevanceEvaluator = relevanceEvaluator;
+        this.thresholdPolicy = thresholdPolicy;
         this.recommendThreshold = recommendThreshold;
         this.scopeStrictEnabled = scopeStrictEnabled;
+        this.domesticRelevanceFilterEnabled = domesticRelevanceFilterEnabled;
+        this.internationalRelevanceFilterEnabled = internationalRelevanceFilterEnabled;
     }
 
     public Page<Job> search(UUID orgId, String q, int page, int size) {
@@ -64,6 +88,8 @@ public class JobService {
                                 int page, int size) {
         var pageable = PageRequest.of(page, Math.min(size, 100));
 
+        String scopeNorm = "domestic".equalsIgnoreCase(scope) ? "domestic" : "international";
+
         if (scopeStrictEnabled) {
             // Country set comes from the candidate, never the client param.
             List<String> countries = scopeResolver.forScope(scope).resolveCountries(userId).stream()
@@ -72,14 +98,49 @@ public class JobService {
 
             Page<Job> result = jobs.findDiscoveredInCountries(countries,
                     blankToNull(remoteType), sponsorship, relocation, blankToNull(q), pageable);
-            return applyRoleExclusion(userId, result, pageable);
+            result = applyRoleExclusion(userId, result, pageable);
+            return applyCareerRelevance(userId, scopeNorm, result, pageable);
         }
 
         // ── Legacy path (flag off): client-supplied country, no exclusion filter ──
         String c = (country == null || country.isBlank()) ? "India" : country.trim();
-        String scopeNorm = "domestic".equalsIgnoreCase(scope) ? "domestic" : "international";
-        return jobs.findDiscoveredFiltered(scopeNorm, c,
+        Page<Job> result = jobs.findDiscoveredFiltered(scopeNorm, c,
                 blankToNull(remoteType), sponsorship, relocation, blankToNull(q), pageable);
+        return applyCareerRelevance(userId, scopeNorm, result, pageable);
+    }
+
+    /**
+     * Phase 3B.1 — Steps 7/8: additive career-relevance gate + sort for Domestic/International.
+     * No-op (returns {@code page} unchanged) unless BOTH the master flag
+     * ({@code career.relevance.enabled}) and the scope-specific flag are on — Browse
+     * ({@link #browsePool}) never calls this, so it remains the unfiltered "everything" tab.
+     *
+     * <p>Filtering happens on the already-paginated DB page (same pattern as
+     * {@link #applyRoleExclusion}), so a page can come back with fewer than {@code size} results
+     * once the flag is on — a known, documented tradeoff (see docs/PHASE_3B_1_FILTER_RULES.md)
+     * rather than a pool-then-paginate rewrite, to keep this change minimal and additive.
+     */
+    private Page<Job> applyCareerRelevance(UUID userId, String scopeNorm, Page<Job> page, Pageable pageable) {
+        boolean scopeFilterEnabled = "domestic".equals(scopeNorm)
+                ? domesticRelevanceFilterEnabled : internationalRelevanceFilterEnabled;
+        if (!relevanceEvaluator.isEnabled() || !scopeFilterEnabled || page.getContent().isEmpty()) {
+            return page;
+        }
+
+        RelevanceCandidateContext ctx = relevanceEvaluator.resolveContext(userId);
+        record Scored(Job job, CareerRelevanceScore score) {}
+        List<Scored> scored = page.getContent().stream()
+                .map(j -> new Scored(j, relevanceEvaluator.score(j, ctx)))
+                .filter(s -> thresholdPolicy.isVisibleForScope(scopeNorm, s.score().relevanceScore()))
+                .sorted(Comparator
+                        .comparingInt((Scored s) -> s.score().relevanceScore()).reversed()
+                        .thenComparing((Scored s) -> s.job().getPostedDate(),
+                                Comparator.nullsLast(Comparator.reverseOrder())))
+                .toList();
+
+        List<Job> kept = scored.stream().map(Scored::job).toList();
+        long total = page.getTotalElements() - (page.getContent().size() - kept.size());
+        return new PageImpl<>(kept, pageable, total);
     }
 
     /**

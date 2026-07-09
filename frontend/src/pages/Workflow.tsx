@@ -19,9 +19,11 @@ import { ErrorBoundary } from '@/components/common/ErrorBoundary';
 import { WorkflowForm } from '@/components/workflow/WorkflowForm';
 import { WorkflowStatusStepper } from '@/components/workflow/WorkflowStatusStepper';
 import { WorkflowInsights } from '@/components/workflow/WorkflowInsights';
+import { WorkflowTraceExplorer } from '@/components/workflow/WorkflowTraceExplorer';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge, type BadgeTone } from '@/components/ui/badge';
+import { Skeleton } from '@/components/ui/skeleton';
 import { Input, Label } from '@/components/ui/input';
 import { EmptyState } from '@/components/ui/empty-state';
 import { cn } from '@/lib/cn';
@@ -223,7 +225,117 @@ export default function Workflow() {
           </div>
         )}
       </section>
+
+      {/* Phase 3B.5 — engine diagnostics: per-stage health + queue depth. */}
+      <StageDiagnostics />
+
+      {/* Phase 4D — Phase 3A correlation trace explorer (timeline/graph/events/diagnostics/dead-letters). */}
+      <WorkflowTraceExplorer />
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Stage diagnostics (Phase 3B.5) — reads the aggregate observability rollup and
+// renders per-stage health + queue depth for the workflow and execution engines.
+// No auth required; every stage reads NOT_CONFIGURED at stock (dark) defaults.
+// ---------------------------------------------------------------------------
+
+const HEALTH_TONE: Record<string, BadgeTone> = {
+  UP: 'success',
+  HEALTHY: 'success',
+  DEGRADED: 'warning',
+  DOWN: 'danger',
+  NOT_CONFIGURED: 'neutral',
+  UNKNOWN: 'neutral',
+};
+
+function humanizeStage(key: string): string {
+  return key.replace(/([A-Z])/g, ' $1').replace(/^./, (c) => c.toUpperCase()).trim();
+}
+
+function StageRows({ section }: { section: Record<string, unknown> }) {
+  const stages = Object.entries(section).filter(([k]) => k !== 'health');
+  return (
+    <>
+      {stages.map(([name, raw]) => {
+        const stage = (raw ?? {}) as Record<string, unknown>;
+        const health = String(stage.health ?? 'UNKNOWN');
+        const qSize = stage.executorQueueSize;
+        const qCap = stage.executorQueueCapacity;
+        const queue =
+          typeof qSize === 'number' && typeof qCap === 'number' ? `${qSize} / ${qCap}` : '—';
+        return (
+          <tr key={name} className="border-b border-border/50">
+            <td className="py-2 pr-4 font-medium capitalize">{humanizeStage(name)}</td>
+            <td className="py-2 pr-4">
+              <Badge tone={stage.enabled ? 'info' : 'neutral'}>{stage.enabled ? 'enabled' : 'off'}</Badge>
+            </td>
+            <td className="py-2 pr-4">
+              <Badge tone={HEALTH_TONE[health.toUpperCase()] ?? 'neutral'}>{health}</Badge>
+            </td>
+            <td className="py-2 pr-4 tabular-nums text-muted-foreground">{queue}</td>
+          </tr>
+        );
+      })}
+    </>
+  );
+}
+
+function StageDiagnostics() {
+  const { data, isLoading, isError } = useQuery<Record<string, any>>({
+    queryKey: ['observability'],
+    queryFn: async () => (await api.get('/api/diagnostics/observability')).data,
+    retry: false,
+    staleTime: 30_000,
+  });
+
+  return (
+    <Card>
+      <CardHeader className="flex-row items-center justify-between">
+        <div>
+          <CardTitle>Engine diagnostics</CardTitle>
+          <p className="text-sm text-muted-foreground">Per-stage health &amp; queue depth across the workflow and execution engines.</p>
+        </div>
+        {data?.overall && (
+          <Badge tone={HEALTH_TONE[String(data.overall).toUpperCase()] ?? 'neutral'}>{data.overall}</Badge>
+        )}
+      </CardHeader>
+      <CardContent>
+        {isLoading ? (
+          <Skeleton className="h-40 w-full" />
+        ) : isError || !data ? (
+          <p className="text-sm text-muted-foreground">Diagnostics unavailable right now.</p>
+        ) : (
+          <div className="space-y-5">
+            {(['workflow', 'execution'] as const).map((key) =>
+              data[key] ? (
+                <div key={key}>
+                  <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                    {key} engine
+                  </h4>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-muted-foreground">
+                          <th className="py-2 pr-4">Stage</th>
+                          <th className="py-2 pr-4">Flag</th>
+                          <th className="py-2 pr-4">Health</th>
+                          <th className="py-2 pr-4">Queue</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <StageRows section={data[key] as Record<string, unknown>} />
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              ) : null,
+            )}
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

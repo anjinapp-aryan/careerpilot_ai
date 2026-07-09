@@ -38,14 +38,23 @@ public class ResumeTailoringPromptBuilder {
             """;
 
     public List<ChatMessage> buildMessages(TailoringContext ctx) {
-        return List.of(new ChatMessage("user", buildUserPrompt(ctx)));
+        return buildMessages(ctx, List.of());
+    }
+
+    /**
+     * Phase 7.13 overload — appends the target company's OBSERVED keyword demand (from the Company
+     * Knowledge Graph) as emphasis hints. An empty list (graph dark or company unknown) produces a
+     * prompt byte-for-byte identical to the original {@link #buildMessages(TailoringContext)}.
+     */
+    public List<ChatMessage> buildMessages(TailoringContext ctx, List<String> companyKeywordHints) {
+        return List.of(new ChatMessage("user", buildUserPrompt(ctx, companyKeywordHints)));
     }
 
     public String systemPrompt() {
         return SYSTEM_PROMPT;
     }
 
-    private String buildUserPrompt(TailoringContext ctx) {
+    private String buildUserPrompt(TailoringContext ctx, List<String> companyKeywordHints) {
         StringBuilder sb = new StringBuilder();
         sb.append("=== ORIGINAL RESUME ===\n").append(nullToEmpty(ctx.originalResumeText())).append("\n\n");
 
@@ -76,6 +85,11 @@ public class ResumeTailoringPromptBuilder {
             if (ctx.matchingSkills() != null) sb.append("Matching skills: ").append(ctx.matchingSkills()).append("\n");
             if (ctx.missingSkills() != null) sb.append("Missing skills (do NOT claim these): ").append(ctx.missingSkills()).append("\n");
             if (ctx.resumeImprovements() != null) sb.append("Suggested improvements: ").append(ctx.resumeImprovements()).append("\n");
+        }
+
+        if (companyKeywordHints != null && !companyKeywordHints.isEmpty()) {
+            sb.append("\n=== COMPANY KEYWORD SIGNALS (observed demand at this company; emphasize ONLY where the candidate already has the skill) ===\n");
+            sb.append(String.join(", ", companyKeywordHints)).append("\n");
         }
 
         sb.append("\nProduce the tailored resume now, following all allowed/forbidden rules above.");

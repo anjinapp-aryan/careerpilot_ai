@@ -3,10 +3,14 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import {
+  ChevronDown,
+  ChevronUp,
   Clock,
   Download,
   FileText,
   Grid2x2,
+  History,
+  Layers,
   List,
   MoreVertical,
   Search,
@@ -17,7 +21,7 @@ import {
 import { api } from '@/lib/api';
 import { PageHeader } from '@/components/common/PageHeader';
 import { Button } from '@/components/ui/button';
-import { Card } from '@/components/ui/card';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -30,7 +34,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { cn } from '@/lib/cn';
-import type { Resume } from '@/types/workflow';
+import type { AtsAnalysisRow, Resume, ResumeVersion, TailoredResumeVersion } from '@/types/workflow';
 
 type SortKey = 'recent' | 'name' | 'score';
 
@@ -187,6 +191,9 @@ export default function Resumes() {
         </div>
       </div>
 
+      {/* Phase 4E — Phase 2D.1 async tailoring engine history, across all jobs. Dark by default. */}
+      <TailoringHistoryPanel />
+
       {/* Content */}
       {isLoading ? (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -282,8 +289,210 @@ function ResumeCard({ resume, index }: { resume: Resume; index: number }) {
             <Badge tone="neutral">Ready</Badge>
           </div>
         </div>
+        <ResumeVersionsStrip resumeId={resume.id} />
       </Card>
     </motion.div>
+  );
+}
+
+/**
+ * Lazy ATS-progression strip: v1 → vN with each version's post-optimization ATS score.
+ * Fetches `/api/resumes/{id}/versions` only when expanded, and degrades to a quiet
+ * "no optimized versions yet" line when the resume has never been through the pipeline.
+ */
+function ResumeVersionsStrip({ resumeId }: { resumeId: string }) {
+  const [open, setOpen] = useState(false);
+  const { data = [], isLoading, isError } = useQuery<ResumeVersion[]>({
+    queryKey: ['resume-versions', resumeId],
+    queryFn: async () => (await api.get(`/api/resumes/${resumeId}/versions`)).data,
+    enabled: open,
+    retry: false,
+  });
+
+  // Oldest → newest so the ATS trend reads left-to-right.
+  const ordered = [...data].sort((a, b) => a.versionNumber - b.versionNumber);
+
+  return (
+    <div className="mt-3 border-t border-border pt-3">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center justify-between text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
+      >
+        <span className="flex items-center gap-1.5">
+          <Layers className="h-3.5 w-3.5" /> Version history
+        </span>
+        {open ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+      </button>
+      {open && (
+        <div className="mt-2">
+          {isLoading ? (
+            <Skeleton className="h-10 w-full rounded-md" />
+          ) : isError || ordered.length === 0 ? (
+            <p className="text-xs text-muted-foreground">No optimized versions yet — run AI optimization to build history.</p>
+          ) : (
+            <div className="flex flex-wrap items-center gap-1.5">
+              {ordered.map((v, i) => (
+                <div key={v.id} className="flex items-center gap-1.5">
+                  <div className="flex flex-col items-center rounded-md border border-border bg-muted/30 px-2 py-1">
+                    <span className="text-[10px] font-medium text-muted-foreground">v{v.versionNumber}</span>
+                    <span className={cn('text-xs font-semibold tabular-nums', {
+                      'text-success': (v.atsAfter ?? 0) >= 80,
+                      'text-warning': (v.atsAfter ?? 0) >= 60 && (v.atsAfter ?? 0) < 80,
+                      'text-danger': (v.atsAfter ?? 100) < 60,
+                    })}>
+                      {v.atsAfter ?? '—'}
+                    </span>
+                  </div>
+                  {i < ordered.length - 1 && <span className="h-px w-3 bg-border" />}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Phase 4E — surfaces the Phase 2D.1 async Resume Tailoring engine's history across all jobs
+ * (GET /api/resume/tailored/history). Dark-tolerant: 404/empty renders "not enabled yet", not
+ * an error, since RESUME_TAILORING_ENABLED defaults to false.
+ */
+function TailoringHistoryPanel() {
+  const { data, isLoading, isError } = useQuery<{ versions: TailoredResumeVersion[] } | null>({
+    queryKey: ['resume', 'tailored-history'],
+    queryFn: async () => {
+      try {
+        return (await api.get('/api/resume/tailored/history')).data;
+      } catch {
+        return null;
+      }
+    },
+    retry: false,
+    staleTime: 30_000,
+  });
+  const versions = data?.versions ?? [];
+
+  return (
+    <Card>
+      <CardHeader className="flex-row items-center justify-between pb-2">
+        <CardTitle className="flex items-center gap-2 text-base">
+          <History className="h-4 w-4 text-muted-foreground" /> Tailoring history
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        {isLoading ? (
+          <Skeleton className="h-16 w-full" />
+        ) : isError || versions.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            No tailored resume versions yet — the AI tailoring engine generates one per job once enabled.
+          </p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-muted-foreground">
+                  <th className="py-2 pr-4">Version</th>
+                  <th className="py-2 pr-4">Job</th>
+                  <th className="py-2 pr-4">ATS before → after</th>
+                  <th className="py-2 pr-4">Status</th>
+                  <th className="py-2 pr-4">Created</th>
+                </tr>
+              </thead>
+              <tbody>
+                {versions.map((v) => (
+                  <TailoringRow key={v.id} version={v} />
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+/** One tailored version row; expands to its per-job ATS analysis history (Phase 2D.2). */
+function TailoringRow({ version: v }: { version: TailoredResumeVersion }) {
+  const [open, setOpen] = useState(false);
+  const { data, isLoading } = useQuery<{ analyses: AtsAnalysisRow[] } | null>({
+    queryKey: ['resume', 'ats-history', v.jobId],
+    queryFn: async () => {
+      try {
+        return (await api.get('/api/resume/ats/history', { params: { jobId: v.jobId } })).data;
+      } catch {
+        return null;
+      }
+    },
+    enabled: open,
+    retry: false,
+    staleTime: 30_000,
+  });
+  const analyses = data?.analyses ?? [];
+
+  return (
+    <>
+      <tr
+        className="cursor-pointer border-b border-border/50 hover:bg-muted/40"
+        onClick={() => setOpen((o) => !o)}
+      >
+        <td className="py-2 pr-4 font-medium">
+          <span className="flex items-center gap-1.5">
+            {open ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+            {v.version}
+          </span>
+        </td>
+        <td className="py-2 pr-4 font-mono text-xs text-muted-foreground">{v.jobId.slice(0, 8)}</td>
+        <td className="py-2 pr-4 tabular-nums">
+          {v.atsBefore ?? '—'} → {v.atsAfter ?? '—'}
+        </td>
+        <td className="py-2 pr-4">
+          <Badge tone={v.status === 'COMPLETED' ? 'success' : v.status === 'FAILED' ? 'danger' : 'neutral'}>
+            {v.status}
+          </Badge>
+        </td>
+        <td className="py-2 pr-4 text-muted-foreground">{new Date(v.createdAt).toLocaleDateString()}</td>
+      </tr>
+      {open && (
+        <tr className="border-b border-border/50 bg-muted/20">
+          <td colSpan={5} className="px-4 py-3">
+            {isLoading ? (
+              <Skeleton className="h-14 w-full" />
+            ) : analyses.length === 0 ? (
+              <p className="text-xs text-muted-foreground">
+                No ATS analyses for this job yet — the ATS optimization engine (Phase 2D.2) runs after tailoring
+                once enabled.
+              </p>
+            ) : (
+              <div className="space-y-2">
+                {analyses.map((a) => (
+                  <div key={a.id} className="rounded-lg border border-border bg-card p-2.5 text-xs">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge tone={(a.atsScore ?? 0) >= 75 ? 'success' : (a.atsScore ?? 0) >= 50 ? 'primary' : 'warning'}>
+                        ATS {a.atsScore ?? '—'}/100
+                      </Badge>
+                      <Badge tone="neutral">{a.status}</Badge>
+                      <span className="ml-auto text-muted-foreground">{new Date(a.createdAt).toLocaleString()}</span>
+                    </div>
+                    {a.missingKeywords.length > 0 && (
+                      <p className="mt-1.5 text-warning">Missing: {a.missingKeywords.slice(0, 8).join(', ')}</p>
+                    )}
+                    {a.suggestions.length > 0 && (
+                      <ul className="mt-1 space-y-0.5 text-muted-foreground">
+                        {a.suggestions.slice(0, 3).map((s, i) => (
+                          <li key={i}>• {s}</li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </td>
+        </tr>
+      )}
+    </>
   );
 }
 

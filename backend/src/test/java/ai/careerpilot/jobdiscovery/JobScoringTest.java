@@ -100,4 +100,17 @@ class JobScoringTest {
         // Unknown location stays null → handled as "international/global", never mislabeled.
         assertNull(normalizer.inferCountry("Worldwide"));
     }
+
+    @Test
+    void scoreV2AlwaysReturnsZeroLearningBoostAndWithLearningBoostPreservesOtherFields() {
+        Job j = job("Senior Java Engineer", "Java, Spring Boot, AWS.");
+        ScoreResultV2 r = scoring.scoreV2(j, seniorJavaCandidate(), PreferenceContext.empty());
+        assertEquals(0, r.breakdown().learningBoost());
+
+        JobScoring.ScoreBreakdown boosted = r.breakdown().withLearningBoost(12);
+        assertEquals(12, boosted.learningBoost());
+        assertEquals(r.breakdown().skills(), boosted.skills());
+        assertEquals(r.breakdown().role(), boosted.role());
+        assertEquals(r.breakdown().experience(), boosted.experience());
+    }
 }

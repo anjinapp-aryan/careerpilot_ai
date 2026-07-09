@@ -17,14 +17,21 @@ import {
 import {
   Activity,
   ArrowRight,
+  Brain,
   Briefcase,
+  CalendarClock,
+  Database,
   FileText,
   Gauge,
+  Layers,
   Lightbulb,
   Send,
+  Server,
   Sparkles,
+  Star,
   Target,
   TrendingUp,
+  Trophy,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/lib/auth';
@@ -34,8 +41,10 @@ import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { EmptyState } from '@/components/ui/empty-state';
 import { KpiCard } from '@/components/dashboard/KpiCard';
+import { DailyDiscoveryPanel } from '@/components/dashboard/DailyDiscoveryPanel';
+import { CompanyIntelligenceWidget } from '@/components/dashboard/CompanyIntelligenceWidget';
 import { CopilotAvatar } from '@/components/copilot/CopilotAvatar';
-import type { WorkflowRun } from '@/types/workflow';
+import type { CareerIntelligenceRow, DailyDiscoverySnapshot, RecommendedJobsResponse, WorkflowRun } from '@/types/workflow';
 
 interface Snapshot {
   careerHealthScore: number;
@@ -47,6 +56,8 @@ interface Snapshot {
   applications: Record<string, number>;
   resumes: number;
   recentRuns: WorkflowRun[];
+  /** Phase 5O — additive; null until the daily discovery agent has run for this user. */
+  dailyDiscovery?: DailyDiscoverySnapshot | null;
 }
 
 const RUN_TONE: Record<string, string> = {
@@ -170,6 +181,7 @@ export default function Dashboard() {
         <KpiCard label="Job Match" value={data.jobMatchScore} suffix="/100" icon={Briefcase} tone="primary" delta={deltas.match} />
         <KpiCard label="Applications" value={submitted} icon={Send} tone="info" hint={`${apps.saved ?? 0} saved`} />
         <KpiCard label="Interview Rate" value={interviewRate} suffix="%" icon={TrendingUp} tone="success" hint={`${apps.interviewing ?? 0} active`} />
+        <KpiCard label="Offer Probability" value={data.offerProbabilityScore} suffix="/100" icon={Trophy} tone={scoreTone(data.offerProbabilityScore) === 'success' ? 'success' : 'warning'} hint="Derived from match + interview readiness" />
       </div>
 
       {/* Charts */}
@@ -242,6 +254,23 @@ export default function Dashboard() {
             )}
           </CardContent>
         </Card>
+      </div>
+
+      {/* Platform intelligence — Phase 3B.1: surfaces the discovery / recommendation /
+          workflow / career-intelligence engines. Each card degrades gracefully when its
+          backend surface is dark (disabled flag → empty/"not enabled"). */}
+      <PlatformIntelligence />
+
+      {/* Phase 5.1A — Daily Discovery Intelligence */}
+      <DailyDiscoveryPanel snapshot={data.dailyDiscovery} />
+
+      {/* Phase 7.13 — Company Knowledge Graph widget (dark-safe: renders nothing while flags are off). */}
+      <CompanyIntelligenceWidget />
+
+      {/* Phase 4.1 — Today's opportunities + pending approvals widgets */}
+      <div className="grid gap-4 lg:grid-cols-2">
+        <TodaysOpportunities />
+        <PendingApprovals />
       </div>
 
       {/* AI insights + recent runs */}
@@ -322,6 +351,319 @@ export default function Dashboard() {
           </CardContent>
         </Card>
       </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Platform intelligence (Phase 3B.1) — discovery / recommendation / workflow /
+// career-intelligence engines, aggregated from existing endpoints. Every query
+// uses retry:false and tolerates an empty/errored response so a dark (disabled)
+// backend surface renders as "not enabled yet" instead of breaking the page.
+// ---------------------------------------------------------------------------
+
+interface LakeStatus {
+  enabled?: boolean;
+  lakeCounts?: { discovered?: number; normalized?: number; deduplicated?: number; readyForAi?: number };
+}
+
+interface ObservabilitySnapshot {
+  workflow?: { health?: string };
+  execution?: { health?: string };
+  providers?: { health?: string; providers?: Record<string, string> };
+  overall?: string;
+}
+
+
+const HEALTH_TONE: Record<string, 'success' | 'warning' | 'danger' | 'neutral'> = {
+  UP: 'success',
+  HEALTHY: 'success',
+  DEGRADED: 'warning',
+  DOWN: 'danger',
+  NOT_CONFIGURED: 'neutral',
+  UNKNOWN: 'neutral',
+};
+
+function healthTone(v?: string): 'success' | 'warning' | 'danger' | 'neutral' {
+  return HEALTH_TONE[(v ?? '').toUpperCase()] ?? 'neutral';
+}
+
+function PlatformIntelligence() {
+  const rec = useQuery({
+    queryKey: ['dashboard', 'recommendations'],
+    queryFn: async () =>
+      (await api.get('/api/recommendations', { params: { size: 1 } })).data as RecommendedJobsResponse,
+    retry: false,
+  });
+  const mustApply = useQuery({
+    queryKey: ['dashboard', 'must-apply'],
+    queryFn: async () =>
+      (await api.get('/api/recommendations/must-apply', { params: { size: 1 } })).data as RecommendedJobsResponse,
+    retry: false,
+  });
+  const humanReview = useQuery({
+    queryKey: ['dashboard', 'human-review'],
+    queryFn: async () =>
+      (await api.get('/api/recommendations/human-review', { params: { size: 1 } })).data as RecommendedJobsResponse,
+    retry: false,
+  });
+  const highPriority = useQuery({
+    queryKey: ['dashboard', 'high-priority'],
+    queryFn: async () =>
+      (await api.get('/api/recommendations', { params: { filter: 'high-priority', size: 1 } })).data as RecommendedJobsResponse,
+    retry: false,
+  });
+  const lake = useQuery({
+    queryKey: ['dashboard', 'lake-status'],
+    queryFn: async () => (await api.get('/api/jobs/discovery/lake/status')).data as LakeStatus,
+    retry: false,
+  });
+  const obs = useQuery({
+    queryKey: ['dashboard', 'observability'],
+    queryFn: async () => (await api.get('/api/diagnostics/observability')).data as ObservabilitySnapshot,
+    retry: false,
+  });
+  const career = useQuery({
+    queryKey: ['dashboard', 'career-intelligence'],
+    queryFn: async () => (await api.get('/api/workflow/career-intelligence')).data as CareerIntelligenceRow[],
+    retry: false,
+  });
+
+  const recTotal = rec.data?.total ?? rec.data?.jobs?.length ?? 0;
+  const mustTotal = mustApply.data?.total ?? mustApply.data?.jobs?.length ?? 0;
+  const humanReviewTotal = humanReview.data?.total ?? humanReview.data?.jobs?.length ?? 0;
+  const highPriorityTotal = highPriority.data?.total ?? highPriority.data?.jobs?.length ?? 0;
+  const counts = lake.data?.lakeCounts ?? {};
+  const careerRows = (career.data ?? [])
+    .filter((r) => typeof r.probability === 'number')
+    .sort((a, b) => (b.probability ?? 0) - (a.probability ?? 0))
+    .slice(0, 4);
+
+  return (
+    <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+      {/* Recommendation engine */}
+      <Card>
+        <CardHeader className="flex-row items-center justify-between pb-2">
+          <CardTitle className="text-base">Recommendations</CardTitle>
+          <Star className="h-4 w-4 text-muted-foreground" />
+        </CardHeader>
+        <CardContent>
+          {rec.isLoading ? (
+            <Skeleton className="h-16 w-full" />
+          ) : (
+            <div className="space-y-3">
+              <div className="flex items-baseline gap-2">
+                <span className="text-3xl font-semibold tabular-nums">{recTotal}</span>
+                <span className="text-sm text-muted-foreground">matched jobs</span>
+              </div>
+              <div className="flex flex-wrap items-center gap-1.5">
+                <Badge tone={mustTotal > 0 ? 'success' : 'neutral'}>{mustTotal} must-apply</Badge>
+                <Badge tone={highPriorityTotal > 0 ? 'warning' : 'neutral'}>{highPriorityTotal} high priority</Badge>
+                <Badge tone={humanReviewTotal > 0 ? 'primary' : 'neutral'}>{humanReviewTotal} pending review</Badge>
+              </div>
+              <Link to="/recommendations" className="block text-xs font-medium text-primary hover:underline">
+                Review →
+              </Link>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Job discovery / lake */}
+      <Card>
+        <CardHeader className="flex-row items-center justify-between pb-2">
+          <CardTitle className="text-base">Job Discovery</CardTitle>
+          <Database className="h-4 w-4 text-muted-foreground" />
+        </CardHeader>
+        <CardContent>
+          {lake.isLoading ? (
+            <Skeleton className="h-16 w-full" />
+          ) : lake.isError ? (
+            <p className="text-sm text-muted-foreground">Not available.</p>
+          ) : (
+            <div className="space-y-2">
+              <div className="flex items-baseline gap-2">
+                <span className="text-3xl font-semibold tabular-nums">{counts.discovered ?? 0}</span>
+                <span className="text-sm text-muted-foreground">in lake</span>
+              </div>
+              <div className="grid grid-cols-3 gap-1 text-center text-xs text-muted-foreground">
+                <LakeStat icon={Layers} label="Norm." value={counts.normalized ?? 0} />
+                <LakeStat icon={Layers} label="Dedup" value={counts.deduplicated ?? 0} />
+                <LakeStat icon={Sparkles} label="AI-ready" value={counts.readyForAi ?? 0} />
+              </div>
+              {lake.data?.enabled === false && (
+                <p className="text-xs text-muted-foreground">Discovery scheduler is disabled.</p>
+              )}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Platform health (observability rollup) */}
+      <Card>
+        <CardHeader className="flex-row items-center justify-between pb-2">
+          <CardTitle className="text-base">Platform Health</CardTitle>
+          <Server className="h-4 w-4 text-muted-foreground" />
+        </CardHeader>
+        <CardContent>
+          {obs.isLoading ? (
+            <Skeleton className="h-16 w-full" />
+          ) : obs.isError ? (
+            <p className="text-sm text-muted-foreground">Not available.</p>
+          ) : (
+            <div className="space-y-2 text-sm">
+              <div className="flex items-center justify-between">
+                <span className="text-muted-foreground">Overall</span>
+                <Badge tone={healthTone(obs.data?.overall)}>{obs.data?.overall ?? 'UNKNOWN'}</Badge>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-muted-foreground">Workflow</span>
+                <Badge tone={healthTone(obs.data?.workflow?.health)}>{obs.data?.workflow?.health ?? '—'}</Badge>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-muted-foreground">Providers</span>
+                <Badge tone={healthTone(obs.data?.providers?.health)}>{obs.data?.providers?.health ?? '—'}</Badge>
+              </div>
+              <Link to="/admin" className="block text-xs font-medium text-primary hover:underline">
+                Diagnostics →
+              </Link>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Career intelligence (dark by default) */}
+      <Card>
+        <CardHeader className="flex-row items-center justify-between pb-2">
+          <CardTitle className="text-base">Career Intelligence</CardTitle>
+          <Brain className="h-4 w-4 text-muted-foreground" />
+        </CardHeader>
+        <CardContent>
+          {career.isLoading ? (
+            <Skeleton className="h-16 w-full" />
+          ) : careerRows.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              Not enabled yet. Career probabilities appear once the workflow engine is active.
+            </p>
+          ) : (
+            <div className="space-y-2">
+              {careerRows.map((r, i) => (
+                <div key={`${r.dimension}-${r.dimensionKey}-${i}`} className="text-sm">
+                  <div className="flex items-center justify-between">
+                    <span className="truncate text-muted-foreground">{r.dimensionKey || r.dimension || 'Signal'}</span>
+                    <span className="font-semibold tabular-nums">{Math.round((r.probability ?? 0) * 100)}%</span>
+                  </div>
+                </div>
+              ))}
+              <Link to="/career" className="block text-xs font-medium text-primary hover:underline">
+                Full breakdown →
+              </Link>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+/**
+ * Phase 4.1 — "Today's opportunities": new (last 24h) recommended jobs. Reuses the existing
+ * Recommended-tab endpoint with its "new" filter; dark-tolerant (empty candidate profile /
+ * disabled recommender both render as an empty state, not an error).
+ */
+function TodaysOpportunities() {
+  const { data, isLoading, isError } = useQuery({
+    queryKey: ['dashboard', 'todays-opportunities'],
+    queryFn: async () =>
+      (await api.get('/api/jobs/recommended', { params: { filter: 'new', size: 5 } })).data as RecommendedJobsResponse,
+    retry: false,
+  });
+  const jobs = data?.jobs ?? [];
+
+  return (
+    <Card>
+      <CardHeader className="flex-row items-center justify-between pb-2">
+        <CardTitle className="text-base">Today's opportunities</CardTitle>
+        <Sparkles className="h-4 w-4 text-muted-foreground" />
+      </CardHeader>
+      <CardContent>
+        {isLoading ? (
+          <Skeleton className="h-24 w-full" />
+        ) : isError || jobs.length === 0 ? (
+          <p className="text-sm text-muted-foreground">No new matches in the last 24 hours.</p>
+        ) : (
+          <div className="divide-y divide-border">
+            {jobs.slice(0, 5).map((rec) => (
+              <div key={rec.job.id} className="flex items-center justify-between gap-3 py-2 text-sm">
+                <div className="min-w-0">
+                  <p className="truncate font-medium text-foreground">{rec.job.title}</p>
+                  <p className="truncate text-xs text-muted-foreground">{rec.job.company}</p>
+                </div>
+                <Badge tone="primary" className="shrink-0">{rec.matchScore}%</Badge>
+              </div>
+            ))}
+          </div>
+        )}
+        <Link to="/jobs" className="mt-3 block text-xs font-medium text-primary hover:underline">
+          View all →
+        </Link>
+      </CardContent>
+    </Card>
+  );
+}
+
+/**
+ * Phase 4.1 — "Pending approvals": the Phase 2C human-review collection. Same dark-tolerance
+ * as every other Platform Intelligence card — an empty/errored response reads as "nothing
+ * pending", not a failure.
+ */
+function PendingApprovals() {
+  const { data, isLoading, isError } = useQuery({
+    queryKey: ['dashboard', 'pending-approvals'],
+    queryFn: async () =>
+      (await api.get('/api/recommendations/human-review', { params: { size: 5 } })).data as RecommendedJobsResponse,
+    retry: false,
+  });
+  const jobs = data?.jobs ?? [];
+
+  return (
+    <Card>
+      <CardHeader className="flex-row items-center justify-between pb-2">
+        <CardTitle className="text-base">Pending approvals</CardTitle>
+        <CalendarClock className="h-4 w-4 text-muted-foreground" />
+      </CardHeader>
+      <CardContent>
+        {isLoading ? (
+          <Skeleton className="h-24 w-full" />
+        ) : isError || jobs.length === 0 ? (
+          <p className="text-sm text-muted-foreground">Nothing awaiting your review right now.</p>
+        ) : (
+          <div className="divide-y divide-border">
+            {jobs.slice(0, 5).map((rec) => (
+              <div key={rec.job.id} className="flex items-center justify-between gap-3 py-2 text-sm">
+                <div className="min-w-0">
+                  <p className="truncate font-medium text-foreground">{rec.job.title}</p>
+                  <p className="truncate text-xs text-muted-foreground">{rec.job.company}</p>
+                </div>
+                <Badge tone="warning" className="shrink-0">Review</Badge>
+              </div>
+            ))}
+          </div>
+        )}
+        <Link to="/recommendations" className="mt-3 block text-xs font-medium text-primary hover:underline">
+          Review now →
+        </Link>
+      </CardContent>
+    </Card>
+  );
+}
+
+function LakeStat({ icon: Icon, label, value }: { icon: typeof Layers; label: string; value: number }) {
+  return (
+    <div className="rounded-md bg-muted/40 py-1.5">
+      <Icon className="mx-auto h-3 w-3" />
+      <div className="mt-0.5 font-semibold tabular-nums text-foreground">{value}</div>
+      <div className="text-[10px] uppercase tracking-wide">{label}</div>
     </div>
   );
 }

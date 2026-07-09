@@ -30,6 +30,18 @@ public class CopilotSkillRouter {
             SalaryGuidanceHandler salaryGuidance,
             SkillsGapHandler skillsGap,
             PersonalizedRecommendationsHandler recommendations,
+            ExplainLearningHandler explainLearning,
+            ExplainApplicationDecisionHandler explainApplicationDecision,
+            ExplainApplicationPackageHandler explainApplicationPackage,
+            ExplainApplicationReviewHandler explainApplicationReview,
+            ExplainCompanyHandler explainCompany,
+            CompareCompaniesHandler compareCompanies,
+            ShouldIApplyHandler shouldIApply,
+            CompanyRiskHandler companyRisk,
+            CompanyTechnologyHandler companyTechnology,
+            CompanyInterviewHandler companyInterview,
+            CompanyCultureHandler companyCulture,
+            CompanyGrowthHandler companyGrowth,
             GeneralAssistantHandler generalAssistant) {
 
         this.handlers = new EnumMap<>(CopilotSkill.class);
@@ -43,6 +55,18 @@ public class CopilotSkillRouter {
         this.handlers.put(CopilotSkill.SALARY_GUIDANCE, salaryGuidance);
         this.handlers.put(CopilotSkill.SKILLS_GAP_ANALYSIS, skillsGap);
         this.handlers.put(CopilotSkill.PERSONALIZED_RECOMMENDATIONS, recommendations);
+        this.handlers.put(CopilotSkill.EXPLAIN_LEARNING, explainLearning);
+        this.handlers.put(CopilotSkill.EXPLAIN_APPLICATION_DECISION, explainApplicationDecision);
+        this.handlers.put(CopilotSkill.EXPLAIN_APPLICATION_PACKAGE, explainApplicationPackage);
+        this.handlers.put(CopilotSkill.EXPLAIN_APPLICATION_REVIEW, explainApplicationReview);
+        this.handlers.put(CopilotSkill.EXPLAIN_COMPANY, explainCompany);
+        this.handlers.put(CopilotSkill.COMPARE_COMPANIES, compareCompanies);
+        this.handlers.put(CopilotSkill.SHOULD_I_APPLY, shouldIApply);
+        this.handlers.put(CopilotSkill.COMPANY_RISK, companyRisk);
+        this.handlers.put(CopilotSkill.COMPANY_TECHNOLOGY, companyTechnology);
+        this.handlers.put(CopilotSkill.COMPANY_INTERVIEW, companyInterview);
+        this.handlers.put(CopilotSkill.COMPANY_CULTURE, companyCulture);
+        this.handlers.put(CopilotSkill.COMPANY_GROWTH, companyGrowth);
 
         this.fallback = generalAssistant;
 
@@ -108,8 +132,52 @@ public class CopilotSkillRouter {
         if (lower.contains("career") && (lower.contains("guidance") || lower.contains("advice"))) {
             return CopilotSkill.CAREER_GUIDANCE;
         }
+        if ((lower.contains("auto") && lower.contains("apply")) || lower.contains("application decision")
+                || (lower.contains("why") && lower.contains("human review")) || lower.contains("autopilot")) {
+            return CopilotSkill.EXPLAIN_APPLICATION_DECISION;
+        }
+        if ((lower.contains("review") && (lower.contains("ai") || lower.contains("quality") || lower.contains("verdict")
+                || lower.contains("reviewer") || lower.contains("final"))) || lower.contains("application review")) {
+            return CopilotSkill.EXPLAIN_APPLICATION_REVIEW;
+        }
+        if (lower.contains("package") && (lower.contains("application") || lower.contains("validation")
+                || lower.contains("ready") || lower.contains("quality") || lower.contains("explain"))) {
+            return CopilotSkill.EXPLAIN_APPLICATION_PACKAGE;
+        }
+        if (lower.contains("learning") || lower.contains("learned") || lower.contains("success pattern")
+                || lower.contains("failure pattern") || (lower.contains("boost") && lower.contains("why"))) {
+            return CopilotSkill.EXPLAIN_LEARNING;
+        }
         if (lower.contains("recommend")) {
             return CopilotSkill.PERSONALIZED_RECOMMENDATIONS;
+        }
+        // Phase 7.13 — company intelligence intents. Checked after the specific skills above so
+        // e.g. "interview" alone still routes to INTERVIEW_PREPARATION as before (additive routing).
+        if (lower.contains("compare") && (lower.contains("company") || lower.contains("companies"))) {
+            return CopilotSkill.COMPARE_COMPANIES;
+        }
+        if (lower.contains("should i apply")) {
+            return CopilotSkill.SHOULD_I_APPLY;
+        }
+        if (lower.contains("company") && (lower.contains("risk") || lower.contains("red flag"))) {
+            return CopilotSkill.COMPANY_RISK;
+        }
+        if (lower.contains("company") && (lower.contains("tech stack") || lower.contains("technolog"))) {
+            return CopilotSkill.COMPANY_TECHNOLOGY;
+        }
+        if (lower.contains("company") && lower.contains("interview")) {
+            return CopilotSkill.COMPANY_INTERVIEW;
+        }
+        if (lower.contains("culture") || lower.contains("work-life") || lower.contains("work life")) {
+            return CopilotSkill.COMPANY_CULTURE;
+        }
+        if (lower.contains("company") && (lower.contains("growth") || lower.contains("long-term")
+                || lower.contains("long term"))) {
+            return CopilotSkill.COMPANY_GROWTH;
+        }
+        if ((lower.contains("about") || lower.contains("explain") || lower.contains("tell me")
+                || lower.contains("know")) && lower.contains("company")) {
+            return CopilotSkill.EXPLAIN_COMPANY;
         }
 
         return null;

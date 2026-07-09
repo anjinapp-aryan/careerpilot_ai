@@ -40,6 +40,7 @@ import { RecommendedJobs } from '@/components/jobs/RecommendedJobs';
 import { CandidateProfileCard } from '@/components/jobs/CandidateProfileCard';
 import { PreferencesDialog } from '@/components/jobs/PreferencesDialog';
 import { JobBadges } from '@/components/jobs/JobBadges';
+import { RelevanceDrawer } from '@/components/jobs/RelevanceDrawer';
 import { trackJobEvent } from '@/lib/jobTelemetry';
 import type { Application, CandidatePreferences, Job, JobsPage } from '@/types/workflow';
 
@@ -77,6 +78,7 @@ export default function Jobs() {
   const [tab, setTab] = useState<JobsTab>('recommended');
   const [homeCountry, setHomeCountry] = useState('India');
   const [showPreferences, setShowPreferences] = useState(false);
+  const [relevanceJob, setRelevanceJob] = useState<{ id: string; title: string; company?: string } | null>(null);
   // International facets
   const [remoteTypeFilter, setRemoteTypeFilter] = useState('');
   const [sponsorshipFilter, setSponsorshipFilter] = useState(false);
@@ -413,6 +415,7 @@ export default function Jobs() {
                   index={i}
                   onSave={() => saveJob(job.id)}
                   onApply={() => applyJob(job.id)}
+                  onRelevance={() => setRelevanceJob({ id: job.id, title: job.title, company: job.company })}
                   busy={track.isPending}
                 />
               ))}
@@ -545,6 +548,7 @@ export default function Jobs() {
                   index={i}
                   onSave={() => saveJob(job.id)}
                   onApply={() => applyJob(job.id)}
+                  onRelevance={() => setRelevanceJob({ id: job.id, title: job.title, company: job.company })}
                   busy={track.isPending}
                 />
               ))}
@@ -568,6 +572,7 @@ export default function Jobs() {
                   index={i}
                   onSave={() => saveJob(job.id)}
                   onApply={() => applyJob(job.id)}
+                  onRelevance={() => setRelevanceJob({ id: job.id, title: job.title, company: job.company })}
                   busy={track.isPending}
                 />
               ))}
@@ -578,6 +583,12 @@ export default function Jobs() {
       )}
 
       <PreferencesDialog open={showPreferences} onOpenChange={setShowPreferences} />
+      <RelevanceDrawer
+        jobId={relevanceJob?.id ?? null}
+        jobTitle={relevanceJob?.title}
+        company={relevanceJob?.company}
+        onClose={() => setRelevanceJob(null)}
+      />
 
       {/* Add job dialog */}
       <Dialog open={showNew} onOpenChange={setShowNew} size="lg">
@@ -636,6 +647,7 @@ interface JobCardProps {
   index: number;
   onSave: () => void;
   onApply: () => void;
+  onRelevance?: () => void;
   busy: boolean;
 }
 
@@ -664,7 +676,7 @@ function parseJsonArray(raw: string | null): string[] {
   }
 }
 
-function JobCard({ job, index, onSave, onApply, busy }: JobCardProps) {
+function JobCard({ job, index, onSave, onApply, onRelevance, busy }: JobCardProps) {
   const isRemote = /remote/i.test(`${job.location ?? ''} ${job.title}`);
   const [showInsights, setShowInsights] = useState(false);
   const { data: enrichment, isLoading: enrichmentLoading, isError: enrichmentError } = useQuery<JobAiEnrichmentRaw>({
@@ -730,6 +742,11 @@ function JobCard({ job, index, onSave, onApply, busy }: JobCardProps) {
               <Button size="sm" variant="outline" onClick={onSave} disabled={busy}>
                 <Bookmark className="h-3.5 w-3.5" /> Save
               </Button>
+              {onRelevance && (
+                <Button size="sm" variant="ghost" onClick={onRelevance}>
+                  <Sparkles className="h-3.5 w-3.5" /> Why am I seeing this?
+                </Button>
+              )}
               {(job.sourceUrl || job.externalUrl) && (
                 <a
                   href={(job.sourceUrl || job.externalUrl) as string}

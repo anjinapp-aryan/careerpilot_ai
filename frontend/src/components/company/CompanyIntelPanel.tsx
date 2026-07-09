@@ -1,0 +1,139 @@
+import { useQuery } from '@tanstack/react-query';
+import { Building2, Clock } from 'lucide-react';
+import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
+import { Badge, type BadgeTone } from '@/components/ui/badge';
+import { companyIntel } from '@/lib/companyIntel';
+
+/**
+ * Phase 7.13 — reusable Company Intelligence panel for a company name (used in the Jobs flow and
+ * Applications page). Dark-safe: while company.knowledge.enabled is off every call 404s → resolves
+ * null → the panel renders nothing at all.
+ */
+
+function scoreTone(v?: number | null): BadgeTone {
+  if (v == null) return 'neutral';
+  if (v >= 70) return 'success';
+  if (v >= 45) return 'warning';
+  return 'danger';
+}
+
+const SCORE_LABELS: { key: string; label: string }[] = [
+  { key: 'qualityScore', label: 'Quality' },
+  { key: 'hiringProbability', label: 'Hiring odds' },
+  { key: 'technologyMatch', label: 'Tech match' },
+  { key: 'resumeCompatibility', label: 'Resume fit' },
+  { key: 'interviewDifficulty', label: 'Interview difficulty' },
+  { key: 'careerGrowth', label: 'Career growth' },
+  { key: 'salaryPotential', label: 'Salary potential' },
+  { key: 'cultureMatch', label: 'Culture match' },
+  { key: 'learningValue', label: 'Learning value' },
+  { key: 'longTermOpportunity', label: 'Long-term' },
+];
+
+const SECTION_LABELS: Record<string, string> = {
+  profile: 'Profile',
+  technologyStack: 'Technology stack',
+  skillDemand: 'Skill demand',
+  hiringPattern: 'Hiring pattern',
+  interviewProcess: 'Interview process',
+  culture: 'Culture',
+  reputation: 'Reputation',
+  salaryInsights: 'Salary insights',
+  growthSignals: 'Growth signals',
+  businessDomain: 'Business domain',
+  learningHistory: 'Learning history',
+};
+
+export function CompanyIntelPanel({ companyName, showTimeline = false }: { companyName?: string | null; showTimeline?: boolean }) {
+  const summary = useQuery({
+    queryKey: ['company-intel', 'by-name', companyName],
+    queryFn: () => companyIntel.findByName(companyName),
+    enabled: !!companyName?.trim(),
+    staleTime: 5 * 60_000,
+    retry: false,
+  });
+
+  const detail = useQuery({
+    queryKey: ['company-intel', 'detail', summary.data?.id],
+    queryFn: () => companyIntel.get(summary.data!.id),
+    enabled: !!summary.data?.id,
+    staleTime: 5 * 60_000,
+    retry: false,
+  });
+
+  const timeline = useQuery({
+    queryKey: ['company-intel', 'timeline', summary.data?.id],
+    queryFn: () => companyIntel.timeline(summary.data!.id),
+    enabled: showTimeline && !!summary.data?.id,
+    staleTime: 60_000,
+    retry: false,
+  });
+
+  const company = detail.data;
+  if (!company) return null; // dark flag, unknown company, or still loading — stay invisible
+
+  const scores = company.scores as unknown as Record<string, number | null | undefined>;
+  const sections = Object.entries(company.knowledge ?? {}).filter(([k]) => SECTION_LABELS[k]);
+
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Building2 className="h-4 w-4 text-primary" />
+          Company intelligence — {company.companyName}
+          <Badge tone="neutral">v{company.knowledgeVersion}</Badge>
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="flex flex-wrap gap-2">
+          {SCORE_LABELS.map(({ key, label }) =>
+            scores[key] == null ? null : (
+              <Badge key={key} tone={scoreTone(scores[key])} title={company.scoreExplanations?.[key]}>
+                {label}: {scores[key]}
+              </Badge>
+            ),
+          )}
+        </div>
+
+        {company.insights.length > 0 && (
+          <ul className="space-y-1">
+            {company.insights.map((insight) => (
+              <li key={insight.kind} className="text-xs text-muted-foreground">
+                <span className="font-medium text-foreground">{insight.headline}</span> — {insight.detail}
+              </li>
+            ))}
+          </ul>
+        )}
+
+        {sections.length > 0 && (
+          <div className="space-y-2">
+            {sections.slice(0, 6).map(([key, value]) => (
+              <div key={key}>
+                <p className="text-xs font-semibold text-foreground">{SECTION_LABELS[key]}</p>
+                <p className="whitespace-pre-wrap text-xs text-muted-foreground">
+                  {value.length > 500 ? `${value.slice(0, 500)}…` : value}
+                </p>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {showTimeline && (timeline.data?.length ?? 0) > 0 && (
+          <div>
+            <p className="mb-1 flex items-center gap-1 text-xs font-semibold text-foreground">
+              <Clock className="h-3 w-3" /> Company timeline
+            </p>
+            <ul className="space-y-1">
+              {timeline.data!.slice(0, 10).map((event) => (
+                <li key={event.id} className="text-xs text-muted-foreground">
+                  {new Date(event.occurredAt).toLocaleDateString()} — {event.eventType.replaceAll('_', ' ').toLowerCase()}
+                  {event.detail ? ` (${event.detail.slice(0, 80)})` : ''}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}

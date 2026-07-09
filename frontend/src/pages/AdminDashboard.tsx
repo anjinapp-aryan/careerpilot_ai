@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Bar, BarChart, CartesianGrid, Cell, ResponsiveContainer, Tooltip as RTooltip, XAxis, YAxis } from 'recharts';
-import { Activity, Copy, Database, Globe2, RefreshCw, Sparkles, Wand2 } from 'lucide-react';
+import { Activity, Copy, Database, Globe2, RefreshCw, Server, ShieldCheck, Sparkles, Trash2, Wand2 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { PageHeader } from '@/components/common/PageHeader';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
@@ -10,6 +10,12 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { EmptyState } from '@/components/ui/empty-state';
 import { KpiCard } from '@/components/dashboard/KpiCard';
 import { useToast } from '@/components/ui/toast';
+import { WorkflowTraceExplorer } from '@/components/workflow/WorkflowTraceExplorer';
+import { DailyDiscoveryHealthPanel } from '@/components/admin/DailyDiscoveryHealthPanel';
+import { AutopilotHealthPanel } from '@/components/admin/AutopilotHealthPanel';
+import { PackageIntelligencePanel } from '@/components/admin/PackageIntelligencePanel';
+import { ReviewPipelinePanel } from '@/components/admin/ReviewPipelinePanel';
+import { CompanyIntelligencePanel } from '@/components/admin/CompanyIntelligencePanel';
 
 /** Bar-chart rows for an "Unknown" bucket are real data but not actionable — muted instead of the brand color. */
 const UNKNOWN_LABEL = 'Unknown';
@@ -64,6 +70,297 @@ const STATUS_TONE: Record<string, 'success' | 'danger' | 'info' | 'neutral'> = {
   FAILED: 'danger',
   RUNNING: 'info',
 };
+
+const HEALTH_TONE: Record<string, 'success' | 'warning' | 'danger' | 'neutral'> = {
+  UP: 'success',
+  HEALTHY: 'success',
+  DEGRADED: 'warning',
+  DOWN: 'danger',
+  NOT_CONFIGURED: 'neutral',
+  UNKNOWN: 'neutral',
+};
+
+function healthTone(v?: string): 'success' | 'warning' | 'danger' | 'neutral' {
+  return HEALTH_TONE[(v ?? '').toUpperCase()] ?? 'neutral';
+}
+
+interface RetentionStatus {
+  enabled?: boolean;
+  purged?: Record<string, number>;
+}
+
+/** One row of the Phase 4G engine-health matrix — a diagnostics endpoint to poll + a display label. */
+const HEALTH_ENDPOINTS: { group: string; label: string; path: string }[] = [
+  // Phase 3A — workflow engine (WorkflowDiagnosticsController)
+  { group: 'Workflow', label: 'Application Tracking', path: '/api/diagnostics/application-tracking' },
+  { group: 'Workflow', label: 'Timeline', path: '/api/diagnostics/application-timeline' },
+  { group: 'Workflow', label: 'Email Intelligence', path: '/api/diagnostics/email-intelligence' },
+  { group: 'Workflow', label: 'Interview Tracking', path: '/api/diagnostics/interview-tracking' },
+  { group: 'Workflow', label: 'Application Analytics', path: '/api/diagnostics/application-analytics' },
+  { group: 'Workflow', label: 'Career Intelligence', path: '/api/diagnostics/career-intelligence' },
+  { group: 'Workflow', label: 'Correlation Ledger', path: '/api/diagnostics/workflow-correlation' },
+  { group: 'Workflow', label: 'Dead Letter Ledger', path: '/api/diagnostics/workflow-dead-letter' },
+  // Phase 2E — execution engine (ExecutionDiagnosticsController)
+  { group: 'Execution', label: 'Application Execution', path: '/api/diagnostics/application-execution' },
+  { group: 'Execution', label: 'Browser Automation', path: '/api/diagnostics/browser' },
+  { group: 'Execution', label: 'ATS Submission', path: '/api/diagnostics/ats' },
+  { group: 'Execution', label: 'Tracking', path: '/api/diagnostics/tracking' },
+  { group: 'Execution', label: 'Analytics', path: '/api/diagnostics/analytics' },
+  // Phase 2D — resume pipeline (DiagnosticsController + PipelineDiagnosticsController)
+  { group: 'Resume Pipeline', label: 'Resume Tailoring', path: '/api/diagnostics/resume-tailoring' },
+  { group: 'Resume Pipeline', label: 'ATS Optimization', path: '/api/diagnostics/ats-optimization' },
+  { group: 'Resume Pipeline', label: 'Gap Analysis', path: '/api/diagnostics/gap-analysis' },
+  { group: 'Resume Pipeline', label: 'ATS Explainability', path: '/api/diagnostics/ats-explainability' },
+  { group: 'Resume Pipeline', label: 'Cover Letter', path: '/api/diagnostics/cover-letter' },
+  { group: 'Resume Pipeline', label: 'Application Package', path: '/api/diagnostics/application-package' },
+  { group: 'Resume Pipeline', label: 'Auto-Apply Package', path: '/api/diagnostics/auto-apply-package' },
+];
+
+interface EngineHealthRow {
+  label: string;
+  group: string;
+  enabled?: boolean;
+  health: string;
+  queue?: string;
+}
+
+/**
+ * Phase 4G — one no-auth counts-only diagnostics call per engine stage, fetched in parallel and
+ * rendered as a single health matrix. Every call is independently dark-tolerant: a failed fetch
+ * (engine not registered, or a transient error) reads as NOT_CONFIGURED rather than an error row.
+ */
+function EngineHealthMatrix() {
+  const { data, isLoading } = useQuery<EngineHealthRow[]>({
+    queryKey: ['admin', 'engine-health-matrix'],
+    queryFn: async () => {
+      const results = await Promise.allSettled(HEALTH_ENDPOINTS.map((e) => api.get(e.path)));
+      return HEALTH_ENDPOINTS.map((e, i) => {
+        const r = results[i];
+        if (r.status !== 'fulfilled') return { label: e.label, group: e.group, health: 'NOT_CONFIGURED' };
+        const d = r.value.data as Record<string, unknown>;
+        const qSize = d.executorQueueSize;
+        const qCap = d.executorQueueCapacity;
+        return {
+          label: e.label,
+          group: e.group,
+          enabled: Boolean(d.enabled),
+          health: String(d.health ?? 'UNKNOWN'),
+          queue: typeof qSize === 'number' && typeof qCap === 'number' ? `${qSize} / ${qCap}` : undefined,
+        };
+      });
+    },
+    retry: false,
+    staleTime: 30_000,
+  });
+
+  const groups = ['Workflow', 'Execution', 'Resume Pipeline'];
+
+  return (
+    <Card>
+      <CardHeader className="flex-row items-center gap-2">
+        <Server className="h-4 w-4 text-muted-foreground" />
+        <CardTitle>Engine health matrix</CardTitle>
+      </CardHeader>
+      <CardContent>
+        {isLoading ? (
+          <Skeleton className="h-64 w-full" />
+        ) : (
+          <div className="space-y-5">
+            {groups.map((g) => {
+              const rows = (data ?? []).filter((r) => r.group === g);
+              if (rows.length === 0) return null;
+              return (
+                <div key={g}>
+                  <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">{g}</h4>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-muted-foreground">
+                          <th className="py-2 pr-4">Stage</th>
+                          <th className="py-2 pr-4">Flag</th>
+                          <th className="py-2 pr-4">Health</th>
+                          <th className="py-2 pr-4">Queue</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {rows.map((r) => (
+                          <tr key={r.label} className="border-b border-border/50">
+                            <td className="py-2 pr-4 font-medium">{r.label}</td>
+                            <td className="py-2 pr-4">
+                              <Badge tone={r.enabled ? 'info' : 'neutral'}>{r.enabled ? 'enabled' : 'off'}</Badge>
+                            </td>
+                            <td className="py-2 pr-4">
+                              <Badge tone={healthTone(r.health)}>{r.health}</Badge>
+                            </td>
+                            <td className="py-2 pr-4 tabular-nums text-muted-foreground">{r.queue ?? '—'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+interface ProviderStatusRow {
+  name: string;
+  displayName?: string;
+  configured?: boolean;
+  model?: string | null;
+  status?: string;
+  circuitState?: string;
+  health?: string;
+}
+
+/**
+ * Phase 4.1 — AI provider analytics: the failover chain's per-provider status (GET /api/ai/providers)
+ * joined with the gateway's call/failure/latency/fallback counters (GET /api/diagnostics/ai →
+ * gateway_stats: {key}Calls/{key}Failures/{key}RateLimits/{key}AvgLatencyMs + fallbackCount).
+ */
+function ProviderAnalyticsPanel() {
+  const providers = useQuery<ProviderStatusRow[]>({
+    queryKey: ['admin', 'ai-providers'],
+    queryFn: async () => {
+      try {
+        return (await api.get('/api/ai/providers')).data;
+      } catch {
+        return [];
+      }
+    },
+    retry: false,
+    staleTime: 30_000,
+  });
+
+  const diag = useQuery<Record<string, any> | null>({
+    queryKey: ['admin', 'ai-diagnostics'],
+    queryFn: async () => {
+      try {
+        return (await api.get('/api/diagnostics/ai')).data;
+      } catch {
+        return null;
+      }
+    },
+    retry: false,
+    staleTime: 30_000,
+  });
+
+  const rows = providers.data ?? [];
+  const stats = (diag.data?.gateway_stats ?? {}) as Record<string, number>;
+  const fallbackCount = stats.fallbackCount ?? 0;
+
+  return (
+    <Card>
+      <CardHeader className="flex-row items-center justify-between">
+        <CardTitle className="flex items-center gap-2">
+          <Sparkles className="h-4 w-4 text-muted-foreground" /> AI provider analytics
+        </CardTitle>
+        <Badge tone={fallbackCount > 0 ? 'warning' : 'neutral'}>{fallbackCount} fallbacks</Badge>
+      </CardHeader>
+      <CardContent>
+        {providers.isLoading ? (
+          <Skeleton className="h-32 w-full" />
+        ) : rows.length === 0 ? (
+          <EmptyState title="Unavailable" description="The AI gateway's provider list could not be loaded." />
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-muted-foreground">
+                  <th className="py-2 pr-4">Provider</th>
+                  <th className="py-2 pr-4">Model</th>
+                  <th className="py-2 pr-4">Status</th>
+                  <th className="py-2 pr-4">Circuit</th>
+                  <th className="py-2 pr-4">Calls</th>
+                  <th className="py-2 pr-4">Failures</th>
+                  <th className="py-2 pr-4">Rate limits</th>
+                  <th className="py-2 pr-4">Avg latency</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((p) => (
+                  <tr key={p.name} className="border-b border-border/50">
+                    <td className="py-2 pr-4 font-medium capitalize">{p.displayName ?? p.name}</td>
+                    <td className="py-2 pr-4 text-xs text-muted-foreground">{p.model ?? '—'}</td>
+                    <td className="py-2 pr-4"><Badge tone={healthTone(p.status)}>{p.status ?? '—'}</Badge></td>
+                    <td className="py-2 pr-4 text-xs text-muted-foreground">{p.circuitState ?? '—'}</td>
+                    <td className="py-2 pr-4 tabular-nums">{stats[`${p.name}Calls`] ?? 0}</td>
+                    <td className="py-2 pr-4 tabular-nums">{stats[`${p.name}Failures`] ?? 0}</td>
+                    <td className="py-2 pr-4 tabular-nums">{stats[`${p.name}RateLimits`] ?? 0}</td>
+                    <td className="py-2 pr-4 tabular-nums text-muted-foreground">
+                      {stats[`${p.name}AvgLatencyMs`] != null ? `${Math.round(stats[`${p.name}AvgLatencyMs`])}ms` : '—'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+/** Phase 4.1 — MatchCache hit/miss diagnostics (GET /api/diagnostics/match-cache). */
+function CacheDiagnosticsPanel() {
+  const { data, isLoading } = useQuery<Record<string, any> | null>({
+    queryKey: ['admin', 'match-cache'],
+    queryFn: async () => {
+      try {
+        return (await api.get('/api/diagnostics/match-cache')).data;
+      } catch {
+        return null;
+      }
+    },
+    retry: false,
+    staleTime: 30_000,
+  });
+
+  const hits = Number(data?.matchCacheHits ?? 0);
+  const misses = Number(data?.matchCacheMisses ?? 0);
+  const total = hits + misses;
+  const hitRatio = total > 0 ? Math.round((hits / total) * 100) : null;
+
+  return (
+    <Card>
+      <CardHeader className="flex-row items-center justify-between">
+        <CardTitle className="flex items-center gap-2">
+          <Database className="h-4 w-4 text-muted-foreground" /> Match cache
+        </CardTitle>
+        {data && (
+          <Badge tone={data.enabled ? 'success' : 'neutral'}>{data.enabled ? 'enabled' : 'disabled (dark)'}</Badge>
+        )}
+      </CardHeader>
+      <CardContent>
+        {isLoading ? (
+          <Skeleton className="h-20 w-full" />
+        ) : !data ? (
+          <EmptyState title="Unavailable" description="Match-cache diagnostics could not be loaded." />
+        ) : (
+          <div className="grid grid-cols-3 gap-3 text-center">
+            <div className="rounded-lg border border-border px-3 py-2">
+              <p className="text-lg font-semibold tabular-nums text-foreground">{hits}</p>
+              <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Hits</p>
+            </div>
+            <div className="rounded-lg border border-border px-3 py-2">
+              <p className="text-lg font-semibold tabular-nums text-foreground">{misses}</p>
+              <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Misses</p>
+            </div>
+            <div className="rounded-lg border border-border px-3 py-2">
+              <p className="text-lg font-semibold tabular-nums text-foreground">{hitRatio != null ? `${hitRatio}%` : '—'}</p>
+              <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Hit ratio</p>
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
 
 export default function AdminDashboard() {
   const qc = useQueryClient();
@@ -133,6 +430,37 @@ export default function AdminDashboard() {
     queryKey: ['admin', 'duplicates'],
     queryFn: async () => (await api.get('/api/admin/stats/duplicates')).data,
   });
+
+  const { data: observability, isLoading: observabilityLoading } = useQuery<Record<string, any>>({
+    queryKey: ['admin', 'observability'],
+    queryFn: async () => (await api.get('/api/diagnostics/observability')).data,
+    retry: false,
+    staleTime: 30_000,
+  });
+
+  const { data: retention } = useQuery<RetentionStatus | null>({
+    queryKey: ['admin', 'retention'],
+    queryFn: async () => {
+      try {
+        return (await api.get('/api/admin/retention/status')).data as RetentionStatus;
+      } catch {
+        return null; // 403 for non-admins or disabled — treated as "unavailable"
+      }
+    },
+    retry: false,
+  });
+
+  const runRetention = useMutation({
+    mutationFn: async () => (await api.post('/api/admin/retention/run')).data,
+    onSuccess: (data: RetentionStatus) => {
+      const total = Object.values(data?.purged ?? {}).reduce((s, n) => s + (n ?? 0), 0);
+      toast({ variant: 'success', title: 'Retention run complete', description: `${total} ledger rows purged.` });
+      qc.invalidateQueries({ queryKey: ['admin', 'retention'] });
+    },
+    onError: () => toast({ variant: 'error', title: 'Retention run failed', description: 'Enabled only when RETENTION_ENABLED=true.' }),
+  });
+
+  const providerChain = (observability?.providers?.providers ?? {}) as Record<string, string>;
 
   const embeddedPct = discovery && discovery.totalDiscovered > 0
     ? Math.round((discovery.totalEmbedded / discovery.totalDiscovered) * 100)
@@ -377,6 +705,121 @@ export default function AdminDashboard() {
           )}
         </CardContent>
       </Card>
+
+      {/* Phase 3B.6 — Platform observability rollup */}
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+        <Card>
+          <CardHeader className="flex-row items-center justify-between">
+            <CardTitle className="flex items-center gap-2">
+              <Server className="h-4 w-4 text-muted-foreground" /> Platform observability
+            </CardTitle>
+            {observability?.overall && (
+              <Badge tone={healthTone(observability.overall)}>{observability.overall}</Badge>
+            )}
+          </CardHeader>
+          <CardContent>
+            {observabilityLoading ? (
+              <Skeleton className="h-40 w-full" />
+            ) : !observability ? (
+              <EmptyState title="Unavailable" description="The observability rollup could not be loaded." />
+            ) : (
+              <div className="space-y-4 text-sm">
+                <div className="grid grid-cols-2 gap-2">
+                  {(['workflow', 'execution', 'providers', 'cache', 'retention'] as const).map((k) => (
+                    <div key={k} className="flex items-center justify-between rounded-lg border border-border px-3 py-2">
+                      <span className="capitalize text-muted-foreground">{k}</span>
+                      <Badge tone={healthTone(observability[k]?.health)}>{observability[k]?.health ?? '—'}</Badge>
+                    </div>
+                  ))}
+                </div>
+                {Object.keys(providerChain).length > 0 && (
+                  <div>
+                    <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Provider chain</p>
+                    <div className="flex flex-wrap gap-2">
+                      {Object.entries(providerChain).map(([name, h]) => (
+                        <Badge key={name} tone={healthTone(h)}>
+                          <span className="capitalize">{name}</span>: {h}
+                        </Badge>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Data retention */}
+        <Card>
+          <CardHeader className="flex-row items-center justify-between">
+            <CardTitle className="flex items-center gap-2">
+              <ShieldCheck className="h-4 w-4 text-muted-foreground" /> Data retention
+            </CardTitle>
+            <Button size="sm" variant="outline" onClick={() => runRetention.mutate()} loading={runRetention.isPending}>
+              <Trash2 className="h-3.5 w-3.5" /> Run purge
+            </Button>
+          </CardHeader>
+          <CardContent>
+            {retention == null ? (
+              <EmptyState
+                title="Retention status unavailable"
+                description="Requires an admin role. The retention scheduler purges aged audit/dead-letter ledgers when enabled."
+              />
+            ) : (
+              <div className="space-y-3 text-sm">
+                <div className="flex items-center justify-between rounded-lg border border-border px-3 py-2">
+                  <span className="text-muted-foreground">Scheduler</span>
+                  <Badge tone={retention.enabled ? 'success' : 'neutral'}>
+                    {retention.enabled ? 'enabled' : 'disabled (dark)'}
+                  </Badge>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Purges <code>workflow_dead_letter</code>, <code>workflow_correlation</code> (terminal only),
+                  and the recommendation / execution / resume-tailoring audit ledgers past their retention
+                  windows. Deletes are recoverable only from a DB backup — choose windows before enabling.
+                </p>
+                {retention.purged && Object.keys(retention.purged).length > 0 && (
+                  <div className="space-y-1">
+                    {Object.entries(retention.purged).map(([table, n]) => (
+                      <div key={table} className="flex items-center justify-between text-xs">
+                        <span className="font-mono text-muted-foreground">{table}</span>
+                        <span className="tabular-nums">{n}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Phase 4.1 — AI provider chain analytics + match-cache diagnostics. */}
+      <ProviderAnalyticsPanel />
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+        <CacheDiagnosticsPanel />
+      </div>
+
+      {/* Phase 4G — Workflow (3A) + Execution (2E) + resume-pipeline (2D) diagnostics matrix. */}
+      <EngineHealthMatrix />
+
+      {/* Phase 5.1D — Daily Discovery scheduler + provider health, with the manual trigger. */}
+      <DailyDiscoveryHealthPanel />
+
+      {/* Phase 7 — Application Agent (autopilot) health + provider registry. */}
+      <AutopilotHealthPanel />
+
+      {/* Phase 7.11 — Application Package Intelligence: validation verdicts + generation metrics. */}
+      <PackageIntelligencePanel />
+
+      {/* Phase 7.12 — AI Review Pipeline: reviewer health, verdict + quality distribution. */}
+      <ReviewPipelinePanel />
+
+      {/* Phase 7.13 — Company Knowledge Graph: flags, knowledge/graph sizes, queue health. */}
+      <CompanyIntelligencePanel />
+
+      {/* Phase 4G — Correlation Explorer, shared with the Workflow page. */}
+      <WorkflowTraceExplorer />
 
       {/* Duplicate clusters */}
       <Card>

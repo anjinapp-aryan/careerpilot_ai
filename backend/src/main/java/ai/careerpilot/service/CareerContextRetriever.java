@@ -23,15 +23,21 @@ public class CareerContextRetriever {
     private final ApplicationRepository applications;
     private final WorkflowRunRepository workflowRuns;
     private final WorkflowService workflowService;
+    private final DailyDiscoveryAnalyticsRepository dailyDiscoveryAnalytics;
+    private final DailyCareerSummaryRepository dailyCareerSummaries;
 
     public CareerContextRetriever(ResumeRepository resumes, JobRepository jobs,
                                   ApplicationRepository applications, WorkflowRunRepository workflowRuns,
-                                  WorkflowService workflowService) {
+                                  WorkflowService workflowService,
+                                  DailyDiscoveryAnalyticsRepository dailyDiscoveryAnalytics,
+                                  DailyCareerSummaryRepository dailyCareerSummaries) {
         this.resumes = resumes;
         this.jobs = jobs;
         this.applications = applications;
         this.workflowRuns = workflowRuns;
         this.workflowService = workflowService;
+        this.dailyDiscoveryAnalytics = dailyDiscoveryAnalytics;
+        this.dailyCareerSummaries = dailyCareerSummaries;
     }
 
     @Transactional(readOnly = true)
@@ -135,6 +141,28 @@ public class CareerContextRetriever {
         );
     }
 
+    /**
+     * Phase 5P — the latest daily discovery agent output for this user, for the Copilot's
+     * recommendations context. Returns {@code null} when the (dark-by-default) agent has never
+     * run for this user, so handlers must treat it the same as "no data" rather than a fabricated
+     * empty snapshot.
+     */
+    @Transactional(readOnly = true)
+    public DailyDiscoveryContext getDailyDiscoveryContext(AuthenticatedUser user) {
+        var latest = dailyDiscoveryAnalytics.findFirstByUserIdOrderByComputedAtDesc(user.userId()).orElse(null);
+        if (latest == null) return null;
+        var summary = dailyCareerSummaries.findFirstByUserIdOrderByCreatedAtDesc(user.userId()).orElse(null);
+        return new DailyDiscoveryContext(
+                latest.getComputedAt(),
+                latest.getRecommendedJobs(), latest.getMustApplyJobs(), latest.getHighPriorityJobs(),
+                latest.getHumanReviewJobs(),
+                summary != null ? summary.getTopCompanies() : null,
+                summary != null ? summary.getTopSkills() : null,
+                summary != null ? summary.getSummaryText() : null,
+                summary != null ? summary.getInterviewProbabilityDelta() : null,
+                summary != null ? summary.getOfferProbabilityDelta() : null);
+    }
+
     private Optional<Resume> resolveResume(AuthenticatedUser user, String id) {
         Optional<Resume> chosen = tryParseUuid(id)
                 .flatMap(resumes::findById)
@@ -229,4 +257,16 @@ public class CareerContextRetriever {
             int workflowCount,
             List<ResumeContext> resumes,
             List<ApplicationContext> applications) {}
+
+    public record DailyDiscoveryContext(
+            java.time.Instant computedAt,
+            Integer recommendedJobs,
+            Integer mustApplyJobs,
+            Integer highPriorityJobs,
+            Integer humanReviewJobs,
+            String topCompanies,
+            String topSkills,
+            String summaryText,
+            java.math.BigDecimal interviewProbabilityDelta,
+            java.math.BigDecimal offerProbabilityDelta) {}
 }

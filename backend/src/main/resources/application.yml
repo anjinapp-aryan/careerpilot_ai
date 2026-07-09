@@ -325,6 +325,16 @@ jobs:
     priority-enabled: ${RECOMMENDATION_PRIORITY_ENABLED:false}
   explain:
     enabled: ${JOB_EXPLAIN_ENABLED:true}         # "Why am I a match?" LLM endpoint
+  # ---- Phase 3B.1: career-relevance keyword configuration (ai.careerpilot.discovery.relevance) ----
+  # Comma-separated keyword overrides for RoleFamilyResolver/DomainPreferenceService. All optional —
+  # each has a sensible built-in default matching the Phase 3B.1 spec's example mappings.
+  relevance:
+    role-family:
+      java-backend: ${JOB_RELEVANCE_JAVA_BACKEND_TITLES:}
+      data-engineering: ${JOB_RELEVANCE_DATA_ENGINEERING_TITLES:}
+      devops: ${JOB_RELEVANCE_DEVOPS_TITLES:}
+      frontend: ${JOB_RELEVANCE_FRONTEND_TITLES:}
+    excluded-domains: ${JOB_RELEVANCE_EXCLUDED_DOMAINS:}
   discovery:
     enabled: ${JOB_DISCOVERY_ENABLED:true}
     # When true, Domestic/International tabs derive their country set from the candidate's own
@@ -387,6 +397,12 @@ recommendation:
 # approval publishes RecommendationApprovedEvent, consumed async/after-commit by
 # ResumeTailoringWorker, so tailoring latency/failures can never affect the approval response.
 resume:
+  # ---- Phase 7.2/7.3 Resume Selection + autopilot tailoring trigger (dark) ----
+  selection:
+    enabled: ${RESUME_SELECTION_ENABLED:false}
+    ats-floor: ${RESUME_SELECTION_ATS_FLOOR:70}
+  autopilot:
+    enabled: ${RESUME_AUTOPILOT_ENABLED:false}
   tailoring:
     # Master switch for the engine itself (manual POST /api/resume/tailor + GET endpoints).
     enabled: ${RESUME_TAILORING_ENABLED:false}
@@ -485,6 +501,57 @@ application:
       core-pool-size: ${APPLICATION_PACKAGE_EXECUTOR_CORE_POOL_SIZE:2}
       max-pool-size: ${APPLICATION_PACKAGE_EXECUTOR_MAX_POOL_SIZE:4}
       queue-capacity: ${APPLICATION_PACKAGE_EXECUTOR_QUEUE_CAPACITY:100}
+    # ---- Phase 7.11 Application Package Intelligence (validation / canonical source of truth; dark) ----
+    # validation.enabled gates the engine; validation.trigger.enabled chains it onto ApplicationPackageReadyEvent.
+    validation:
+      enabled: ${APPLICATION_PACKAGE_VALIDATION_ENABLED:false}
+      trigger:
+        enabled: ${APPLICATION_PACKAGE_VALIDATION_TRIGGER_ENABLED:false}
+      require-learning: ${APPLICATION_PACKAGE_VALIDATION_REQUIRE_LEARNING:false}
+      executor:
+        core-pool-size: ${APPLICATION_PACKAGE_VALIDATION_EXECUTOR_CORE_POOL_SIZE:2}
+        max-pool-size: ${APPLICATION_PACKAGE_VALIDATION_EXECUTOR_MAX_POOL_SIZE:4}
+        queue-capacity: ${APPLICATION_PACKAGE_VALIDATION_EXECUTOR_QUEUE_CAPACITY:200}
+    history:
+      enabled: ${APPLICATION_PACKAGE_HISTORY_ENABLED:false}
+    diagnostics:
+      enabled: ${APPLICATION_PACKAGE_DIAGNOSTICS_ENABLED:false}
+  # ---- Phase 7.12 AI Review Pipeline (final quality gate; reviews the 7.11 package; dark) ----
+  # review.enabled gates the pipeline; review.trigger.enabled chains it onto ApplicationPackageValidatedEvent.
+  # Each reviewer has its own flag so they can be canaried one at a time.
+  review:
+    enabled: ${APPLICATION_REVIEW_ENABLED:false}
+    trigger:
+      enabled: ${APPLICATION_REVIEW_TRIGGER_ENABLED:false}
+    resume:
+      enabled: ${APPLICATION_REVIEW_RESUME_ENABLED:false}
+    ats:
+      enabled: ${APPLICATION_REVIEW_ATS_ENABLED:false}
+    company:
+      enabled: ${APPLICATION_REVIEW_COMPANY_ENABLED:false}
+    learning:
+      enabled: ${APPLICATION_REVIEW_LEARNING_ENABLED:false}
+    consistency:
+      enabled: ${APPLICATION_REVIEW_CONSISTENCY_ENABLED:false}
+    quality:
+      enabled: ${APPLICATION_REVIEW_QUALITY_ENABLED:false}
+    diagnostics:
+      enabled: ${APPLICATION_REVIEW_DIAGNOSTICS_ENABLED:false}
+    executor:
+      core-pool-size: ${APPLICATION_REVIEW_EXECUTOR_CORE_POOL_SIZE:2}
+      max-pool-size: ${APPLICATION_REVIEW_EXECUTOR_MAX_POOL_SIZE:4}
+      queue-capacity: ${APPLICATION_REVIEW_EXECUTOR_QUEUE_CAPACITY:200}
+  # ---- Phase 7.1 Application Decision Engine (deterministic; dark) ----
+  decision:
+    enabled: ${APPLICATION_DECISION_ENABLED:false}
+    auto-apply-min-score: ${APPLICATION_DECISION_AUTO_APPLY_MIN_SCORE:90}
+    review-min-score: ${APPLICATION_DECISION_REVIEW_MIN_SCORE:75}
+    save-min-score: ${APPLICATION_DECISION_SAVE_MIN_SCORE:60}
+    ats-floor: ${APPLICATION_DECISION_ATS_FLOOR:70}
+    failure-penalty-cap: ${APPLICATION_DECISION_FAILURE_PENALTY_CAP:-20}
+  # ---- Phase 7.4 Auto Apply Engine (fail-safe; no provider integration; dark) ----
+  auto:
+    enabled: ${APPLICATION_AUTO_ENABLED:false}
 
 # ---- Phase 2D.7 Auto Apply Package Preparation (deterministic; PREPARATION ONLY, no automation) ----
 # Triggered by ApplicationPackageReadyEvent. All default DARK.
@@ -498,6 +565,220 @@ auto:
       core-pool-size: ${AUTO_APPLY_EXECUTOR_CORE_POOL_SIZE:2}
       max-pool-size: ${AUTO_APPLY_EXECUTOR_MAX_POOL_SIZE:4}
       queue-capacity: ${AUTO_APPLY_EXECUTOR_QUEUE_CAPACITY:100}
+
+# ==== Phase 2E — Enterprise Auto-Apply Execution Engine (HIGH RISK) ====
+# The entire execution platform ships DARK and INERT. With these defaults nothing submits an
+# application and nothing auto-starts off 2D output: the safety/approval GATES default enabled=true
+# (they must never be skippable when the pipeline runs), but every pipeline-ENTRY trigger defaults
+# false, so completing a 2D pipeline creates ZERO 2E rows. Browser automation is a throwing stub with
+# no Playwright dependency; every ATS connector is unconfigured. Enabling is a separate, later,
+# human-gated decision. NEVER flip execution/browser/ats/*_trigger on without the rollout plan.
+# NOTE: dotted top-level keys (like the existing `ats.explainability:`) so these don't collide with
+# the Phase-2D `application:` / `ats:` blocks above — Spring relaxed-binding flattens both forms.
+application.execution:
+  enabled: ${APPLICATION_EXECUTION_ENABLED:false}
+  trigger:
+    # Fires ApplicationExecutionWorker off a human-published ApprovalGrantedEvent only.
+    enabled: ${APPLICATION_EXECUTION_TRIGGER_ENABLED:false}
+  executor:
+    core-pool-size: ${APPLICATION_EXECUTION_EXECUTOR_CORE_POOL_SIZE:2}
+    max-pool-size: ${APPLICATION_EXECUTION_EXECUTOR_MAX_POOL_SIZE:4}
+    queue-capacity: ${APPLICATION_EXECUTION_EXECUTOR_QUEUE_CAPACITY:50}
+application.approval:
+  # Human approval is MANDATORY (default true). Disabling does NOT create an auto-approve path —
+  # it only stops enqueueing new approval requests. There is no AUTO_APPROVE in this version.
+  enabled: ${APPLICATION_APPROVAL_ENABLED:true}
+application.safety:
+  # The safety GATE itself (default on — never skippable). A disabled gate is a CLOSED gate.
+  enabled: ${APPLICATION_SAFETY_ENABLED:true}
+  trigger:
+    # The pipeline ENTRY. Default false: SafetyValidationWorker does NOT auto-fire off
+    # ApplicationPackageReadyEvent until this is explicitly flipped.
+    enabled: ${APPLICATION_SAFETY_TRIGGER_ENABLED:false}
+  ats-min-score: ${APPLICATION_SAFETY_ATS_MIN_SCORE:60}
+  gap-max-score: ${APPLICATION_SAFETY_GAP_MAX_SCORE:60}
+  blacklist-companies: ${APPLICATION_SAFETY_BLACKLIST_COMPANIES:}
+application.retry:
+  max-attempts: ${APPLICATION_RETRY_MAX_ATTEMPTS:3}
+  base-backoff-ms: ${APPLICATION_RETRY_BASE_BACKOFF_MS:1000}
+application.tracking:
+  enabled: ${APPLICATION_TRACKING_ENABLED:false}
+  trigger:
+    enabled: ${APPLICATION_TRACKING_TRIGGER_ENABLED:false}
+  executor:
+    core-pool-size: ${APPLICATION_TRACKING_EXECUTOR_CORE_POOL_SIZE:2}
+    max-pool-size: ${APPLICATION_TRACKING_EXECUTOR_MAX_POOL_SIZE:4}
+    queue-capacity: ${APPLICATION_TRACKING_EXECUTOR_QUEUE_CAPACITY:100}
+application.analytics:
+  enabled: ${APPLICATION_ANALYTICS_ENABLED:false}
+  trigger:
+    enabled: ${APPLICATION_ANALYTICS_TRIGGER_ENABLED:false}
+  executor:
+    core-pool-size: ${APPLICATION_ANALYTICS_EXECUTOR_CORE_POOL_SIZE:1}
+    max-pool-size: ${APPLICATION_ANALYTICS_EXECUTOR_MAX_POOL_SIZE:2}
+    queue-capacity: ${APPLICATION_ANALYTICS_EXECUTOR_QUEUE_CAPACITY:100}
+browser.automation:
+  # INERT STUB. No Playwright dependency exists; every action throws. Flag has no real effect.
+  enabled: ${BROWSER_AUTOMATION_ENABLED:false}
+  executor:
+    core-pool-size: ${BROWSER_AUTOMATION_EXECUTOR_CORE_POOL_SIZE:1}
+    max-pool-size: ${BROWSER_AUTOMATION_EXECUTOR_MAX_POOL_SIZE:2}
+    queue-capacity: ${BROWSER_AUTOMATION_EXECUTOR_QUEUE_CAPACITY:20}
+ats.connector:
+  # Every connector is an unconfigured stub; submit() throws. Flag has no real effect.
+  enabled: ${ATS_CONNECTOR_ENABLED:false}
+  executor:
+    core-pool-size: ${ATS_CONNECTOR_EXECUTOR_CORE_POOL_SIZE:2}
+    max-pool-size: ${ATS_CONNECTOR_EXECUTOR_MAX_POOL_SIZE:4}
+    queue-capacity: ${ATS_CONNECTOR_EXECUTOR_QUEUE_CAPACITY:50}
+
+# ---- Phase 3A: Enterprise Application Tracking Workflow (ships DARK) ----
+# Event-driven workflow (NOT a linear pipeline) that tracks an application AFTER it exists:
+# Applied -> Viewed -> Assessment -> Interview -> Offer -> Accepted/Rejected. Isolated in the
+# ai.careerpilot.workflow bounded context with its own `workflow.*` flag namespace so Phase 2E stays
+# byte-for-byte untouched (2E owns application.tracking.*/application.analytics.* above). Every stage
+# has TWO flags: `<stage>.enabled` gates the engine itself; `<stage>.trigger.enabled` gates whether it
+# auto-fires off the prior stage's event. ALL default false: with stock flags the WorkflowEntryBridge
+# mints nothing, so creating an application produces ZERO Phase 3A rows. Migrations V36-V43 are written
+# but NOT applied. Enabling is a separate, later, human-gated decision — canary one stage at a time,
+# engine-enabled first (verify via /api/diagnostics/<stage>), then trigger-enabled. Dotted top-level
+# keys (like `ats.explainability:`) so relaxed-binding flattens them without colliding.
+workflow.tracking:
+  # 3A.1 lifecycle state machine (also gates StatusDetectionWorker). Entry gate for the whole workflow.
+  enabled: ${WORKFLOW_TRACKING_ENABLED:false}
+  trigger:
+    enabled: ${WORKFLOW_TRACKING_TRIGGER_ENABLED:false}
+  executor:
+    core-pool-size: ${WORKFLOW_TRACKING_EXECUTOR_CORE_POOL_SIZE:2}
+    max-pool-size: ${WORKFLOW_TRACKING_EXECUTOR_MAX_POOL_SIZE:4}
+    queue-capacity: ${WORKFLOW_TRACKING_EXECUTOR_QUEUE_CAPACITY:100}
+workflow.status-detection:
+  # StatusDetectionWorker shares workflow.tracking.* flags; it needs only its own dedicated executor.
+  executor:
+    core-pool-size: ${WORKFLOW_STATUS_DETECTION_EXECUTOR_CORE_POOL_SIZE:2}
+    max-pool-size: ${WORKFLOW_STATUS_DETECTION_EXECUTOR_MAX_POOL_SIZE:4}
+    queue-capacity: ${WORKFLOW_STATUS_DETECTION_EXECUTOR_QUEUE_CAPACITY:100}
+workflow.timeline:
+  # 3A.2 append-only timeline.
+  enabled: ${WORKFLOW_TIMELINE_ENABLED:false}
+  trigger:
+    enabled: ${WORKFLOW_TIMELINE_TRIGGER_ENABLED:false}
+  executor:
+    core-pool-size: ${WORKFLOW_TIMELINE_EXECUTOR_CORE_POOL_SIZE:2}
+    max-pool-size: ${WORKFLOW_TIMELINE_EXECUTOR_MAX_POOL_SIZE:4}
+    queue-capacity: ${WORKFLOW_TIMELINE_EXECUTOR_QUEUE_CAPACITY:100}
+email.intelligence:
+  # 3A.3 INERT deterministic keyword classifier — no live mailbox, no external fetch, no LLM.
+  enabled: ${EMAIL_INTELLIGENCE_ENABLED:false}
+  trigger:
+    enabled: ${EMAIL_INTELLIGENCE_TRIGGER_ENABLED:false}
+  executor:
+    core-pool-size: ${EMAIL_INTELLIGENCE_EXECUTOR_CORE_POOL_SIZE:1}
+    max-pool-size: ${EMAIL_INTELLIGENCE_EXECUTOR_MAX_POOL_SIZE:2}
+    queue-capacity: ${EMAIL_INTELLIGENCE_EXECUTOR_QUEUE_CAPACITY:100}
+interview.tracking:
+  # 3A.4 interview rounds (gates both InterviewDetectionWorker and InterviewTrackingWorker).
+  enabled: ${INTERVIEW_TRACKING_ENABLED:false}
+  trigger:
+    enabled: ${INTERVIEW_TRACKING_TRIGGER_ENABLED:false}
+  executor:
+    core-pool-size: ${INTERVIEW_TRACKING_EXECUTOR_CORE_POOL_SIZE:2}
+    max-pool-size: ${INTERVIEW_TRACKING_EXECUTOR_MAX_POOL_SIZE:4}
+    queue-capacity: ${INTERVIEW_TRACKING_EXECUTOR_QUEUE_CAPACITY:100}
+workflow.analytics:
+  # 3A.5 outcome analytics (gates both OfferDetectionWorker and AnalyticsWorker). Uses the
+  # careerAnalyticsExecutor bean — deliberately NOT 2E's analyticsExecutor.
+  enabled: ${WORKFLOW_ANALYTICS_ENABLED:false}
+  trigger:
+    enabled: ${WORKFLOW_ANALYTICS_TRIGGER_ENABLED:false}
+  executor:
+    core-pool-size: ${WORKFLOW_ANALYTICS_EXECUTOR_CORE_POOL_SIZE:1}
+    max-pool-size: ${WORKFLOW_ANALYTICS_EXECUTOR_MAX_POOL_SIZE:2}
+    queue-capacity: ${WORKFLOW_ANALYTICS_EXECUTOR_QUEUE_CAPACITY:100}
+career.intelligence:
+  # 3A.6 deterministic (no-LLM) career probabilities. Terminal stage — publishes nothing further.
+  enabled: ${CAREER_INTELLIGENCE_ENABLED:false}
+  trigger:
+    enabled: ${CAREER_INTELLIGENCE_TRIGGER_ENABLED:false}
+  executor:
+    core-pool-size: ${CAREER_INTELLIGENCE_EXECUTOR_CORE_POOL_SIZE:1}
+    max-pool-size: ${CAREER_INTELLIGENCE_EXECUTOR_MAX_POOL_SIZE:2}
+    queue-capacity: ${CAREER_INTELLIGENCE_EXECUTOR_QUEUE_CAPACITY:100}
+
+# ---- Phase 3B.1: Career-Relevant Domestic/International Job Feed Engine ----
+# Converts Domestic/International from location-only feeds into career-aware feeds (role + skill +
+# experience + domain relevance >= 70), while Browse stays the unfiltered "everything" tab. Ships
+# fully DARK: all four flags default false. career.relevance.enabled is the master switch (read by
+# CareerRelevanceEvaluator); the two per-scope filter flags are read by JobService.discovered and
+# only take effect when the master flag is also on, so Domestic and International can be canaried
+# independently. career.explainability.enabled gates GET /api/jobs/{id}/relevance (404 when off).
+# See docs/PHASE_3B_1.md, docs/PHASE_3B_1_FILTER_RULES.md, docs/PHASE_3B_1_ROLLBACK.md.
+#
+# ---- Phase 3B.1.1: Soft Relevance Threshold Engine ----
+# Replaces the flat "score < 70 => reject" cutoff with per-feed bands (CareerThresholdPolicy),
+# gated by career.soft-thresholds.enabled (default false). While off, CareerThresholdPolicy
+# reproduces the exact legacy >=70 cutoff, so Domestic/International behavior is unchanged until
+# this flag is explicitly flipped. career.relevance.thresholds.* configures the per-feed cutoffs
+# (recommended/domestic/international/hidden) used only once the flag is on.
+# See docs/PHASE_3B_1_1.md, docs/PHASE_3B_1_1_THRESHOLD_POLICY.md, docs/PHASE_3B_1_1_MATCH_STRENGTH.md.
+career:
+  # ---- Phase 7.10 Career Orchestrator (autonomous apply-side pipeline; dark) ----
+  orchestrator:
+    enabled: ${CAREER_ORCHESTRATOR_ENABLED:false}
+    cron: ${CAREER_ORCHESTRATOR_CRON:0 30 2 * * *}
+    max-per-user: ${CAREER_ORCHESTRATOR_MAX_PER_USER:25}
+    executor:
+      core-pool-size: ${CAREER_ORCHESTRATOR_EXECUTOR_CORE_POOL_SIZE:2}
+      max-pool-size: ${CAREER_ORCHESTRATOR_EXECUTOR_MAX_POOL_SIZE:4}
+      queue-capacity: ${CAREER_ORCHESTRATOR_EXECUTOR_QUEUE_CAPACITY:200}
+  relevance:
+    enabled: ${CAREER_RELEVANCE_ENABLED:false}
+    thresholds:
+      recommended: ${CAREER_THRESHOLD_RECOMMENDED:85}
+      domestic: ${CAREER_THRESHOLD_DOMESTIC:60}
+      international: ${CAREER_THRESHOLD_INTERNATIONAL:60}
+      hidden: ${CAREER_THRESHOLD_HIDDEN:60}
+  soft-thresholds:
+    enabled: ${CAREER_SOFT_THRESHOLDS_ENABLED:false}
+  domestic:
+    filter:
+      enabled: ${CAREER_DOMESTIC_FILTER_ENABLED:false}
+  international:
+    filter:
+      enabled: ${CAREER_INTERNATIONAL_FILTER_ENABLED:false}
+  explainability:
+    enabled: ${CAREER_EXPLAINABILITY_ENABLED:false}
+
+# ---- Phase 7.8/7.9/7.7 Company research, interview prep, calendar (dark) ----
+company:
+  research:
+    enabled: ${COMPANY_RESEARCH_ENABLED:false}
+interview:
+  prep:
+    enabled: ${INTERVIEW_PREP_ENABLED:false}
+calendar:
+  integration:
+    enabled: ${CALENDAR_INTEGRATION_ENABLED:false}
+
+# ---- Data retention (Phase 3B prep) ----
+# Additive, flag-gated purge of append-only ledgers that otherwise grow unbounded. DISABLED by
+# default: with retention.enabled=false the daily scheduler fires but RetentionService is a no-op
+# and deletes nothing. Each target has its own age window (days); correlations are purged only when
+# terminal, so an in-flight workflow is never reaped. Manual trigger: POST /api/admin/retention/run
+# (admin-role gated). Enable only after choosing per-target windows appropriate to your compliance needs.
+retention:
+  enabled: ${RETENTION_ENABLED:false}
+  cron: ${RETENTION_CRON:0 30 3 * * *}
+  workflow-dead-letter:
+    days: ${RETENTION_WORKFLOW_DEAD_LETTER_DAYS:90}
+  workflow-correlation:
+    days: ${RETENTION_WORKFLOW_CORRELATION_DAYS:180}
+  recommendation-audit:
+    days: ${RETENTION_RECOMMENDATION_AUDIT_DAYS:365}
+  execution-audit:
+    days: ${RETENTION_EXECUTION_AUDIT_DAYS:365}
+  resume-tailoring-audit:
+    days: ${RETENTION_RESUME_TAILORING_AUDIT_DAYS:365}
 
 # ---- Candidate Intelligence Profile (Phase 1) ----
 # Canonical AI-analyzed profile = resume intelligence merged with a snapshot of

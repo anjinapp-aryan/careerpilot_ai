@@ -10,8 +10,8 @@ spring:
     username: ${SPRING_DATASOURCE_USERNAME:}
     password: ${SPRING_DATASOURCE_PASSWORD:}
     hikari:
-      maximum-pool-size: 10
-      minimum-idle: 2
+      maximum-pool-size: ${DB_POOL_MAX:10}
+      minimum-idle: ${DB_POOL_MIN:2}
   jpa:
     hibernate:
       ddl-auto: validate
@@ -33,6 +33,13 @@ spring:
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+      # Spring Boot autoconfigures the ProducerFactory (and reserves its buffer-memory)
+      # at context startup regardless of careerpilot.kafka.enabled, since that flag only
+      # gates whether WorkflowEventProducer publishes. Kafka's own default buffer-memory
+      # is 32MB — trim it hard for memory-constrained deploys (e.g. Render free 512MB).
+      buffer-memory: ${KAFKA_PRODUCER_BUFFER_MEMORY:1048576}
+      properties:
+        max.block.ms: 1000
     consumer:
       group-id: careerpilot
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
@@ -50,6 +57,12 @@ spring:
 server:
   port: ${PORT:8080}
   forward-headers-strategy: framework
+  tomcat:
+    threads:
+      max: ${TOMCAT_THREADS_MAX:20}
+      min-spare: ${TOMCAT_THREADS_MIN_SPARE:4}
+    accept-count: ${TOMCAT_ACCEPT_COUNT:20}
+    max-connections: ${TOMCAT_MAX_CONNECTIONS:100}
 
 management:
   endpoints:

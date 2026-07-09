@@ -12,7 +12,7 @@ const HEALTH_TONE: Record<string, BadgeTone> = {
   NOT_CONFIGURED: 'neutral',
 };
 
-/** Phase 7.11 diagnostics — GET /api/diagnostics/application-package. */
+/** Phase 7.11 diagnostics — GET /api/diagnostics/package-intelligence. */
 interface PackageDiagnostics {
   enabled: boolean;
   health: string;
@@ -55,8 +55,8 @@ const VERDICTS: { key: string; label: string; tone: BadgeTone }[] = [
  */
 export function PackageIntelligencePanel() {
   const { data: d, isLoading } = useQuery<PackageDiagnostics>({
-    queryKey: ['diagnostics', 'application-package'],
-    queryFn: async () => (await api.get('/api/diagnostics/application-package')).data,
+    queryKey: ['diagnostics', 'package-intelligence'],
+    queryFn: async () => (await api.get('/api/diagnostics/package-intelligence')).data,
     retry: false,
   });
 

@@ -21,9 +21,13 @@ import java.util.Map;
  * generation metrics, live executor queue depth, and a computed health verdict (NOT_CONFIGURED | UP |
  * DEGRADED | DOWN). Served under the permitAll {@code /api/diagnostics/**} space. With stock (dark)
  * flags every stage reports {@code NOT_CONFIGURED}.
+ *
+ * <p>Path is {@code /package-intelligence} (not {@code /application-package}) because the Phase 2D
+ * {@link ai.careerpilot.api.PipelineDiagnosticsController} already owns
+ * {@code GET /api/diagnostics/application-package} for the pipeline stage — mapping both fails boot.
  */
 @RestController
-@RequestMapping("/api/diagnostics/application-package")
+@RequestMapping("/api/diagnostics/package-intelligence")
 public class ApplicationPackageDiagnosticsController {
 
     private final PackageIntelligenceMetrics metrics;

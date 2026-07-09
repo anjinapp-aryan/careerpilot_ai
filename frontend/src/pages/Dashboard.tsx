@@ -42,6 +42,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { EmptyState } from '@/components/ui/empty-state';
 import { KpiCard } from '@/components/dashboard/KpiCard';
 import { DailyDiscoveryPanel } from '@/components/dashboard/DailyDiscoveryPanel';
+import { CompanyIntelligenceWidget } from '@/components/dashboard/CompanyIntelligenceWidget';
 import { CopilotAvatar } from '@/components/copilot/CopilotAvatar';
 import type { CareerIntelligenceRow, DailyDiscoverySnapshot, RecommendedJobsResponse, WorkflowRun } from '@/types/workflow';
 
@@ -262,6 +263,9 @@ export default function Dashboard() {
 
       {/* Phase 5.1A — Daily Discovery Intelligence */}
       <DailyDiscoveryPanel snapshot={data.dailyDiscovery} />
+
+      {/* Phase 7.13 — Company Knowledge Graph widget (dark-safe: renders nothing while flags are off). */}
+      <CompanyIntelligenceWidget />
 
       {/* Phase 4.1 — Today's opportunities + pending approvals widgets */}
       <div className="grid gap-4 lg:grid-cols-2">

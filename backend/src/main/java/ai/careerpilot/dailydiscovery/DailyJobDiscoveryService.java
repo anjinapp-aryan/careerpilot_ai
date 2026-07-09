@@ -41,18 +41,22 @@ public class DailyJobDiscoveryService {
     private final DailyDiscoveryAnalyticsRepository analyticsRepo;
     private final ObjectMapper mapper = new ObjectMapper();
 
+    private final ai.careerpilot.companyintel.CompanyKnowledgeService companyKnowledge;
+
     public DailyJobDiscoveryService(JobMatchingService matching,
                                     JobRecommendationRepository recommendations,
                                     JobRepository jobs,
                                     CareerRelevanceEvaluator relevanceEvaluator,
                                     CandidateSignalResolver signalResolver,
-                                    DailyDiscoveryAnalyticsRepository analyticsRepo) {
+                                    DailyDiscoveryAnalyticsRepository analyticsRepo,
+                                    ai.careerpilot.companyintel.CompanyKnowledgeService companyKnowledge) {
         this.matching = matching;
         this.recommendations = recommendations;
         this.jobs = jobs;
         this.relevanceEvaluator = relevanceEvaluator;
         this.signalResolver = signalResolver;
         this.analyticsRepo = analyticsRepo;
+        this.companyKnowledge = companyKnowledge;
     }
 
     /** Result of one user's daily pass — fed both into the persisted analytics row and the AI summary. */
@@ -69,7 +73,25 @@ public class DailyJobDiscoveryService {
         List<JobRecommendation> recs = recommendations.findByUserIdOrderByMatchScoreDesc(userId);
         UserDiscoverySnapshot snapshot = classify(userId, recs);
         persist(runId, userId, snapshot);
+        ingestCompanyKnowledge(userId, recs);
         return snapshot;
+    }
+
+    /**
+     * Phase 7.13 — Daily Discovery as a knowledge source: what a recommended job's row already tells
+     * us about its company flows into the Company Knowledge Graph. Silent no-op when
+     * {@code company.knowledge.enabled} is off; never allowed to break the daily run.
+     */
+    private void ingestCompanyKnowledge(UUID userId, List<JobRecommendation> recs) {
+        if (!companyKnowledge.isEnabled() || recs.isEmpty()) return;
+        try {
+            for (Job job : jobs.findAllById(recs.stream().map(JobRecommendation::getJobId).limit(50).toList())) {
+                companyKnowledge.ingestJob(userId, job, null,
+                        ai.careerpilot.companyintel.KnowledgeSource.DAILY_DISCOVERY);
+            }
+        } catch (Exception e) {
+            log.warn("DAILY_DISCOVERY company-knowledge ingest failed user={}: {}", userId, e.toString());
+        }
     }
 
     private UserDiscoverySnapshot classify(UUID userId, List<JobRecommendation> recs) {

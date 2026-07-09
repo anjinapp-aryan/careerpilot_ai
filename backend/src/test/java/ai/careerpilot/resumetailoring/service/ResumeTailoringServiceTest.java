@@ -83,7 +83,7 @@ class ResumeTailoringServiceTest {
                 enrichment, explanations, recommendationAudit, tailorings,
                 new ResumeTailoringPromptBuilder(), new ResumeTailoringValidator(10, 20000),
                 new ResumeImprovementCalculator(), new ResumeVersionManager(tailorings),
-                cache, new ResumeTailoringCacheMetrics(), auditService, ai, learningOrdering, enabled, List.of());
+                cache, new ResumeTailoringCacheMetrics(), auditService, ai, learningOrdering, mock(ai.careerpilot.companyintel.CompanyResumeHints.class), enabled, List.of());
     }
 
     private void stubResumeAndJob(String originalText) {

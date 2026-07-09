@@ -29,6 +29,7 @@ import { ApplicationPackageDrawer } from '@/components/applications/ApplicationP
 import { ApplicationReviewDrawer } from '@/components/applications/ApplicationReviewDrawer';
 import { generatePackage } from '@/lib/applicationPackage';
 import { runReview } from '@/lib/applicationReview';
+import { CompanyIntelPanel } from '@/components/company/CompanyIntelPanel';
 import { cn } from '@/lib/cn';
 import type { Application, Job, JobsPage } from '@/types/workflow';
 
@@ -453,6 +454,9 @@ function ApplicationDetailDialog({ target, onClose }: { target: DetailTarget | n
             </Button>
           </div>
         </div>
+
+        {/* Phase 7.13 — Company Intelligence + timeline for this application's company (dark-safe). */}
+        <CompanyIntelPanel companyName={target?.company} showTimeline />
 
         {tab === 'trace' ? (
           <div className="space-y-4">

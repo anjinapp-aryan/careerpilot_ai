@@ -83,7 +83,7 @@ class InterviewAndResearchTest {
     @Test
     void interviewPrepDisabledIsEmpty() {
         var research = new CompanyResearchEngine(ai, jobs, false);
-        var svc = new InterviewPreparationService(ai, jobs, research, false);
+        var svc = new InterviewPreparationService(ai, jobs, research, mock(ai.careerpilot.companyintel.CompanyKnowledgeService.class), false);
         assertTrue(svc.prepare(userId, jobId).isEmpty());
         verifyNoInteractions(ai);
     }
@@ -95,7 +95,7 @@ class InterviewAndResearchTest {
                 .thenReturn("Company summary")   // company research call
                 .thenReturn("## Questions\n- Explain Spring beans"); // prep call
         var research = new CompanyResearchEngine(ai, jobs, true);
-        var svc = new InterviewPreparationService(ai, jobs, research, true);
+        var svc = new InterviewPreparationService(ai, jobs, research, mock(ai.careerpilot.companyintel.CompanyKnowledgeService.class), true);
         var out = svc.prepare(userId, jobId);
         assertTrue(out.isPresent());
         assertTrue(out.get().plan().contains("Questions"));
@@ -106,7 +106,7 @@ class InterviewAndResearchTest {
     void interviewPrepLlmFailureIsEmpty() {
         stubJob();
         var research = new CompanyResearchEngine(ai, jobs, false); // research off -> empty context
-        var svc = new InterviewPreparationService(ai, jobs, research, true);
+        var svc = new InterviewPreparationService(ai, jobs, research, mock(ai.careerpilot.companyintel.CompanyKnowledgeService.class), true);
         when(ai.chat(anyList(), anyString())).thenThrow(new RuntimeException("boom"));
         assertTrue(svc.prepare(userId, jobId).isEmpty());
     }

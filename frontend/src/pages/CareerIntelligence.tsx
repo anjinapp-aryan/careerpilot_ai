@@ -12,6 +12,7 @@ import {
 import { Brain, Briefcase, Building2, GraduationCap, Globe2, Sparkles, Target, TrendingUp } from 'lucide-react';
 import { api } from '@/lib/api';
 import { PageHeader } from '@/components/common/PageHeader';
+import { CompanyIntelligenceWidget } from '@/components/dashboard/CompanyIntelligenceWidget';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -292,6 +293,9 @@ export default function CareerIntelligence() {
           </Card>
         </>
       )}
+
+      {/* Phase 7.13 — Company / Technology / Industry map from the knowledge graph (dark-safe). */}
+      <CompanyIntelligenceWidget />
     </div>
   );
 }

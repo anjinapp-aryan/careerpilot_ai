@@ -49,7 +49,7 @@ class DailyJobDiscoveryServiceTest {
         relevanceEvaluator = mock(CareerRelevanceEvaluator.class);
         signalResolver = mock(CandidateSignalResolver.class);
         analyticsRepo = mock(DailyDiscoveryAnalyticsRepository.class);
-        service = new DailyJobDiscoveryService(matching, recommendations, jobs, relevanceEvaluator, signalResolver, analyticsRepo);
+        service = new DailyJobDiscoveryService(matching, recommendations, jobs, relevanceEvaluator, signalResolver, analyticsRepo, mock(ai.careerpilot.companyintel.CompanyKnowledgeService.class));
 
         when(signalResolver.resolveLocationSignals(userId))
                 .thenReturn(new CandidateSignalResolver.CandidateLocationSignals("India", List.of(), List.of(), "PROFILE"));

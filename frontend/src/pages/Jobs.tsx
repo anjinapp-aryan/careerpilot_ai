@@ -78,7 +78,7 @@ export default function Jobs() {
   const [tab, setTab] = useState<JobsTab>('recommended');
   const [homeCountry, setHomeCountry] = useState('India');
   const [showPreferences, setShowPreferences] = useState(false);
-  const [relevanceJob, setRelevanceJob] = useState<{ id: string; title: string } | null>(null);
+  const [relevanceJob, setRelevanceJob] = useState<{ id: string; title: string; company?: string } | null>(null);
   // International facets
   const [remoteTypeFilter, setRemoteTypeFilter] = useState('');
   const [sponsorshipFilter, setSponsorshipFilter] = useState(false);
@@ -415,7 +415,7 @@ export default function Jobs() {
                   index={i}
                   onSave={() => saveJob(job.id)}
                   onApply={() => applyJob(job.id)}
-                  onRelevance={() => setRelevanceJob({ id: job.id, title: job.title })}
+                  onRelevance={() => setRelevanceJob({ id: job.id, title: job.title, company: job.company })}
                   busy={track.isPending}
                 />
               ))}
@@ -548,7 +548,7 @@ export default function Jobs() {
                   index={i}
                   onSave={() => saveJob(job.id)}
                   onApply={() => applyJob(job.id)}
-                  onRelevance={() => setRelevanceJob({ id: job.id, title: job.title })}
+                  onRelevance={() => setRelevanceJob({ id: job.id, title: job.title, company: job.company })}
                   busy={track.isPending}
                 />
               ))}
@@ -572,7 +572,7 @@ export default function Jobs() {
                   index={i}
                   onSave={() => saveJob(job.id)}
                   onApply={() => applyJob(job.id)}
-                  onRelevance={() => setRelevanceJob({ id: job.id, title: job.title })}
+                  onRelevance={() => setRelevanceJob({ id: job.id, title: job.title, company: job.company })}
                   busy={track.isPending}
                 />
               ))}
@@ -586,6 +586,7 @@ export default function Jobs() {
       <RelevanceDrawer
         jobId={relevanceJob?.id ?? null}
         jobTitle={relevanceJob?.title}
+        company={relevanceJob?.company}
         onClose={() => setRelevanceJob(null)}
       />
 

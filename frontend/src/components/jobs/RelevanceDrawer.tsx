@@ -6,6 +6,7 @@ import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Tabs } from '@/components/ui/tabs';
 import { Dialog, DialogBody, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
+import { CompanyIntelPanel } from '@/components/company/CompanyIntelPanel';
 import type { CareerIntelligenceRow, CareerLearningView, JobRelevance, RecommendedJob } from '@/types/workflow';
 
 type RelevanceTab = 'summary' | 'discovery' | 'analysis' | 'recommendation' | 'reasons' | 'career' | 'learning';
@@ -21,6 +22,8 @@ interface RelevanceDrawerProps {
    * relevance + career-intelligence endpoints.
    */
   rec?: RecommendedJob | null;
+  /** Phase 7.13 — company name for the Company Intelligence panel (dark-safe; optional). */
+  company?: string | null;
 }
 
 function pct(v?: number | null): string {
@@ -53,7 +56,7 @@ function Check({ ok, label }: { ok: boolean; label: string }) {
  * (Phase 3B.1 explainability). The endpoint 404s when career.explainability.enabled is
  * false, so a failed fetch renders a quiet "not available yet" state rather than an error.
  */
-export function RelevanceDrawer({ jobId, jobTitle, onClose, rec }: RelevanceDrawerProps) {
+export function RelevanceDrawer({ jobId, jobTitle, onClose, rec, company }: RelevanceDrawerProps) {
   const [tab, setTab] = useState<RelevanceTab>('summary');
   useEffect(() => setTab('summary'), [jobId]);
   const { data, isLoading } = useQuery<JobRelevance | null>({
@@ -276,6 +279,9 @@ export function RelevanceDrawer({ jobId, jobTitle, onClose, rec }: RelevanceDraw
             )}
           </>
         )}
+
+        {/* Phase 7.13 — Company Knowledge Graph panel (renders nothing while the feature is dark). */}
+        <CompanyIntelPanel companyName={company ?? rec?.job.company} />
       </DialogBody>
     </Dialog>
   );

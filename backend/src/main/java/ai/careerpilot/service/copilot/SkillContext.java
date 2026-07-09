@@ -26,6 +26,7 @@ public class SkillContext {
     private ai.careerpilot.autopilot.api.AutopilotExplainContextService.AutopilotExplainContext autopilot;
     private ai.careerpilot.packageintel.api.PackageExplainContextService.PackageExplainContext applicationPackage;
     private ai.careerpilot.review.api.ReviewExplainContextService.ReviewExplainContext applicationReview;
+    private ai.careerpilot.companyintel.api.CompanyExplainContextService.CompanyExplainContext companyIntel;
 
     private final Set<String> sources = new LinkedHashSet<>();
 
@@ -84,6 +85,12 @@ public class SkillContext {
     public void applicationReview(ai.careerpilot.review.api.ReviewExplainContextService.ReviewExplainContext r) {
         this.applicationReview = r;
         if (r != null) sources.add("AI Review");
+    }
+
+    public ai.careerpilot.companyintel.api.CompanyExplainContextService.CompanyExplainContext companyIntel() { return companyIntel; }
+    public void companyIntel(ai.careerpilot.companyintel.api.CompanyExplainContextService.CompanyExplainContext c) {
+        this.companyIntel = c;
+        if (c != null && c.enabled()) sources.add("Company Intelligence");
     }
 
     public Set<String> sources() { return sources; }

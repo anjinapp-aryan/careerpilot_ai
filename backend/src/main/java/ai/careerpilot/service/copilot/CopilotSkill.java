@@ -18,7 +18,15 @@ public enum CopilotSkill {
     EXPLAIN_LEARNING("explain_learning", "Explain learning"),
     EXPLAIN_APPLICATION_DECISION("explain_application_decision", "Explain application decision"),
     EXPLAIN_APPLICATION_PACKAGE("explain_application_package", "Explain application package"),
-    EXPLAIN_APPLICATION_REVIEW("explain_application_review", "Explain application review");
+    EXPLAIN_APPLICATION_REVIEW("explain_application_review", "Explain application review"),
+    EXPLAIN_COMPANY("explain_company", "Explain company"),
+    COMPARE_COMPANIES("compare_companies", "Compare companies"),
+    SHOULD_I_APPLY("should_i_apply", "Should I apply"),
+    COMPANY_RISK("company_risk", "Company risk"),
+    COMPANY_TECHNOLOGY("company_technology", "Company technology"),
+    COMPANY_INTERVIEW("company_interview", "Company interview analysis"),
+    COMPANY_CULTURE("company_culture", "Company culture"),
+    COMPANY_GROWTH("company_growth", "Company career growth");
 
     private final String key;
     private final String displayName;

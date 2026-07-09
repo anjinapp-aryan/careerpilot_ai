@@ -58,6 +58,7 @@ public class ResumeTailoringService {
     private final ResumeTailoringAuditService audit;
     private final AiGatewayService ai;
     private final LearningResumeOrdering learningOrdering;
+    private final ai.careerpilot.companyintel.CompanyResumeHints companyHints;
     private final boolean enabled;
     private final List<String> preferredProviders;
 
@@ -78,6 +79,7 @@ public class ResumeTailoringService {
                                   ResumeTailoringAuditService audit,
                                   AiGatewayService ai,
                                   LearningResumeOrdering learningOrdering,
+                                  ai.careerpilot.companyintel.CompanyResumeHints companyHints,
                                   @Value("${resume.tailoring.enabled:false}") boolean enabled,
                                   @Value("${resume.tailoring.preferred-providers:}") List<String> preferredProviders) {
         this.resumes = resumes;
@@ -98,6 +100,7 @@ public class ResumeTailoringService {
         this.audit = audit;
         this.ai = ai;
         this.learningOrdering = learningOrdering;
+        this.companyHints = companyHints;
         this.enabled = enabled;
         this.preferredProviders = preferredProviders;
     }
@@ -160,7 +163,11 @@ public class ResumeTailoringService {
             TailoringContext ctx = buildContext(userId, jobId, resume, job, profile, behavior, jobEnrichment,
                     explanation, recommendationAuditId, profileVersionId);
 
-            String tailoredText = ai.chat(promptBuilder.buildMessages(ctx), promptBuilder.systemPrompt(), preferredProviders);
+            // Phase 7.13 — observed company keyword demand from the knowledge graph; empty when the
+            // graph is dark or the company is unknown, leaving the prompt byte-for-byte unchanged.
+            List<String> companyKeywordHints = companyHints.keywordHints(userId, job.getCompany());
+            String tailoredText = ai.chat(promptBuilder.buildMessages(ctx, companyKeywordHints),
+                    promptBuilder.systemPrompt(), preferredProviders);
             metrics.recordProviderUsed(ai.getLastUsedProvider());
 
             List<String> declaredSkills = profile != null ? JsonLists.toList(profile.getSkillsJson()) : List.of();

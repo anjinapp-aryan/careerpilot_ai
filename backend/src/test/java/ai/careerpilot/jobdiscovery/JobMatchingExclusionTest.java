@@ -34,6 +34,7 @@ class JobMatchingExclusionTest {
             new MatchCache(mock(StringRedisTemplate.class), new MatchCacheMetrics(), false),
             new ai.careerpilot.jobdiscovery.priority.PriorityEngine(false), new MustApplyEvaluator(),
             mock(ai.careerpilot.learning.recommendation.LearningRecommendationBooster.class),
+                mock(ai.careerpilot.companyintel.CompanyKnowledgeBooster.class),
             true, 70, 3, true, false, false, 40, false);
 
     private static Job job(String title, String description) {

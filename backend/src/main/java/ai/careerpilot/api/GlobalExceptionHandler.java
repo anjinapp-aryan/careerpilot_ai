@@ -73,7 +73,14 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(Exception.class)
     public ResponseEntity<Map<String, Object>> generic(Exception e) {
-        return body(HttpStatus.INTERNAL_SERVER_ERROR, e.getMessage());
+        // e.getMessage() is frequently null for IO/connection-reset style exceptions.
+        // A null/empty message renders as "" in the JSON body, which is falsy in JS —
+        // clients doing `data.message || fallback` then silently substitute an unrelated
+        // fallback string (observed: the frontend login form showing "Invalid email or
+        // password" for what was actually a 500). Always emit a real message.
+        String message = e.getMessage();
+        return body(HttpStatus.INTERNAL_SERVER_ERROR,
+                (message == null || message.isBlank()) ? "Internal server error" : message);
     }
 
     private ResponseEntity<Map<String, Object>> body(HttpStatus status, String message) {

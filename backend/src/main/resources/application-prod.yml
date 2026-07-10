@@ -16,6 +16,16 @@ management:
       # Minimize exposed health details in production
       show-details: never
 
+springdoc:
+  # SpringDoc reflects over every @RestController and DTO to build the OpenAPI schema
+  # at startup — real, avoidable cost on Render free tier's throttled CPU where boot
+  # was observed taking 433s. No runtime value in production (Swagger UI/api-docs are
+  # dev/QA tools); disable both, matching the app's own boot-log warning.
+  api-docs:
+    enabled: false
+  swagger-ui:
+    enabled: false
+
 spring:
   jpa:
     properties:

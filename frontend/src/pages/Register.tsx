@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { AlertTriangle, Compass } from 'lucide-react';
 import { api } from '@/lib/api';
+import { authErrorMessage } from '@/lib/authError';
 import { useAuthStore } from '@/lib/auth';
 import { AuthLayout } from '@/components/auth/AuthLayout';
 import { Button } from '@/components/ui/button';
@@ -33,7 +34,7 @@ export default function Register() {
       });
       nav('/');
     } catch (e: any) {
-      setErr(e?.response?.data?.message || 'Registration failed');
+      setErr(authErrorMessage(e, 'Registration failed'));
     } finally {
       setLoading(false);
     }

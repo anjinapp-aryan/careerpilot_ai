@@ -3,6 +3,12 @@ import { useAuthStore } from '@/lib/auth';
 
 export const api = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080',
+  // Without a timeout, a hung backend (cold start, OOM crash-loop, dead connection)
+  // leaves requests pending indefinitely — the UI just spins with no signal to the
+  // user. 20s comfortably covers Render free-tier cold starts (~50s worst case is
+  // still too long to make a user wait silently, so this fails fast with a clear
+  // "can't reach the server" message instead).
+  timeout: 20_000,
 });
 
 api.interceptors.request.use((config) => {

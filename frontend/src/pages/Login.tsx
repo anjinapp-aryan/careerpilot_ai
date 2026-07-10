@@ -8,6 +8,26 @@ import { Button } from '@/components/ui/button';
 import { Input, Label } from '@/components/ui/input';
 import { useToast } from '@/components/ui/toast';
 
+/**
+ * Distinguishes network/timeout failures, real 401s, and server errors instead of
+ * collapsing every rejected request into "Invalid email or password" — a mislabel
+ * that previously made backend outages (e.g. Render cold-start/OOM) look like a
+ * credentials problem. Exported for unit testing.
+ */
+export function loginErrorMessage(e: any): string {
+  const status = e?.response?.status;
+  if (status === undefined) {
+    return "Can't reach the server. Check your connection and try again.";
+  }
+  if (status === 401) {
+    return e?.response?.data?.message || 'Invalid email or password';
+  }
+  if (status >= 500) {
+    return 'Something went wrong on our end. Please try again.';
+  }
+  return e?.response?.data?.message || 'Invalid email or password';
+}
+
 export default function Login() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -47,7 +67,7 @@ export default function Login() {
       });
       nav('/');
     } catch (e: any) {
-      setErr(e?.response?.data?.message || 'Invalid email or password');
+      setErr(loginErrorMessage(e));
     } finally {
       setLoading(false);
     }

@@ -1,4 +1,4 @@
-import { defineConfig } from 'vite';
+import { defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
 import path from 'node:path';
 
@@ -8,6 +8,9 @@ export default defineConfig({
   // Dev server only — Vercel serves the prebuilt static `dist/` output, this
   // block has no effect in production.
   server: { host: true, port: 5173 },
+  test: {
+    environment: 'node',
+  },
   build: {
     outDir: 'dist',
     sourcemap: false,

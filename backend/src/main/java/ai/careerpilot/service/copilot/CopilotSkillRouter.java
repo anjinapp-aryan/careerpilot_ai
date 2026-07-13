@@ -43,6 +43,8 @@ public class CopilotSkillRouter {
             CompanyCultureHandler companyCulture,
             CompanyGrowthHandler companyGrowth,
             JobDiscoveryHealthHandler jobDiscoveryHealth,
+            StoryRecommendationHandler storyRecommendation,
+            StoryGenerationHandler storyGeneration,
             GeneralAssistantHandler generalAssistant) {
 
         this.handlers = new EnumMap<>(CopilotSkill.class);
@@ -69,6 +71,8 @@ public class CopilotSkillRouter {
         this.handlers.put(CopilotSkill.COMPANY_CULTURE, companyCulture);
         this.handlers.put(CopilotSkill.COMPANY_GROWTH, companyGrowth);
         this.handlers.put(CopilotSkill.JOB_DISCOVERY_HEALTH, jobDiscoveryHealth);
+        this.handlers.put(CopilotSkill.SUGGEST_STAR_STORY, storyRecommendation);
+        this.handlers.put(CopilotSkill.GENERATE_STAR_STORY, storyGeneration);
 
         this.fallback = generalAssistant;
 
@@ -185,6 +189,17 @@ public class CopilotSkillRouter {
         if ((lower.contains("about") || lower.contains("explain") || lower.contains("tell me")
                 || lower.contains("know")) && lower.contains("company")) {
             return CopilotSkill.EXPLAIN_COMPANY;
+        }
+        // Phase 7.15 — STAR story intents, checked after the more specific skills above.
+        if (lower.contains("star") && (lower.contains("story") || lower.contains("stories"))
+                && (lower.contains("best") || lower.contains("suggest") || lower.contains("which")
+                    || lower.contains("missing"))) {
+            return CopilotSkill.SUGGEST_STAR_STORY;
+        }
+        if ((lower.contains("star") && (lower.contains("story") || lower.contains("stories")))
+                || (lower.contains("behavioral") && lower.contains("story"))
+                || (lower.contains("bullet") && lower.contains("star"))) {
+            return CopilotSkill.GENERATE_STAR_STORY;
         }
 
         return null;

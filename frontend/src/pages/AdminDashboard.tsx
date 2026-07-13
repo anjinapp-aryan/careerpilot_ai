@@ -17,6 +17,7 @@ import { AutopilotHealthPanel } from '@/components/admin/AutopilotHealthPanel';
 import { PackageIntelligencePanel } from '@/components/admin/PackageIntelligencePanel';
 import { ReviewPipelinePanel } from '@/components/admin/ReviewPipelinePanel';
 import { CompanyIntelligencePanel } from '@/components/admin/CompanyIntelligencePanel';
+import { StoryIntelligencePanel } from '@/components/admin/StoryIntelligencePanel';
 
 /** Bar-chart rows for an "Unknown" bucket are real data but not actionable — muted instead of the brand color. */
 const UNKNOWN_LABEL = 'Unknown';
@@ -821,6 +822,9 @@ export default function AdminDashboard() {
 
       {/* Phase 7.13 — Company Knowledge Graph: flags, knowledge/graph sizes, queue health. */}
       <CompanyIntelligencePanel />
+
+      {/* Phase 7.15 — STAR Story Intelligence & Behavioral AI: flags, story/version counts, queue health. */}
+      <StoryIntelligencePanel />
 
       {/* Phase 4G — Correlation Explorer, shared with the Workflow page. */}
       <WorkflowTraceExplorer />

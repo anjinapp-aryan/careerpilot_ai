@@ -27,7 +27,10 @@ public enum CopilotSkill {
     COMPANY_INTERVIEW("company_interview", "Company interview analysis"),
     COMPANY_CULTURE("company_culture", "Company culture"),
     COMPANY_GROWTH("company_growth", "Company career growth"),
-    JOB_DISCOVERY_HEALTH("job_discovery_health", "Job discovery provider health");
+    JOB_DISCOVERY_HEALTH("job_discovery_health", "Job discovery provider health"),
+    // Phase 7.15 — STAR Story Intelligence & Behavioral AI
+    SUGGEST_STAR_STORY("suggest_star_story", "Suggest best STAR story"),
+    GENERATE_STAR_STORY("generate_star_story", "Generate/improve STAR story");
 
     private final String key;
     private final String displayName;

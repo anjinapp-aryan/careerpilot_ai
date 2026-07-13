@@ -5,6 +5,7 @@ import {
   KanbanSquare,
   Sparkles,
   ShieldCheck,
+  BookOpen,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -75,6 +76,13 @@ export const NAV_GROUPS: NavGroup[] = [
         icon: Sparkles,
         keywords: ['agent', 'copilot', 'automation', 'pipeline'],
         description: 'Run the multi-agent career pipeline',
+      },
+      {
+        to: '/stories',
+        label: 'Story Library',
+        icon: BookOpen,
+        keywords: ['star', 'behavioral', 'interview', 'stories', 'competency'],
+        description: 'STAR stories & behavioral interview prep',
       },
     ],
   },

@@ -829,6 +829,35 @@ candidate:
     # side effect after scoring; never affects the returned recommendation. Default off.
     audit-enabled: ${CANDIDATE_RECOMMENDATION_AUDIT_ENABLED:false}
 
+# ---- Phase 7.15 STAR Story Intelligence & Behavioral AI (additive, dark) ----
+# story.engine.enabled gates the orchestrating facade (StarStoryEngine); every sub-capability has
+# its own flag so it can be canaried independently. story.worker.trigger.enabled chains automatic
+# candidate-story drafting onto the existing Phase 6.1 LearningEventRecordedEvent. All default off.
+story:
+  engine:
+    enabled: ${STORY_ENGINE_ENABLED:false}
+  extraction:
+    enabled: ${STORY_EXTRACTION_ENABLED:false}
+  generation:
+    enabled: ${STORY_GENERATION_ENABLED:false}
+  recommendation:
+    enabled: ${STORY_RECOMMENDATION_ENABLED:false}
+  analytics:
+    enabled: ${STORY_ANALYTICS_ENABLED:false}
+  search:
+    enabled: ${STORY_SEARCH_ENABLED:false}
+  history:
+    enabled: ${STORY_HISTORY_ENABLED:false}
+  diagnostics:
+    enabled: ${STORY_DIAGNOSTICS_ENABLED:false}
+  worker:
+    trigger:
+      enabled: ${STORY_WORKER_TRIGGER_ENABLED:false}
+  executor:
+    core-pool-size: ${STORY_EXECUTOR_CORE_POOL_SIZE:2}
+    max-pool-size: ${STORY_EXECUTOR_MAX_POOL_SIZE:4}
+    queue-capacity: ${STORY_EXECUTOR_QUEUE_CAPACITY:200}
+
 logging:
   level:
     root: INFO

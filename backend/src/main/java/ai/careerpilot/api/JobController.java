@@ -236,6 +236,47 @@ public class JobController {
     }
 
     /**
+     * Backfill: run exactly one named provider on demand (e.g. after adding a new board token),
+     * without re-fetching the whole provider chain. 404 when no provider with that name is
+     * registered; a registered-but-unconfigured provider returns a zeroed summary rather than
+     * erroring, matching {@link JobAggregationService#discoverAll()}'s "skip unconfigured" behavior.
+     */
+    @PostMapping("/discovery/backfill/{provider}")
+    public DiscoverySummary backfillProvider(AuthenticatedUser user, @PathVariable String provider,
+                                             @RequestParam(required = false) String window) {
+        java.time.Duration duration = parseWindow(window);
+        return aggregation.discoverProvider(provider, duration)
+                .orElseThrow(() -> new org.springframework.web.server.ResponseStatusException(
+                        org.springframework.http.HttpStatus.NOT_FOUND, "unknown provider: " + provider));
+    }
+
+    /**
+     * Time-windowed backfill across all configured providers: {@code window} is one of
+     * {@code 24h|7d|30d} (defaults to {@code 24h}). This is a <b>client-side filter on
+     * postedDate applied after fetch</b> — the source APIs don't support server-side date-range
+     * queries, so this still fetches each provider's full current listing and discards
+     * out-of-window rows locally; see {@link JobAggregationService#discoverAll(java.time.Duration)}.
+     */
+    @PostMapping("/discovery/backfill")
+    public DiscoverySummary backfillWindow(AuthenticatedUser user,
+                                           @RequestParam(defaultValue = "24h") String window) {
+        return aggregation.discoverAll(parseWindow(window));
+    }
+
+    private static java.time.Duration parseWindow(String window) {
+        if (window == null || window.isBlank()) return java.time.Duration.ofHours(24);
+        String w = window.trim().toLowerCase();
+        return switch (w) {
+            case "24h" -> java.time.Duration.ofHours(24);
+            case "7d" -> java.time.Duration.ofDays(7);
+            case "30d" -> java.time.Duration.ofDays(30);
+            default -> throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.BAD_REQUEST,
+                    "unsupported window: " + window + " (expected 24h|7d|30d)");
+        };
+    }
+
+    /**
      * Phase 2B-2 — this user's persisted scoring-breakdown audit trail (one row per scored job per
      * refresh), letting a future explainability surface answer "why did this job score X" without
      * re-running the matcher. Empty unless {@code candidate.recommendation.audit-enabled} is on —

@@ -648,6 +648,43 @@ export interface DailyDiscoveryProvidersResponse {
   companyCareerSites: DailyDiscoveryProviderHealth;
 }
 
+/** One entry of `GET /api/diagnostics/job-providers/providers` (JobDiscoveryHealthTracker-backed). */
+export interface JobProviderHealth {
+  provider: string;
+  configured: boolean;
+  circuitState: 'CLOSED' | 'OPEN' | 'HALF_OPEN';
+  totalRuns: number;
+  successRuns: number;
+  failureRuns: number;
+  successRate: number;
+  lastLatencyMs: number;
+  avgLatencyMs: number;
+  lastJobsFetched: number;
+  lastJobsAccepted: number;
+  lastJobsRejected: number;
+  lastRunAt?: string | null;
+  lastError?: string | null;
+  health: 'UP' | 'DEGRADED' | 'DOWN' | 'NEVER_RUN' | 'NOT_CONFIGURED';
+}
+
+/** `GET /api/diagnostics/job-providers/providers` — keyed by provider name (Greenhouse/Lever/Ashby/…). */
+export type JobProviderHealthResponse = Record<string, JobProviderHealth>;
+
+/** `GET /api/diagnostics/job-providers/discovery`. */
+export interface JobDiscoverySchedulerSummary {
+  dailySchedulerEnabled: boolean;
+  hourlySchedulerEnabled: boolean;
+  cron: string;
+  providersRegistered: number;
+  providersConfigured: number;
+  recentAuditRows: number;
+  recentJobsFetched: number;
+  recentJobsImported: number;
+  recentJobsRejected: number;
+  recentFailedRuns: number;
+  lastRunAt?: string | null;
+}
+
 export interface WorkflowStatusStepperProps {
   workflowId: string;
   agents?: WorkflowAgent[];

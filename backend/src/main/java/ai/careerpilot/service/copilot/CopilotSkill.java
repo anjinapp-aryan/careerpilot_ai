@@ -26,7 +26,8 @@ public enum CopilotSkill {
     COMPANY_TECHNOLOGY("company_technology", "Company technology"),
     COMPANY_INTERVIEW("company_interview", "Company interview analysis"),
     COMPANY_CULTURE("company_culture", "Company culture"),
-    COMPANY_GROWTH("company_growth", "Company career growth");
+    COMPANY_GROWTH("company_growth", "Company career growth"),
+    JOB_DISCOVERY_HEALTH("job_discovery_health", "Job discovery provider health");
 
     private final String key;
     private final String displayName;

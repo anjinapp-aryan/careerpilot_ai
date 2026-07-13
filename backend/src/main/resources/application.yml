@@ -356,6 +356,12 @@ jobs:
     scope-strict-enabled: ${JOBS_DISCOVERY_SCOPE_STRICT_ENABLED:false}
     # Daily at 06:00. Tighten to hourly later ("0 0 * * * *") with no code change.
     cron: ${JOB_DISCOVERY_CRON:0 0 6 * * *}
+    # Optional second cadence: a separate @Scheduled method on the same JobDiscoveryScheduler
+    # (not a second scheduler class), off by default. Flip on for near-real-time discovery
+    # without touching the daily cron above.
+    hourly:
+      enabled: ${JOB_DISCOVERY_HOURLY_ENABLED:false}
+      cron: ${JOB_DISCOVERY_HOURLY_CRON:0 0 * * * *}
     user-agent: ${JOB_DISCOVERY_USER_AGENT:CareerPilotAI/1.0 (+https://careerpilot.ai)}
     providers:
       remoteok:
@@ -761,6 +767,31 @@ career:
       enabled: ${CAREER_INTERNATIONAL_FILTER_ENABLED:false}
   explainability:
     enabled: ${CAREER_EXPLAINABILITY_ENABLED:false}
+  # ---- Job discovery: 2 new keyless-public-API providers, same shape/flag namespace as
+  # career.discovery.greenhouse.*/career.discovery.lever.* (GreenhouseProvider/LeverProvider).
+  # NOTE: neither greenhouse nor lever actually has an entry in this file today — both providers
+  # read their @Value(...) defaults (enabled=false, empty board/company CSV) with nothing set here,
+  # so this provider chain ships fully dark out of the box. Ashby/SmartRecruiters follow that same
+  # convention: default `false`/empty via @Value, and this block exists only so the env var names
+  # and shape are discoverable/documented in one place, matching the existing greenhouse/lever
+  # naming (career.discovery.<name>.*) rather than the provider.<name>.enabled naming a since-revised
+  # spec draft used — see CLAUDE.md-equivalent task notes for this explicit, intentional deviation.
+  discovery:
+    ashby:
+      enabled: ${CAREER_DISCOVERY_ASHBY_ENABLED:false}
+      base-url: ${CAREER_DISCOVERY_ASHBY_BASE_URL:https://api.ashbyhq.com}
+      orgs: ${CAREER_DISCOVERY_ASHBY_ORGS:}
+      throttle-ms: ${CAREER_DISCOVERY_ASHBY_THROTTLE_MS:300}
+    smartrecruiters:
+      enabled: ${CAREER_DISCOVERY_SMARTRECRUITERS_ENABLED:false}
+      base-url: ${CAREER_DISCOVERY_SMARTRECRUITERS_BASE_URL:https://api.smartrecruiters.com}
+      companies: ${CAREER_DISCOVERY_SMARTRECRUITERS_COMPANIES:}
+      throttle-ms: ${CAREER_DISCOVERY_SMARTRECRUITERS_THROTTLE_MS:300}
+    health:
+      # Consecutive-failure cooldown before JobDiscoveryHealthTracker moves a provider's circuit
+      # from OPEN to HALF_OPEN (diagnostics-only; does not gate actual fetch calls — see the
+      # tracker's javadoc for why full Resilience4j wiring per job-provider is out of scope here).
+      circuit-cooldown-ms: ${CAREER_DISCOVERY_HEALTH_CIRCUIT_COOLDOWN_MS:300000}
 
 # ---- Phase 7.8/7.9/7.7 Company research, interview prep, calendar (dark) ----
 company:

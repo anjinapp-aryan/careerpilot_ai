@@ -12,6 +12,7 @@ import { KpiCard } from '@/components/dashboard/KpiCard';
 import { useToast } from '@/components/ui/toast';
 import { WorkflowTraceExplorer } from '@/components/workflow/WorkflowTraceExplorer';
 import { DailyDiscoveryHealthPanel } from '@/components/admin/DailyDiscoveryHealthPanel';
+import { JobProviderHealthPanel } from '@/components/admin/JobProviderHealthPanel';
 import { AutopilotHealthPanel } from '@/components/admin/AutopilotHealthPanel';
 import { PackageIntelligencePanel } from '@/components/admin/PackageIntelligencePanel';
 import { ReviewPipelinePanel } from '@/components/admin/ReviewPipelinePanel';
@@ -805,6 +806,9 @@ export default function AdminDashboard() {
 
       {/* Phase 5.1D — Daily Discovery scheduler + provider health, with the manual trigger. */}
       <DailyDiscoveryHealthPanel />
+
+      {/* Job Discovery: full 8-provider chain health (incl. Ashby/SmartRecruiters), circuit state. */}
+      <JobProviderHealthPanel />
 
       {/* Phase 7 — Application Agent (autopilot) health + provider registry. */}
       <AutopilotHealthPanel />

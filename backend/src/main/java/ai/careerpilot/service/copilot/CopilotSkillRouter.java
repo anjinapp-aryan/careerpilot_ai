@@ -42,6 +42,7 @@ public class CopilotSkillRouter {
             CompanyInterviewHandler companyInterview,
             CompanyCultureHandler companyCulture,
             CompanyGrowthHandler companyGrowth,
+            JobDiscoveryHealthHandler jobDiscoveryHealth,
             GeneralAssistantHandler generalAssistant) {
 
         this.handlers = new EnumMap<>(CopilotSkill.class);
@@ -67,6 +68,7 @@ public class CopilotSkillRouter {
         this.handlers.put(CopilotSkill.COMPANY_INTERVIEW, companyInterview);
         this.handlers.put(CopilotSkill.COMPANY_CULTURE, companyCulture);
         this.handlers.put(CopilotSkill.COMPANY_GROWTH, companyGrowth);
+        this.handlers.put(CopilotSkill.JOB_DISCOVERY_HEALTH, jobDiscoveryHealth);
 
         this.fallback = generalAssistant;
 
@@ -150,6 +152,11 @@ public class CopilotSkillRouter {
         }
         if (lower.contains("recommend")) {
             return CopilotSkill.PERSONALIZED_RECOMMENDATIONS;
+        }
+        if ((lower.contains("provider") || lower.contains("source") || lower.contains("ingestion"))
+                && (lower.contains("job") || lower.contains("discovery") || lower.contains("health")
+                    || lower.contains("down") || lower.contains("failing"))) {
+            return CopilotSkill.JOB_DISCOVERY_HEALTH;
         }
         // Phase 7.13 — company intelligence intents. Checked after the specific skills above so
         // e.g. "interview" alone still routes to INTERVIEW_PREPARATION as before (additive routing).

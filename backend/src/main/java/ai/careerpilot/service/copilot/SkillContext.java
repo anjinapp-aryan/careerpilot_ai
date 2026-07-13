@@ -93,6 +93,13 @@ public class SkillContext {
         if (c != null && c.enabled()) sources.add("Company Intelligence");
     }
 
+    private Map<String, Object> jobDiscoveryHealth;
+    public Map<String, Object> jobDiscoveryHealth() { return jobDiscoveryHealth; }
+    public void jobDiscoveryHealth(Map<String, Object> h) {
+        this.jobDiscoveryHealth = h;
+        if (h != null) sources.add("Job Discovery Providers");
+    }
+
     public Set<String> sources() { return sources; }
     public void addSource(String source) { sources.add(source); }
     public String sourcesBlock() {

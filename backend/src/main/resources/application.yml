@@ -356,6 +356,12 @@ jobs:
     scope-strict-enabled: ${JOBS_DISCOVERY_SCOPE_STRICT_ENABLED:false}
     # Daily at 06:00. Tighten to hourly later ("0 0 * * * *") with no code change.
     cron: ${JOB_DISCOVERY_CRON:0 0 6 * * *}
+    # Optional second cadence: a separate @Scheduled method on the same JobDiscoveryScheduler
+    # (not a second scheduler class), off by default. Flip on for near-real-time discovery
+    # without touching the daily cron above.
+    hourly:
+      enabled: ${JOB_DISCOVERY_HOURLY_ENABLED:false}
+      cron: ${JOB_DISCOVERY_HOURLY_CRON:0 0 * * * *}
     user-agent: ${JOB_DISCOVERY_USER_AGENT:CareerPilotAI/1.0 (+https://careerpilot.ai)}
     providers:
       remoteok:
@@ -680,6 +686,27 @@ workflow.timeline:
     core-pool-size: ${WORKFLOW_TIMELINE_EXECUTOR_CORE_POOL_SIZE:2}
     max-pool-size: ${WORKFLOW_TIMELINE_EXECUTOR_MAX_POOL_SIZE:4}
     queue-capacity: ${WORKFLOW_TIMELINE_EXECUTOR_QUEUE_CAPACITY:100}
+
+# ---- Phase 7.16: Real Application Submission Pipeline (ships DARK) ----
+# A thin orchestration layer over the existing dormant execution/packageintel/review/companyintel/
+# story modules — see ai.careerpilot.submission package Javadoc. Deliberately a different namespace
+# (`application.submission.*`) from the existing `application.execution.*`/`application.approval.*`
+# so there's no collision (same dotted-top-level-key convention as `application.execution:` above).
+# All default false: with stock flags the Apply button behaves byte-for-byte as it does today.
+application.submission:
+  enabled: ${APPLICATION_SUBMISSION_ENABLED:false}
+  auto:
+    enabled: ${APPLICATION_SUBMISSION_AUTO_ENABLED:false}
+  manual:
+    enabled: ${APPLICATION_SUBMISSION_MANUAL_ENABLED:false}
+  approval:
+    enabled: ${APPLICATION_SUBMISSION_APPROVAL_ENABLED:false}
+  diagnostics:
+    enabled: ${APPLICATION_SUBMISSION_DIAGNOSTICS_ENABLED:false}
+  executor:
+    core-pool-size: ${APPLICATION_SUBMISSION_EXECUTOR_CORE:2}
+    max-pool-size: ${APPLICATION_SUBMISSION_EXECUTOR_MAX:4}
+    queue-capacity: ${APPLICATION_SUBMISSION_EXECUTOR_QUEUE:50}
 email.intelligence:
   # 3A.3 INERT deterministic keyword classifier — no live mailbox, no external fetch, no LLM.
   enabled: ${EMAIL_INTELLIGENCE_ENABLED:false}
@@ -761,6 +788,66 @@ career:
       enabled: ${CAREER_INTERNATIONAL_FILTER_ENABLED:false}
   explainability:
     enabled: ${CAREER_EXPLAINABILITY_ENABLED:false}
+  # ---- Job discovery: 2 new keyless-public-API providers, same shape/flag namespace as
+  # career.discovery.greenhouse.*/career.discovery.lever.* (GreenhouseProvider/LeverProvider).
+  # NOTE: neither greenhouse nor lever actually has an entry in this file today — both providers
+  # read their @Value(...) defaults (enabled=false, empty board/company CSV) with nothing set here,
+  # so this provider chain ships fully dark out of the box. Ashby/SmartRecruiters follow that same
+  # convention: default `false`/empty via @Value, and this block exists only so the env var names
+  # and shape are discoverable/documented in one place, matching the existing greenhouse/lever
+  # naming (career.discovery.<name>.*) rather than the provider.<name>.enabled naming a since-revised
+  # spec draft used — see CLAUDE.md-equivalent task notes for this explicit, intentional deviation.
+  discovery:
+    ashby:
+      enabled: ${CAREER_DISCOVERY_ASHBY_ENABLED:false}
+      base-url: ${CAREER_DISCOVERY_ASHBY_BASE_URL:https://api.ashbyhq.com}
+      orgs: ${CAREER_DISCOVERY_ASHBY_ORGS:}
+      throttle-ms: ${CAREER_DISCOVERY_ASHBY_THROTTLE_MS:300}
+    smartrecruiters:
+      enabled: ${CAREER_DISCOVERY_SMARTRECRUITERS_ENABLED:false}
+      base-url: ${CAREER_DISCOVERY_SMARTRECRUITERS_BASE_URL:https://api.smartrecruiters.com}
+      companies: ${CAREER_DISCOVERY_SMARTRECRUITERS_COMPANIES:}
+      throttle-ms: ${CAREER_DISCOVERY_SMARTRECRUITERS_THROTTLE_MS:300}
+    # ---- Phase 5.2: AI Dev Jobs is a real, working, keyless public API (verified). DevITjobs and
+    # GraphQL Jobs ship as inert stubs — see their class javadocs for the dead-endpoint findings
+    # (DevITjobs UK's old domain 302s to a JobCopilot signup page; graphql.jobs does not resolve in
+    # DNS) — both always report unconfigured regardless of their flag, same as WellfoundProvider.
+    ai-dev-jobs:
+      enabled: ${CAREER_DISCOVERY_AI_DEV_JOBS_ENABLED:false}
+      base-url: ${CAREER_DISCOVERY_AI_DEV_JOBS_BASE_URL:https://aidevboard.com}
+      limit: ${CAREER_DISCOVERY_AI_DEV_JOBS_LIMIT:50}
+    devitjobs:
+      enabled: ${CAREER_DISCOVERY_DEVITJOBS_ENABLED:false}
+    graphql-jobs:
+      enabled: ${CAREER_DISCOVERY_GRAPHQL_JOBS_ENABLED:false}
+    # ---- Phase 5.3: Enterprise ATS Connector Framework. `enterprise.enabled` is the
+    # framework-wide master switch, AND'd with each provider's own flag (so both must be true).
+    # Workday is real (see WorkdayProvider javadoc); Taleo/SuccessFactors are connector
+    # architecture only — always inert regardless of flags (see their class javadocs for why).
+    enterprise:
+      enabled: ${CAREER_DISCOVERY_ENTERPRISE_ENABLED:false}
+    workday:
+      enabled: ${CAREER_DISCOVERY_WORKDAY_ENABLED:false}
+      # CSV of "tenant;cluster;site;displayName;country;industry;priority" entries — see
+      # WorkdayCompanyConnector for the format. Empty by default: no companies hardcoded.
+      companies: ${CAREER_DISCOVERY_WORKDAY_COMPANIES:}
+      limit: ${CAREER_DISCOVERY_WORKDAY_LIMIT:50}
+      throttle-ms: ${CAREER_DISCOVERY_WORKDAY_THROTTLE_MS:300}
+      # Phase 5.3.1: bounded opt-in per-job detail GET for richer fields (real location,
+      # description, employment type, apply URL...). 0 = off, exact Phase 5.3 behavior.
+      detail-fetch-limit: ${CAREER_DISCOVERY_WORKDAY_DETAIL_FETCH_LIMIT:0}
+    taleo:
+      enabled: ${CAREER_DISCOVERY_TALEO_ENABLED:false}
+      # CSV of "company;careerUrl;country;industry;priority" entries. Parsed but never fetched.
+      companies: ${CAREER_DISCOVERY_TALEO_COMPANIES:}
+    successfactors:
+      enabled: ${CAREER_DISCOVERY_SUCCESSFACTORS_ENABLED:false}
+      companies: ${CAREER_DISCOVERY_SUCCESSFACTORS_COMPANIES:}
+    health:
+      # Consecutive-failure cooldown before JobDiscoveryHealthTracker moves a provider's circuit
+      # from OPEN to HALF_OPEN (diagnostics-only; does not gate actual fetch calls — see the
+      # tracker's javadoc for why full Resilience4j wiring per job-provider is out of scope here).
+      circuit-cooldown-ms: ${CAREER_DISCOVERY_HEALTH_CIRCUIT_COOLDOWN_MS:300000}
 
 # ---- Phase 7.8/7.9/7.7 Company research, interview prep, calendar (dark) ----
 company:
@@ -828,6 +915,35 @@ candidate:
     # final) from JobScoring.scoreV2 into recommendation_audit, for explainability. Purely additive
     # side effect after scoring; never affects the returned recommendation. Default off.
     audit-enabled: ${CANDIDATE_RECOMMENDATION_AUDIT_ENABLED:false}
+
+# ---- Phase 7.15 STAR Story Intelligence & Behavioral AI (additive, dark) ----
+# story.engine.enabled gates the orchestrating facade (StarStoryEngine); every sub-capability has
+# its own flag so it can be canaried independently. story.worker.trigger.enabled chains automatic
+# candidate-story drafting onto the existing Phase 6.1 LearningEventRecordedEvent. All default off.
+story:
+  engine:
+    enabled: ${STORY_ENGINE_ENABLED:false}
+  extraction:
+    enabled: ${STORY_EXTRACTION_ENABLED:false}
+  generation:
+    enabled: ${STORY_GENERATION_ENABLED:false}
+  recommendation:
+    enabled: ${STORY_RECOMMENDATION_ENABLED:false}
+  analytics:
+    enabled: ${STORY_ANALYTICS_ENABLED:false}
+  search:
+    enabled: ${STORY_SEARCH_ENABLED:false}
+  history:
+    enabled: ${STORY_HISTORY_ENABLED:false}
+  diagnostics:
+    enabled: ${STORY_DIAGNOSTICS_ENABLED:false}
+  worker:
+    trigger:
+      enabled: ${STORY_WORKER_TRIGGER_ENABLED:false}
+  executor:
+    core-pool-size: ${STORY_EXECUTOR_CORE_POOL_SIZE:2}
+    max-pool-size: ${STORY_EXECUTOR_MAX_POOL_SIZE:4}
+    queue-capacity: ${STORY_EXECUTOR_QUEUE_CAPACITY:200}
 
 logging:
   level:

@@ -40,7 +40,10 @@ public class JobTaxonomy {
             "full stack", "fullstack", "back end", "backend", "front end", "frontend",
             "sysadmin", "system administrator", "qa engineer", "test engineer", "sdet",
             "platform engineer", "cloud engineer", "security engineer", "mobile developer",
-            "android", "ios developer", "web developer", "technical lead", "tech lead");
+            "android", "ios developer", "web developer", "technical lead", "tech lead",
+            // Search-quality role list additions: staff/principal IC tracks and the LLM/GenAI wave.
+            "staff engineer", "principal engineer", "llm engineer", "genai", "gen ai",
+            "site reliability engineer", "distinguished engineer");
 
     /** Non-tech family keyword → family, checked against the TITLE only (the strongest signal). */
     private static final Map<String, String> FAMILY_KEYWORDS = buildFamilyKeywords();
@@ -226,15 +229,18 @@ public class JobTaxonomy {
     private static Map<String, List<String>> buildRoleFamily() {
         Map<String, List<String>> m = new LinkedHashMap<>();
         m.put("ARCHITECT", List.of("architect", "architecture"));
-        m.put("LEAD", List.of("lead", "principal", "staff", "manager", "head of", "director"));
+        m.put("LEAD", List.of("lead", "principal", "staff", "manager", "head of", "director",
+                "staff engineer", "principal engineer", "distinguished engineer"));
         m.put("BACKEND", List.of("backend", "back end", "back-end", "java", "software engineer",
                 "software developer", "server", "api ", "spring", "microservice"));
         m.put("FRONTEND", List.of("frontend", "front end", "front-end", "react", "angular", "vue", "ui engineer"));
         m.put("FULLSTACK", List.of("full stack", "fullstack", "full-stack"));
         m.put("DATA", List.of("data engineer", "data scientist", "data analyst", "spark", "etl", "analytics"));
-        m.put("DEVOPS", List.of("devops", "sre", "site reliability", "platform engineer", "infrastructure", "cloud engineer"));
+        m.put("DEVOPS", List.of("devops", "sre", "site reliability", "site reliability engineer",
+                "platform engineer", "infrastructure", "cloud engineer"));
         m.put("MOBILE", List.of("android", "ios", "mobile developer", "react native", "flutter"));
-        m.put("ML", List.of("machine learning", "ml engineer", "deep learning", "ai engineer", "mlops"));
+        m.put("ML", List.of("machine learning", "ml engineer", "deep learning", "ai engineer", "mlops",
+                "llm engineer", "genai", "gen ai", "large language model", "generative ai"));
         m.put("QA", List.of("qa engineer", "test engineer", "sdet", "quality assurance", "automation test"));
         m.put("SECURITY", List.of("security engineer", "appsec", "infosec", "cybersecurity"));
         return m;

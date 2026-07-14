@@ -27,6 +27,8 @@ public class SkillContext {
     private ai.careerpilot.packageintel.api.PackageExplainContextService.PackageExplainContext applicationPackage;
     private ai.careerpilot.review.api.ReviewExplainContextService.ReviewExplainContext applicationReview;
     private ai.careerpilot.companyintel.api.CompanyExplainContextService.CompanyExplainContext companyIntel;
+    private ai.careerpilot.story.api.StoryCopilotContextService.StoryCopilotContext story;
+    private ai.careerpilot.submission.api.SubmissionCopilotContextService.SubmissionCopilotContext submission;
 
     private final Set<String> sources = new LinkedHashSet<>();
 
@@ -91,6 +93,32 @@ public class SkillContext {
     public void companyIntel(ai.careerpilot.companyintel.api.CompanyExplainContextService.CompanyExplainContext c) {
         this.companyIntel = c;
         if (c != null && c.enabled()) sources.add("Company Intelligence");
+    }
+
+    private Map<String, Object> jobDiscoveryHealth;
+    public Map<String, Object> jobDiscoveryHealth() { return jobDiscoveryHealth; }
+    public void jobDiscoveryHealth(Map<String, Object> h) {
+        this.jobDiscoveryHealth = h;
+        if (h != null) sources.add("Job Discovery Providers");
+    }
+
+    public ai.careerpilot.story.api.StoryCopilotContextService.StoryCopilotContext story() { return story; }
+    public void story(ai.careerpilot.story.api.StoryCopilotContextService.StoryCopilotContext s) {
+        this.story = s;
+        if (s != null && s.enabled()) sources.add("STAR Story Intelligence");
+    }
+
+    public ai.careerpilot.submission.api.SubmissionCopilotContextService.SubmissionCopilotContext submission() { return submission; }
+    public void submission(ai.careerpilot.submission.api.SubmissionCopilotContextService.SubmissionCopilotContext s) {
+        this.submission = s;
+        if (s != null && s.enabled()) sources.add("Application Submission Pipeline");
+    }
+
+    private ai.careerpilot.applications.dto.ApplicationCardDtos.ApplicationCardResponse applicationCommandCenter;
+    public ai.careerpilot.applications.dto.ApplicationCardDtos.ApplicationCardResponse applicationCommandCenter() { return applicationCommandCenter; }
+    public void applicationCommandCenter(ai.careerpilot.applications.dto.ApplicationCardDtos.ApplicationCardResponse a) {
+        this.applicationCommandCenter = a;
+        if (a != null) sources.add("Application Command Center");
     }
 
     public Set<String> sources() { return sources; }

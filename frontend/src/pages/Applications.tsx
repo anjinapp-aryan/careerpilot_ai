@@ -1,67 +1,41 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   DndContext,
   DragOverlay,
   PointerSensor,
-  useDraggable,
   useDroppable,
   useSensor,
   useSensors,
   type DragEndEvent,
   type DragStartEvent,
 } from '@dnd-kit/core';
-import { motion } from 'framer-motion';
-import { Building2, ClipboardCheck, Clock, GripVertical, Info, KanbanSquare, ListTree, PackageCheck, Sparkles, Target } from 'lucide-react';
+import {
+  Briefcase,
+  Clock,
+  Gauge,
+  KanbanSquare,
+  Percent,
+  Target,
+  TrendingUp,
+  Trophy,
+  Users,
+} from 'lucide-react';
 import { api } from '@/lib/api';
 import { PageHeader } from '@/components/common/PageHeader';
-import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { EmptyState } from '@/components/ui/empty-state';
 import { useToast } from '@/components/ui/toast';
-import { Tabs } from '@/components/ui/tabs';
-import { Dialog, DialogBody, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
-import { WorkflowTraceExplorer } from '@/components/workflow/WorkflowTraceExplorer';
+import { KpiCard } from '@/components/dashboard/KpiCard';
 import { ExecutionApprovalsPanel } from '@/components/execution/ExecutionApprovalsPanel';
-import { ApplicationPackageDrawer } from '@/components/applications/ApplicationPackageDrawer';
-import { ApplicationReviewDrawer } from '@/components/applications/ApplicationReviewDrawer';
-import { generatePackage } from '@/lib/applicationPackage';
-import { runReview } from '@/lib/applicationReview';
-import { CompanyIntelPanel } from '@/components/company/CompanyIntelPanel';
+import { MySubmissionsPanel } from '@/components/submission/MySubmissionsPanel';
+import { ApplicationCardV2 } from '@/components/applications/ApplicationCardV2';
+import { ApplicationDrawer } from '@/components/applications/ApplicationDrawer';
+import { SmartFilterBar, DEFAULT_FILTERS, type SmartFilters } from '@/components/applications/SmartFilterBar';
+import { BulkActionsToolbar } from '@/components/applications/BulkActionsToolbar';
 import { cn } from '@/lib/cn';
-import type { Application, Job, JobsPage } from '@/types/workflow';
-
-/** GET /api/workflow/applications/{jobId}/lifecycle — Phase 3A lifecycle row + status history. */
-interface LifecycleView {
-  lifecycle?: {
-    currentStatus?: string;
-    previousStatus?: string | null;
-    company?: string | null;
-    country?: string | null;
-    applicationDate?: string | null;
-    source?: string | null;
-    updatedAt?: string | null;
-  } | null;
-  history?: { fromStatus?: string | null; toStatus?: string | null; createdAt?: string | null }[];
-}
-
-/** GET /api/workflow/applications/{jobId}/timeline — Phase 3A observable-event timeline. */
-interface TimelineEntry {
-  id: string;
-  eventType: string;
-  eventSource?: string | null;
-  confidence?: number | null;
-  details?: string | null;
-  occurredAt?: string | null;
-}
-
-interface DetailTarget {
-  jobId: string;
-  title: string;
-  company: string;
-}
+import type { ApplicationCard, ApplicationBulkAction, ApplicationBulkResult } from '@/types/workflow';
 
 interface Column {
   id: string;
@@ -82,40 +56,39 @@ const COLUMNS: Column[] = [
   { id: 'WITHDRAWN', label: 'Withdrawn', tone: 'neutral', dot: 'bg-muted-foreground' },
 ];
 
+const ACTIVE_STATUSES = new Set(['APPLIED', 'INTERVIEWING']);
+const STALE_HEALTH = new Set(['STALE', 'COLD', 'RISK']);
+
 export default function Applications() {
   const qc = useQueryClient();
   const { toast } = useToast();
   const [activeId, setActiveId] = useState<string | null>(null);
-  const [detail, setDetail] = useState<DetailTarget | null>(null);
+  const [detailId, setDetailId] = useState<string | null>(null);
+  const [filters, setFilters] = useState<SmartFilters>(DEFAULT_FILTERS);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkPending, setBulkPending] = useState<ApplicationBulkAction | null>(null);
 
-  const { data: apps = [], isLoading } = useQuery<Application[]>({
-    queryKey: ['applications'],
-    queryFn: async () => (await api.get('/api/applications')).data,
+  // Applications Command Center — richer per-card data (job/artifact joins + deterministic
+  // health/recommendation/next-action). Additive endpoint; GET /api/applications (plain shape) is
+  // untouched and still used elsewhere (e.g. Jobs.tsx).
+  const { data: cards = [], isLoading } = useQuery<ApplicationCard[]>({
+    queryKey: ['applications', 'cards'],
+    queryFn: async () => (await api.get('/api/applications/cards')).data,
   });
-  const { data: jobsPage } = useQuery<JobsPage>({
-    queryKey: ['jobs', ''],
-    queryFn: async () => (await api.get('/api/jobs')).data,
-  });
-
-  const jobMap = useMemo(() => {
-    const m = new Map<string, Job>();
-    (jobsPage?.content ?? []).forEach((j) => m.set(j.id, j));
-    return m;
-  }, [jobsPage]);
 
   const move = useMutation({
     mutationFn: async ({ id, status }: { id: string; status: string }) =>
       (await api.patch(`/api/applications/${id}`, { status })).data,
     onMutate: async ({ id, status }) => {
       await qc.cancelQueries({ queryKey: ['applications'] });
-      const prev = qc.getQueryData<Application[]>(['applications']);
-      qc.setQueryData<Application[]>(['applications'], (old) =>
+      const prev = qc.getQueryData<ApplicationCard[]>(['applications', 'cards']);
+      qc.setQueryData<ApplicationCard[]>(['applications', 'cards'], (old) =>
         (old ?? []).map((a) => (a.id === id ? { ...a, status } : a)),
       );
       return { prev };
     },
     onError: (_e, _v, ctx) => {
-      if (ctx?.prev) qc.setQueryData(['applications'], ctx.prev);
+      if (ctx?.prev) qc.setQueryData(['applications', 'cards'], ctx.prev);
       toast({ variant: 'error', title: 'Could not move card' });
     },
     onSettled: () => {
@@ -124,18 +97,56 @@ export default function Applications() {
     },
   });
 
+  const toggleFavorite = useMutation({
+    mutationFn: async ({ id, favorite }: { id: string; favorite: boolean }) =>
+      (await api.patch(`/api/applications/${id}`, { favorite: String(favorite) })).data,
+    onSettled: () => qc.invalidateQueries({ queryKey: ['applications'] }),
+  });
+
+  const bulk = useMutation({
+    mutationFn: async ({ action, payload }: { action: ApplicationBulkAction; payload?: Record<string, string> }) => {
+      setBulkPending(action);
+      return (await api.post('/api/applications/bulk', { ids: Array.from(selected), action, payload })).data as ApplicationBulkResult;
+    },
+    onSuccess: (result) => {
+      toast({ variant: 'success', title: `${result.applied} of ${result.requested} applications updated` });
+      setSelected(new Set());
+      qc.invalidateQueries({ queryKey: ['applications'] });
+    },
+    onError: () => toast({ variant: 'error', title: 'Bulk action failed' }),
+    onSettled: () => setBulkPending(null),
+  });
+
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
 
+  const filtered = useMemo(() => {
+    return cards.filter((c) => {
+      if (c.archived) return false;
+      if (filters.favoritesOnly && !c.favorite) return false;
+      if (filters.remoteType && c.remoteType !== filters.remoteType) return false;
+      if (filters.priority && c.priority !== filters.priority) return false;
+      if (filters.health && c.healthStatus !== filters.health) return false;
+      if (filters.query) {
+        const q = filters.query.toLowerCase();
+        const hay = `${c.jobTitle ?? ''} ${c.company ?? ''}`.toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return true;
+    });
+  }, [cards, filters]);
+
   const byStatus = useMemo(() => {
-    const groups: Record<string, Application[]> = {};
+    const groups: Record<string, ApplicationCard[]> = {};
     COLUMNS.forEach((c) => (groups[c.id] = []));
-    apps.forEach((a) => {
+    filtered.forEach((a) => {
       (groups[a.status] ??= []).push(a);
     });
     return groups;
-  }, [apps]);
+  }, [filtered]);
 
-  const activeApp = apps.find((a) => a.id === activeId) ?? null;
+  const kpis = useMemo(() => computeKpis(cards), [cards]);
+
+  const activeCard = cards.find((a) => a.id === activeId) ?? null;
 
   function onDragStart(e: DragStartEvent) {
     setActiveId(String(e.active.id));
@@ -146,16 +157,30 @@ export default function Applications() {
     if (!over) return;
     const id = String(active.id);
     const target = String(over.id);
-    const app = apps.find((a) => a.id === id);
+    const app = cards.find((a) => a.id === id);
     if (app && app.status !== target && COLUMNS.some((c) => c.id === target)) {
       move.mutate({ id, status: target });
     }
+  }
+
+  function toggleSelect(id: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
   }
 
   if (isLoading) {
     return (
       <div className="space-y-6">
         <PageHeader title="Applications" description="Track every opportunity through your pipeline." />
+        <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 xl:grid-cols-9">
+          {Array.from({ length: 9 }).map((_, i) => (
+            <Skeleton key={i} className="h-24 rounded-xl" />
+          ))}
+        </div>
         <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-6">
           {COLUMNS.map((c) => (
             <Skeleton key={c.id} className="h-96 rounded-xl" />
@@ -165,7 +190,7 @@ export default function Applications() {
     );
   }
 
-  if (apps.length === 0) {
+  if (cards.length === 0) {
     return (
       <div className="space-y-6">
         <PageHeader title="Applications" description="Track every opportunity through your pipeline." />
@@ -182,16 +207,41 @@ export default function Applications() {
     <div className="space-y-6">
       <PageHeader
         title="Applications"
-        description="Drag cards between stages to update their status in real time."
+        description="Your AI-powered job application command center."
         actions={
           <Badge tone="primary">
-            <Target className="h-3 w-3" /> {apps.length} total
+            <Target className="h-3 w-3" /> {cards.length} total
           </Badge>
         }
       />
 
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 xl:grid-cols-9">
+        <KpiCard label="Applications" value={kpis.applications} icon={Briefcase} tone="primary" />
+        <KpiCard label="Interviews" value={kpis.interviews} icon={Users} tone="info" />
+        <KpiCard label="Offers" value={kpis.offers} icon={Trophy} tone="success" />
+        <KpiCard label="Response rate" value={kpis.responseRate} suffix="%" icon={Percent} tone="info" />
+        <KpiCard label="Avg ATS score" value={kpis.avgAts} icon={Gauge} tone="warning" hint="Across scored applications" />
+        <KpiCard label="Avg match score" value={kpis.avgMatch} icon={Target} tone="primary" hint="Across scored applications" />
+        <KpiCard label="Success rate" value={kpis.successRate} suffix="%" icon={TrendingUp} tone="success" hint="Offers / total" />
+        <KpiCard label="Avg response time" value={kpis.avgResponseDays} suffix="d" icon={Clock} tone="warning" hint="Created → last update" />
+        <KpiCard label="Pipeline velocity" value={kpis.pipelineVelocity} suffix="%" icon={Gauge} tone="info" hint="Active apps that aren't stale" />
+      </div>
+
       {/* Phase 2E — pending auto-apply approvals; renders nothing while the engine is dark. */}
       <ExecutionApprovalsPanel />
+
+      {/* Phase 7.16 — the user's submission sessions + generated artifacts; dark-safe (renders nothing when empty). */}
+      <MySubmissionsPanel />
+
+      <SmartFilterBar value={filters} onChange={setFilters} />
+
+      <BulkActionsToolbar
+        count={selected.size}
+        pending={bulkPending}
+        onArchive={() => bulk.mutate({ action: 'ARCHIVE' })}
+        onExport={() => bulk.mutate({ action: 'EXPORT' })}
+        onClear={() => setSelected(new Set())}
+      />
 
       <DndContext sensors={sensors} onDragStart={onDragStart} onDragEnd={onDragEnd}>
         <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-6">
@@ -199,36 +249,65 @@ export default function Applications() {
             <KanbanColumn
               key={col.id}
               column={col}
-              apps={byStatus[col.id] ?? []}
-              jobMap={jobMap}
-              onDetails={(app) => {
-                const job = jobMap.get(app.jobId);
-                setDetail({ jobId: app.jobId, title: job?.title ?? 'Application', company: job?.company ?? '' });
-              }}
+              cards={byStatus[col.id] ?? []}
+              selected={selected}
+              onToggleSelect={toggleSelect}
+              onToggleFavorite={(c) => toggleFavorite.mutate({ id: c.id, favorite: !c.favorite })}
+              onDetails={(c) => setDetailId(c.id)}
             />
           ))}
         </div>
 
-        <DragOverlay>
-          {activeApp ? <AppCard app={activeApp} job={jobMap.get(activeApp.jobId)} overlay /> : null}
-        </DragOverlay>
+        <DragOverlay>{activeCard ? <ApplicationCardV2 card={activeCard} overlay /> : null}</DragOverlay>
       </DndContext>
 
-      <ApplicationDetailDialog target={detail} onClose={() => setDetail(null)} />
+      <ApplicationDrawer applicationId={detailId} onClose={() => setDetailId(null)} />
     </div>
   );
 }
 
+function computeKpis(cards: ApplicationCard[]) {
+  const total = cards.length;
+  const interviews = cards.filter((c) => c.status === 'INTERVIEWING').length;
+  const offers = cards.filter((c) => c.status === 'OFFER').length;
+  const responded = cards.filter((c) => c.status !== 'SAVED').length;
+  const respondedFurther = cards.filter((c) => ['INTERVIEWING', 'OFFER', 'REJECTED'].includes(c.status)).length;
+  const responseRate = responded === 0 ? 0 : Math.round((respondedFurther / responded) * 100);
+  const successRate = total === 0 ? 0 : Math.round((offers / total) * 100);
+
+  const atsScores = cards.map((c) => c.atsScore).filter((v): v is number => v != null);
+  const avgAts = atsScores.length === 0 ? 0 : Math.round(atsScores.reduce((a, b) => a + b, 0) / atsScores.length);
+
+  const matchScores = cards.map((c) => c.matchScore).filter((v): v is number => v != null);
+  const avgMatch = matchScores.length === 0 ? 0 : Math.round(matchScores.reduce((a, b) => a + b, 0) / matchScores.length);
+
+  const responseDays = cards
+    .filter((c) => c.status !== 'SAVED' && c.updatedAt)
+    .map((c) => (new Date(c.updatedAt!).getTime() - new Date(c.createdAt).getTime()) / 86_400_000)
+    .filter((d) => Number.isFinite(d) && d >= 0);
+  const avgResponseDays = responseDays.length === 0 ? 0 : Math.round(responseDays.reduce((a, b) => a + b, 0) / responseDays.length);
+
+  const active = cards.filter((c) => ACTIVE_STATUSES.has(c.status));
+  const pipelineVelocity =
+    active.length === 0 ? 0 : Math.round((active.filter((c) => !STALE_HEALTH.has(c.healthStatus)).length / active.length) * 100);
+
+  return { applications: total, interviews, offers, responseRate, avgAts, avgMatch, successRate, avgResponseDays, pipelineVelocity };
+}
+
 function KanbanColumn({
   column,
-  apps,
-  jobMap,
+  cards,
+  selected,
+  onToggleSelect,
+  onToggleFavorite,
   onDetails,
 }: {
   column: Column;
-  apps: Application[];
-  jobMap: Map<string, Job>;
-  onDetails: (app: Application) => void;
+  cards: ApplicationCard[];
+  selected: Set<string>;
+  onToggleSelect: (id: string) => void;
+  onToggleFavorite: (card: ApplicationCard) => void;
+  onDetails: (card: ApplicationCard) => void;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: column.id });
   return (
@@ -239,7 +318,7 @@ function KanbanColumn({
           <span className="text-sm font-semibold text-foreground">{column.label}</span>
         </div>
         <span className="rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
-          {apps.length}
+          {cards.length}
         </span>
       </div>
       <div
@@ -249,309 +328,22 @@ function KanbanColumn({
           isOver ? 'border-primary bg-primary/5' : 'border-border bg-muted/20',
         )}
       >
-        {apps.map((app) => (
-          <AppCard key={app.id} app={app} job={jobMap.get(app.jobId)} onDetails={() => onDetails(app)} />
+        {cards.map((card) => (
+          <ApplicationCardV2
+            key={card.id}
+            card={card}
+            selected={selected.has(card.id)}
+            onToggleSelect={() => onToggleSelect(card.id)}
+            onToggleFavorite={() => onToggleFavorite(card)}
+            onDetails={() => onDetails(card)}
+          />
         ))}
-        {apps.length === 0 && (
+        {cards.length === 0 && (
           <div className="flex flex-1 items-center justify-center py-8 text-center text-xs text-muted-foreground">
             Drop here
           </div>
         )}
       </div>
     </div>
-  );
-}
-
-function AppCard({
-  app,
-  job,
-  overlay,
-  onDetails,
-}: {
-  app: Application;
-  job?: Job;
-  overlay?: boolean;
-  onDetails?: () => void;
-}) {
-  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({ id: app.id });
-
-  return (
-    <motion.div
-      ref={overlay ? undefined : setNodeRef}
-      {...(overlay ? {} : attributes)}
-      {...(overlay ? {} : listeners)}
-      layout
-      className={cn(
-        'group rounded-lg border border-border bg-card p-3 shadow-xs',
-        overlay ? 'rotate-2 shadow-lg' : 'cursor-grab active:cursor-grabbing hover:shadow-md',
-        isDragging && !overlay && 'opacity-40',
-      )}
-    >
-      <div className="flex items-start gap-2">
-        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-primary/10 text-xs font-semibold text-primary">
-          {(job?.company ?? '?').slice(0, 2).toUpperCase()}
-        </span>
-        <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-medium text-foreground">
-            {job?.title ?? 'Job'}
-          </p>
-          <p className="flex items-center gap-1 truncate text-xs text-muted-foreground">
-            <Building2 className="h-3 w-3" /> {job?.company ?? `#${app.jobId.slice(0, 8)}`}
-          </p>
-        </div>
-        <GripVertical className="h-4 w-4 shrink-0 text-muted-foreground/40 group-hover:text-muted-foreground" />
-      </div>
-
-      <div className="mt-2.5 flex items-center justify-between gap-1.5">
-        <div className="flex items-center gap-1.5">
-          {app.matchScore != null && (
-            <Badge tone="primary" className="text-[10px]">Match {app.matchScore}</Badge>
-          )}
-          {app.atsScore != null && (
-            <Badge tone="info" className="text-[10px]">ATS {app.atsScore}</Badge>
-          )}
-        </div>
-        {!overlay && onDetails && (
-          <button
-            type="button"
-            // Pointer events must not reach the draggable listeners, or a click starts a drag.
-            onPointerDown={(e) => e.stopPropagation()}
-            onClick={(e) => {
-              e.stopPropagation();
-              onDetails();
-            }}
-            aria-label="View workflow details"
-            className="rounded-md p-1 text-muted-foreground/60 transition-colors hover:bg-muted hover:text-foreground"
-          >
-            <Info className="h-3.5 w-3.5" />
-          </button>
-        )}
-      </div>
-    </motion.div>
-  );
-}
-
-/**
- * Phase 3B.4 — application workflow drawer. Reads the Phase 3A read-model
- * (lifecycle row + status history + observable-event timeline) for one job.
- * All three engines ship dark, so the endpoints 404 / return empty on a stock
- * stack — the drawer degrades to a "workflow tracking not enabled" message
- * rather than erroring.
- */
-function ApplicationDetailDialog({ target, onClose }: { target: DetailTarget | null; onClose: () => void }) {
-  const jobId = target?.jobId ?? null;
-  const { toast } = useToast();
-  const [tab, setTab] = useState<'timeline' | 'trace'>('timeline');
-  const [seededCorrelationId, setSeededCorrelationId] = useState<string | null>(null);
-  const [packageId, setPackageId] = useState<string | null>(null);
-
-  // Phase 7.11 — assemble (never submit) + open the Application Package drawer. Dark → 404 → toast.
-  const genPackage = useMutation({
-    mutationFn: () => generatePackage(jobId as string),
-    onSuccess: (pkg) => setPackageId(pkg.id),
-    onError: () =>
-      toast({ variant: 'default', title: 'Application package not available', description: 'Enable application.package.validation.enabled to assemble packages.' }),
-  });
-
-  // Phase 7.12 — assemble (if needed) then run the AI review, and open the review drawer. Dark → 404 → toast.
-  const [reviewPackageId, setReviewPackageId] = useState<string | null>(null);
-  const runReviewMut = useMutation({
-    mutationFn: async () => {
-      const pkg = await generatePackage(jobId as string);
-      await runReview(pkg.id);
-      return pkg.id;
-    },
-    onSuccess: (id) => setReviewPackageId(id),
-    onError: () =>
-      toast({ variant: 'default', title: 'AI review not available', description: 'Enable application.review.enabled to run reviews.' }),
-  });
-
-  useEffect(() => {
-    setTab('timeline');
-    setSeededCorrelationId(null);
-    setPackageId(null);
-    setReviewPackageId(null);
-  }, [jobId]);
-
-  const seed = useMutation({
-    mutationFn: async () => (await api.post(`/api/workflow/applications/${jobId}/seed`, {})).data as {
-      status: string;
-      correlationId?: string;
-    },
-    onSuccess: (data) => {
-      if (data.status === 'SEEDED' && data.correlationId) {
-        setSeededCorrelationId(data.correlationId);
-        setTab('trace');
-        toast({ variant: 'success', title: 'Workflow tracking seeded', description: 'Correlation id ready in the Trace tab.' });
-      } else {
-        toast({ variant: 'default', title: 'Workflow tracking is not enabled', description: 'Ask an admin to flip workflow.tracking.trigger.enabled.' });
-      }
-    },
-    onError: () => toast({ variant: 'error', title: 'Could not seed workflow tracking' }),
-  });
-
-  const lifecycle = useQuery<LifecycleView | null>({
-    queryKey: ['workflow', 'lifecycle', jobId],
-    queryFn: async () => {
-      try {
-        return (await api.get(`/api/workflow/applications/${jobId}/lifecycle`)).data as LifecycleView;
-      } catch {
-        return null; // 404 when no lifecycle row exists (dark flags or never tracked)
-      }
-    },
-    enabled: !!jobId,
-    retry: false,
-  });
-
-  const timeline = useQuery<TimelineEntry[]>({
-    queryKey: ['workflow', 'timeline', jobId],
-    queryFn: async () => (await api.get(`/api/workflow/applications/${jobId}/timeline`)).data,
-    enabled: !!jobId,
-    retry: false,
-  });
-
-  const life = lifecycle.data?.lifecycle ?? null;
-  const history = lifecycle.data?.history ?? [];
-  const events = timeline.data ?? [];
-  const loading = lifecycle.isLoading || timeline.isLoading;
-  const nothing = !loading && !life && events.length === 0;
-
-  return (
-    <Dialog open={!!target} onOpenChange={(o) => !o && onClose()} size="lg">
-      <DialogHeader onClose={onClose}>
-        <DialogTitle>
-          <span className="flex items-center gap-2">
-            <ListTree className="h-4 w-4 text-primary" /> Application workflow
-          </span>
-        </DialogTitle>
-        <DialogDescription>
-          {target?.title}
-          {target?.company ? ` · ${target.company}` : ''}
-        </DialogDescription>
-      </DialogHeader>
-      <DialogBody className="space-y-4">
-        <Tabs
-          items={[
-            { value: 'timeline', label: 'Summary & Timeline' },
-            { value: 'trace', label: 'Trace' },
-          ]}
-          value={tab}
-          onChange={(v) => setTab(v as 'timeline' | 'trace')}
-        />
-
-        {/* Phase 7.11 — open the canonical Application Package (assembles on demand; dark-safe). */}
-        <div className="flex items-center justify-between gap-3 rounded-lg border border-border bg-muted/20 p-3">
-          <p className="text-xs text-muted-foreground">
-            View the validated Application Package assembled for this job (resume, ATS, recommendation,
-            company, learning + validation verdict).
-          </p>
-          <div className="flex shrink-0 items-center gap-2">
-            <Button size="sm" variant="outline" onClick={() => genPackage.mutate()} loading={genPackage.isPending}>
-              <PackageCheck className="h-3.5 w-3.5" /> Application package
-            </Button>
-            <Button size="sm" variant="outline" onClick={() => runReviewMut.mutate()} loading={runReviewMut.isPending}>
-              <ClipboardCheck className="h-3.5 w-3.5" /> AI review
-            </Button>
-          </div>
-        </div>
-
-        {/* Phase 7.13 — Company Intelligence + timeline for this application's company (dark-safe). */}
-        <CompanyIntelPanel companyName={target?.company} showTimeline />
-
-        {tab === 'trace' ? (
-          <div className="space-y-4">
-            <div className="flex items-center justify-between gap-3 rounded-lg border border-border bg-muted/20 p-3">
-              <p className="text-xs text-muted-foreground">
-                Manually seed Phase 3A workflow tracking for this application (gated by
-                <code className="mx-1 rounded bg-muted px-1 py-0.5">workflow.tracking.trigger.enabled</code>
-                — a no-op with stock defaults).
-              </p>
-              <Button size="sm" variant="outline" onClick={() => seed.mutate()} loading={seed.isPending}>
-                <Sparkles className="h-3.5 w-3.5" /> Seed tracking
-              </Button>
-            </div>
-            <WorkflowTraceExplorer key={seededCorrelationId ?? 'empty'} initialCorrelationId={seededCorrelationId} compact />
-          </div>
-        ) : loading ? (
-          <div className="space-y-3">
-            {Array.from({ length: 3 }).map((_, i) => (
-              <Skeleton key={i} className="h-14 rounded-lg" />
-            ))}
-          </div>
-        ) : nothing ? (
-          <div className="rounded-lg border border-border bg-muted/20 p-4 text-sm text-muted-foreground">
-            <Info className="mb-1.5 h-4 w-4" />
-            No workflow tracking for this application yet. The Phase 3A lifecycle engine is dark by
-            default — once enabled, its status transitions and event timeline appear here.
-          </div>
-        ) : (
-          <>
-            {life && (
-              <div>
-                <h4 className="mb-2 text-sm font-semibold text-foreground">Lifecycle</h4>
-                <div className="flex flex-wrap items-center gap-2">
-                  {life.previousStatus && <Badge tone="neutral">{life.previousStatus}</Badge>}
-                  {life.previousStatus && <span className="text-muted-foreground">→</span>}
-                  <Badge tone="primary">{life.currentStatus ?? 'UNKNOWN'}</Badge>
-                </div>
-                <dl className="mt-3 grid grid-cols-2 gap-x-6 gap-y-1 text-xs text-muted-foreground">
-                  {life.country && (
-                    <div className="flex gap-1.5"><dt className="font-medium text-foreground">Country:</dt><dd>{life.country}</dd></div>
-                  )}
-                  {life.source && (
-                    <div className="flex gap-1.5"><dt className="font-medium text-foreground">Source:</dt><dd>{life.source}</dd></div>
-                  )}
-                  {life.updatedAt && (
-                    <div className="flex gap-1.5"><dt className="font-medium text-foreground">Updated:</dt><dd>{new Date(life.updatedAt).toLocaleString()}</dd></div>
-                  )}
-                </dl>
-              </div>
-            )}
-
-            {history.length > 0 && (
-              <div>
-                <h4 className="mb-2 text-sm font-semibold text-foreground">Status history</h4>
-                <div className="space-y-1.5">
-                  {history.map((h, i) => (
-                    <div key={i} className="flex items-center gap-2 text-xs text-muted-foreground">
-                      <span className="tabular-nums">{h.fromStatus ?? '—'} → <span className="font-medium text-foreground">{h.toStatus ?? '—'}</span></span>
-                      {h.createdAt && <span className="ml-auto">{new Date(h.createdAt).toLocaleString()}</span>}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {events.length > 0 && (
-              <div>
-                <h4 className="mb-2 text-sm font-semibold text-foreground">Event timeline</h4>
-                <ol className="space-y-2.5 border-l border-border pl-4">
-                  {events.map((e) => (
-                    <li key={e.id} className="relative">
-                      <span className="absolute -left-[21px] top-1 h-2 w-2 rounded-full bg-primary" />
-                      <div className="flex items-center gap-2">
-                        <span className="text-sm font-medium text-foreground">{e.eventType}</span>
-                        {e.eventSource && <Badge tone="neutral" className="text-[10px]">{e.eventSource}</Badge>}
-                        {typeof e.confidence === 'number' && (
-                          <span className="text-[11px] text-muted-foreground">{Math.round(e.confidence * 100)}% conf</span>
-                        )}
-                      </div>
-                      {e.details && <p className="text-xs text-muted-foreground">{e.details}</p>}
-                      {e.occurredAt && (
-                        <p className="flex items-center gap-1 text-[11px] text-muted-foreground">
-                          <Clock className="h-3 w-3" /> {new Date(e.occurredAt).toLocaleString()}
-                        </p>
-                      )}
-                    </li>
-                  ))}
-                </ol>
-              </div>
-            )}
-          </>
-        )}
-      </DialogBody>
-      <ApplicationPackageDrawer packageId={packageId} open={!!packageId} onOpenChange={(o) => !o && setPackageId(null)} />
-      <ApplicationReviewDrawer packageId={reviewPackageId} open={!!reviewPackageId} onOpenChange={(o) => !o && setReviewPackageId(null)} />
-    </Dialog>
   );
 }

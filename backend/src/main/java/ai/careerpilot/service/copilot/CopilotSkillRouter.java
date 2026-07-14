@@ -42,6 +42,11 @@ public class CopilotSkillRouter {
             CompanyInterviewHandler companyInterview,
             CompanyCultureHandler companyCulture,
             CompanyGrowthHandler companyGrowth,
+            JobDiscoveryHealthHandler jobDiscoveryHealth,
+            StoryRecommendationHandler storyRecommendation,
+            StoryGenerationHandler storyGeneration,
+            SubmissionStatusHandler submissionStatus,
+            ExplainApplicationStatusHandler explainApplicationStatus,
             GeneralAssistantHandler generalAssistant) {
 
         this.handlers = new EnumMap<>(CopilotSkill.class);
@@ -67,6 +72,12 @@ public class CopilotSkillRouter {
         this.handlers.put(CopilotSkill.COMPANY_INTERVIEW, companyInterview);
         this.handlers.put(CopilotSkill.COMPANY_CULTURE, companyCulture);
         this.handlers.put(CopilotSkill.COMPANY_GROWTH, companyGrowth);
+        this.handlers.put(CopilotSkill.JOB_DISCOVERY_HEALTH, jobDiscoveryHealth);
+        this.handlers.put(CopilotSkill.SUGGEST_STAR_STORY, storyRecommendation);
+        this.handlers.put(CopilotSkill.GENERATE_STAR_STORY, storyGeneration);
+        this.handlers.put(CopilotSkill.SUBMISSION_STATUS, submissionStatus);
+        this.handlers.put(CopilotSkill.EXPLAIN_SUBMISSION_STRATEGY, submissionStatus);
+        this.handlers.put(CopilotSkill.EXPLAIN_APPLICATION_STATUS, explainApplicationStatus);
 
         this.fallback = generalAssistant;
 
@@ -104,6 +115,16 @@ public class CopilotSkillRouter {
      */
     private CopilotSkill inferSkillFromMessage(String message) {
         String lower = message.toLowerCase();
+
+        // Applications Page command-center intents — checked first (specific phrasing) so they win
+        // over the more generic INTERVIEW_PREPARATION/APPLICATION_STRATEGY branches below.
+        if ((lower.contains("stuck") || lower.contains("why is this application") || lower.contains("why hasn't")
+                || lower.contains("improve my chances") || lower.contains("chances of getting")
+                || lower.contains("should i follow up") || lower.contains("follow-up email") || lower.contains("follow up email")
+                || lower.contains("outreach email") || lower.contains("predict") && lower.contains("interview")
+                || lower.contains("this application"))) {
+            return CopilotSkill.EXPLAIN_APPLICATION_STATUS;
+        }
 
         if (lower.contains("resume") && (lower.contains("improve") || lower.contains("analyze") || lower.contains("review"))) {
             return CopilotSkill.RESUME_ANALYSIS;
@@ -151,6 +172,11 @@ public class CopilotSkillRouter {
         if (lower.contains("recommend")) {
             return CopilotSkill.PERSONALIZED_RECOMMENDATIONS;
         }
+        if ((lower.contains("provider") || lower.contains("source") || lower.contains("ingestion"))
+                && (lower.contains("job") || lower.contains("discovery") || lower.contains("health")
+                    || lower.contains("down") || lower.contains("failing"))) {
+            return CopilotSkill.JOB_DISCOVERY_HEALTH;
+        }
         // Phase 7.13 — company intelligence intents. Checked after the specific skills above so
         // e.g. "interview" alone still routes to INTERVIEW_PREPARATION as before (additive routing).
         if (lower.contains("compare") && (lower.contains("company") || lower.contains("companies"))) {
@@ -178,6 +204,29 @@ public class CopilotSkillRouter {
         if ((lower.contains("about") || lower.contains("explain") || lower.contains("tell me")
                 || lower.contains("know")) && lower.contains("company")) {
             return CopilotSkill.EXPLAIN_COMPANY;
+        }
+        // Phase 7.15 — STAR story intents, checked after the more specific skills above.
+        if (lower.contains("star") && (lower.contains("story") || lower.contains("stories"))
+                && (lower.contains("best") || lower.contains("suggest") || lower.contains("which")
+                    || lower.contains("missing"))) {
+            return CopilotSkill.SUGGEST_STAR_STORY;
+        }
+        if ((lower.contains("star") && (lower.contains("story") || lower.contains("stories")))
+                || (lower.contains("behavioral") && lower.contains("story"))
+                || (lower.contains("bullet") && lower.contains("star"))) {
+            return CopilotSkill.GENERATE_STAR_STORY;
+        }
+
+        // Phase 7.16 — application submission pipeline intents, checked after the more specific
+        // skills above so e.g. "application strategy" alone still routes to APPLICATION_STRATEGY.
+        if (lower.contains("submission status") || (lower.contains("submission") && lower.contains("status"))) {
+            return CopilotSkill.SUBMISSION_STATUS;
+        }
+        if (lower.contains("why human approval") || (lower.contains("why") && lower.contains("submission") && lower.contains("fail"))) {
+            return CopilotSkill.SUBMISSION_STATUS;
+        }
+        if (lower.contains("submission strategy")) {
+            return CopilotSkill.EXPLAIN_SUBMISSION_STRATEGY;
         }
 
         return null;

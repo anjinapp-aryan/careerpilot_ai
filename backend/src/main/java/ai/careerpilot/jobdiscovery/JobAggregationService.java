@@ -12,9 +12,11 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * Orchestrates a discovery run: for each configured provider, fetch → normalize → upsert
@@ -32,23 +34,40 @@ public class JobAggregationService {
     private final JobRepository jobs;
     private final JobFetchAuditRepository audits;
     private final WorkflowEventProducer events;
+    private final JobDiscoveryHealthTracker health;
 
     public JobAggregationService(List<JobProvider> providers,
                                  JobNormalizer normalizer,
                                  JobRepository jobs,
                                  JobFetchAuditRepository audits,
-                                 WorkflowEventProducer events) {
+                                 WorkflowEventProducer events,
+                                 JobDiscoveryHealthTracker health) {
         this.providers = providers;
         this.normalizer = normalizer;
         this.jobs = jobs;
         this.audits = audits;
         this.events = events;
+        this.health = health;
     }
 
     /** Result summary for the manual-trigger endpoint and logs. */
     public record DiscoverySummary(int providersRun, int totalFetched, int totalPersisted) {}
 
     public DiscoverySummary discoverAll() {
+        return discoverAll(null);
+    }
+
+    /**
+     * Backfill variant: {@code window} (when non-null) restricts persisted jobs to those whose
+     * {@code postedDate} falls within the window, e.g. {@code Duration.ofHours(24)} for a "last
+     * 24h" backfill. This is a <b>client-side filter applied after fetch</b> — none of the
+     * underlying source APIs (Greenhouse/Lever/Ashby/SmartRecruiters/RemoteOK/Arbeitnow/
+     * Adzuna/Jooble) support server-side date-range queries, so a windowed backfill still fetches
+     * each provider's full current listing and discards out-of-window rows locally. Jobs with no
+     * {@code postedDate} are conservatively excluded from windowed runs (we can't verify they're
+     * within the window), matching {@code jobsRejected} in the audit/health tracker.
+     */
+    public DiscoverySummary discoverAll(Duration window) {
         int providersRun = 0, totalFetched = 0, totalPersisted = 0;
         for (JobProvider provider : providers) {
             if (!provider.isConfigured()) {
@@ -56,7 +75,7 @@ public class JobAggregationService {
                 continue;
             }
             providersRun++;
-            DiscoverySummary one = runProvider(provider);
+            DiscoverySummary one = runProvider(provider, window);
             totalFetched += one.totalFetched();
             totalPersisted += one.totalPersisted();
         }
@@ -67,17 +86,46 @@ public class JobAggregationService {
         return summary;
     }
 
-    private DiscoverySummary runProvider(JobProvider provider) {
+    /**
+     * Run exactly one named provider (case-insensitive match against {@link JobProvider#name()}).
+     * Returns {@link Optional#empty()} when no provider with that name is registered. When the
+     * matched provider is registered but not currently configured (e.g. missing API key/board
+     * tokens), returns a zeroed {@link DiscoverySummary} rather than throwing — mirrors
+     * {@link #discoverAll()}'s "skip unconfigured" behavior for a single-provider backfill.
+     */
+    public Optional<DiscoverySummary> discoverProvider(String providerName) {
+        return discoverProvider(providerName, null);
+    }
+
+    /** Single-provider backfill with an optional time window — see {@link #discoverAll(Duration)}. */
+    public Optional<DiscoverySummary> discoverProvider(String providerName, Duration window) {
+        JobProvider match = providers.stream()
+                .filter(p -> p.name().equalsIgnoreCase(providerName))
+                .findFirst()
+                .orElse(null);
+        if (match == null) return Optional.empty();
+        if (!match.isConfigured()) {
+            log.debug("discoverProvider: {} is not configured; nothing to run", providerName);
+            return Optional.of(new DiscoverySummary(0, 0, 0));
+        }
+        return Optional.of(runProvider(match, window));
+    }
+
+    private DiscoverySummary runProvider(JobProvider provider, Duration window) {
         JobFetchAudit audit = audits.save(JobFetchAudit.builder()
                 .provider(provider.name()).status("RUNNING").build());
+        long startedAt = System.currentTimeMillis();
         try {
             List<RawJob> raw = provider.fetch();
-            int persisted = persist(provider.name(), raw);
+            List<RawJob> toPersist = window == null ? raw : filterByWindow(raw, window);
+            int persisted = persist(provider.name(), toPersist);
             audit.setJobsFetched(raw.size());
             audit.setJobsPersisted(persisted);
             audit.setStatus("SUCCESS");
             audit.setFinishedAt(Instant.now());
             audits.save(audit);
+            health.recordSuccess(provider.name(), System.currentTimeMillis() - startedAt,
+                    raw.size(), persisted, raw.size() - persisted);
             return new DiscoverySummary(1, raw.size(), persisted);
         } catch (Exception e) {
             log.warn("Provider {} fetch failed: {}", provider.name(), e.toString());
@@ -85,8 +133,28 @@ public class JobAggregationService {
             audit.setErrorMessage(truncate(e.toString(), 1000));
             audit.setFinishedAt(Instant.now());
             audits.save(audit);
+            health.recordFailure(provider.name(), System.currentTimeMillis() - startedAt, e.toString());
             return new DiscoverySummary(1, 0, 0);
         }
+    }
+
+    /** Client-side postedDate filter for windowed backfills — see {@link #discoverAll(Duration)}. */
+    static List<RawJob> filterByWindow(List<RawJob> raw, Duration window) {
+        Instant cutoff = Instant.now().minus(window);
+        return raw.stream()
+                .filter(r -> r.postedDate() != null && !r.postedDate().isBefore(cutoff))
+                .toList();
+    }
+
+    /**
+     * Phase 5.3.1 — public entry point for callers that fetch outside the standard
+     * {@link #discoverAll()}/{@link #discoverProvider(String)} loop (e.g.
+     * {@code CompanyConnectorService}'s single-connector manual sync) but still want the exact
+     * same normalize/dedupe/upsert logic — reuses {@link #persist(String, List)} rather than
+     * duplicating it.
+     */
+    public int persistRawJobs(String source, List<RawJob> raw) {
+        return persist(source, raw);
     }
 
     /** Upsert each raw job; existing rows (same source+external_id) are refreshed in place. */

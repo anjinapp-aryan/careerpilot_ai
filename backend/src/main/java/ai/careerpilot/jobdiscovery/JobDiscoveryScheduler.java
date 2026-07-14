@@ -21,17 +21,20 @@ public class JobDiscoveryScheduler {
     private final ai.careerpilot.jobdiscovery.enrich.JobAiEnrichmentService enrichment;
     private final ai.careerpilot.jobdiscovery.dedup.JobDuplicateDetectionService dedup;
     private final boolean enabled;
+    private final boolean hourlyEnabled;
 
     public JobDiscoveryScheduler(JobAggregationService aggregation,
                                  JobEmbeddingService embeddings,
                                  ai.careerpilot.jobdiscovery.enrich.JobAiEnrichmentService enrichment,
                                  ai.careerpilot.jobdiscovery.dedup.JobDuplicateDetectionService dedup,
-                                 @Value("${jobs.discovery.enabled:true}") boolean enabled) {
+                                 @Value("${jobs.discovery.enabled:true}") boolean enabled,
+                                 @Value("${jobs.discovery.hourly.enabled:false}") boolean hourlyEnabled) {
         this.aggregation = aggregation;
         this.embeddings = embeddings;
         this.enrichment = enrichment;
         this.dedup = dedup;
         this.enabled = enabled;
+        this.hourlyEnabled = hourlyEnabled;
     }
 
     @Scheduled(cron = "${jobs.discovery.cron:0 0 6 * * *}")
@@ -41,6 +44,26 @@ public class JobDiscoveryScheduler {
             return;
         }
         log.info("Scheduled job discovery starting");
+        runPipeline();
+    }
+
+    /**
+     * Optional hourly cadence, gated by its own flag and off by default. Deliberately added as a
+     * second {@code @Scheduled} method on this same class (not a second scheduler class) — it
+     * reuses {@link #runPipeline()} so the embed/enrich/dedup post-processing stays identical to
+     * the daily run, and enabling it is a one-flag change plus this method, not new orchestration.
+     */
+    @Scheduled(cron = "${jobs.discovery.hourly.cron:0 0 * * * *}")
+    public void runHourly() {
+        if (!hourlyEnabled) {
+            log.debug("Hourly job discovery disabled; skipping scheduled run");
+            return;
+        }
+        log.info("Scheduled hourly job discovery starting");
+        runPipeline();
+    }
+
+    private void runPipeline() {
         aggregation.discoverAll();
         // Embed newly-discovered jobs (capped, idempotent). No-op unless embeddings are enabled;
         // isolated so an embedding failure never affects the discovery run that just succeeded.

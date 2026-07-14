@@ -72,6 +72,11 @@ services:
       redis:
         condition: service_healthy
     environment:
+      # Overrides the Dockerfile's Render-tuned JAVA_OPTS (160m metaspace cap, sized for
+      # Render's 512MB free tier). Local dev has no such constraint, and the tight cap was
+      # causing OutOfMemoryError: Metaspace here. Render deploys don't set this var, so they
+      # keep using the Dockerfile default.
+      JAVA_OPTS: ${JAVA_OPTS:--XX:MaxRAMPercentage=75 -XX:+UseContainerSupport -XX:+UseSerialGC}
       DATABASE_URL: ${DATABASE_URL}
       SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER}
       SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD}
@@ -200,6 +205,35 @@ services:
       ADZUNA_APP_KEY: ${ADZUNA_APP_KEY:-}
       ADZUNA_COUNTRIES: ${ADZUNA_COUNTRIES:-in,us,gb}
       JOOBLE_API_KEY: ${JOOBLE_API_KEY:-}
+      # Keyless job-board providers (Greenhouse/Lever/Ashby/SmartRecruiters) — no signup needed,
+      # just a CSV of board tokens/company slugs/org slugs/company IDs. Empty = provider skipped.
+      CAREER_DISCOVERY_GREENHOUSE_ENABLED: ${CAREER_DISCOVERY_GREENHOUSE_ENABLED:-false}
+      CAREER_DISCOVERY_GREENHOUSE_BOARDS: ${CAREER_DISCOVERY_GREENHOUSE_BOARDS:-}
+      CAREER_DISCOVERY_LEVER_ENABLED: ${CAREER_DISCOVERY_LEVER_ENABLED:-false}
+      CAREER_DISCOVERY_LEVER_COMPANIES: ${CAREER_DISCOVERY_LEVER_COMPANIES:-}
+      CAREER_DISCOVERY_ASHBY_ENABLED: ${CAREER_DISCOVERY_ASHBY_ENABLED:-false}
+      CAREER_DISCOVERY_ASHBY_ORGS: ${CAREER_DISCOVERY_ASHBY_ORGS:-}
+      CAREER_DISCOVERY_SMARTRECRUITERS_ENABLED: ${CAREER_DISCOVERY_SMARTRECRUITERS_ENABLED:-false}
+      CAREER_DISCOVERY_SMARTRECRUITERS_COMPANIES: ${CAREER_DISCOVERY_SMARTRECRUITERS_COMPANIES:-}
+      CAREER_DISCOVERY_AI_DEV_JOBS_ENABLED: ${CAREER_DISCOVERY_AI_DEV_JOBS_ENABLED:-false}
+      CAREER_DISCOVERY_DEVITJOBS_ENABLED: ${CAREER_DISCOVERY_DEVITJOBS_ENABLED:-false}
+      CAREER_DISCOVERY_GRAPHQL_JOBS_ENABLED: ${CAREER_DISCOVERY_GRAPHQL_JOBS_ENABLED:-false}
+      # Phase 7.16 — Real Application Submission Pipeline. Default off; flip on for local testing.
+      APPLICATION_SUBMISSION_ENABLED: ${APPLICATION_SUBMISSION_ENABLED:-false}
+      APPLICATION_SUBMISSION_AUTO_ENABLED: ${APPLICATION_SUBMISSION_AUTO_ENABLED:-false}
+      APPLICATION_SUBMISSION_MANUAL_ENABLED: ${APPLICATION_SUBMISSION_MANUAL_ENABLED:-false}
+      APPLICATION_SUBMISSION_APPROVAL_ENABLED: ${APPLICATION_SUBMISSION_APPROVAL_ENABLED:-false}
+      APPLICATION_SUBMISSION_DIAGNOSTICS_ENABLED: ${APPLICATION_SUBMISSION_DIAGNOSTICS_ENABLED:-false}
+      # AI Review (7.12) — master + per-reviewer flags; the submission pipeline's REVIEW_READY stage
+      # produces real content only when these are on. Default off (dark).
+      APPLICATION_REVIEW_ENABLED: ${APPLICATION_REVIEW_ENABLED:-false}
+      APPLICATION_REVIEW_RESUME_ENABLED: ${APPLICATION_REVIEW_RESUME_ENABLED:-false}
+      APPLICATION_REVIEW_ATS_ENABLED: ${APPLICATION_REVIEW_ATS_ENABLED:-false}
+      APPLICATION_REVIEW_CONSISTENCY_ENABLED: ${APPLICATION_REVIEW_CONSISTENCY_ENABLED:-false}
+      APPLICATION_REVIEW_QUALITY_ENABLED: ${APPLICATION_REVIEW_QUALITY_ENABLED:-false}
+      # Company Intelligence (7.13) knowledge store — the COMPANY_READY stage reads a brief from it,
+      # but only if company knowledge has actually been generated for the target company. Default off.
+      COMPANY_KNOWLEDGE_ENABLED: ${COMPANY_KNOWLEDGE_ENABLED:-false}
       # Phase 2 Increment A — pgvector semantic embeddings (reuses GEMINI_API_KEY). Default off.
       EMBEDDINGS_ENABLED: ${EMBEDDINGS_ENABLED:-false}
       EMBEDDINGS_MAX_PER_RUN: ${EMBEDDINGS_MAX_PER_RUN:-200}

@@ -47,6 +47,7 @@ public class CopilotSkillRouter {
             StoryGenerationHandler storyGeneration,
             SubmissionStatusHandler submissionStatus,
             ExplainApplicationStatusHandler explainApplicationStatus,
+            OfferIntelligenceHandler offerIntelligence,
             GeneralAssistantHandler generalAssistant) {
 
         this.handlers = new EnumMap<>(CopilotSkill.class);
@@ -78,6 +79,8 @@ public class CopilotSkillRouter {
         this.handlers.put(CopilotSkill.SUBMISSION_STATUS, submissionStatus);
         this.handlers.put(CopilotSkill.EXPLAIN_SUBMISSION_STRATEGY, submissionStatus);
         this.handlers.put(CopilotSkill.EXPLAIN_APPLICATION_STATUS, explainApplicationStatus);
+        this.handlers.put(CopilotSkill.EXPLAIN_OFFER, offerIntelligence);
+        this.handlers.put(CopilotSkill.COMPARE_OFFERS, offerIntelligence);
 
         this.fallback = generalAssistant;
 
@@ -227,6 +230,17 @@ public class CopilotSkillRouter {
         }
         if (lower.contains("submission strategy")) {
             return CopilotSkill.EXPLAIN_SUBMISSION_STRATEGY;
+        }
+
+        // Gap B — Offer Intelligence & Salary Negotiation intents, checked after SALARY_GUIDANCE
+        // so a bare "salary"/"compensation" question keeps routing there; these are the
+        // offer-specific phrasings.
+        if (lower.contains("compare") && lower.contains("offer")) {
+            return CopilotSkill.COMPARE_OFFERS;
+        }
+        if (lower.contains("offer") && (lower.contains("explain") || lower.contains("negotiat")
+                || lower.contains("leverage") || lower.contains("percentile") || lower.contains("market rate"))) {
+            return CopilotSkill.EXPLAIN_OFFER;
         }
 
         return null;

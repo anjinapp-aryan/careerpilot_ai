@@ -476,6 +476,12 @@ export interface CareerStrategySnapshot {
   marketDemandScore?: number | null;
   recommendedTrajectory?: string | null;
   computedAt?: string | null;
+  // Gap C — Career Coach roadmap persistence (V61). Absent/null until a workflow run has been
+  // captured with `career.roadmap.persistence.enabled=true`.
+  roadmap3Month?: string | null;
+  roadmap6Month?: string | null;
+  roadmap12Month?: string | null;
+  skillGapsJson?: string | null;
 }
 
 /** `GET /api/workflow/career-learning` response (Phase 6.5). Absent/empty fields when
@@ -911,4 +917,63 @@ export interface TimelineEntry {
   confidence?: number | null;
   details?: string | null;
   occurredAt?: string | null;
+}
+
+/** Gap B — Offer Intelligence & Salary Negotiation. Mirrors the `Offer` entity (V61). */
+export interface Offer {
+  id: string;
+  userId: string;
+  jobId?: string | null;
+  companyName?: string | null;
+  baseSalary?: number | null;
+  bonus?: number | null;
+  rsuValue?: number | null;
+  equityDescription?: string | null;
+  benefitsSummary?: string | null;
+  joiningBonus?: number | null;
+  currency?: string | null;
+  source: 'MANUAL' | 'SALARY_INTELLIGENCE_AGENT';
+  marketP25?: number | null;
+  marketP50?: number | null;
+  marketP75?: number | null;
+  marketP90?: number | null;
+  negotiationStrategy?: string | null;
+  leveragePoints?: string | null;
+  sourceThreadId?: string | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+}
+
+/** Body for `POST /api/offers` — manual offer entry. */
+export interface ManualOfferRequest {
+  jobId?: string | null;
+  companyName?: string | null;
+  baseSalary?: number | null;
+  bonus?: number | null;
+  rsuValue?: number | null;
+  equityDescription?: string | null;
+  benefitsSummary?: string | null;
+  joiningBonus?: number | null;
+  currency?: string | null;
+}
+
+/** One row of `GET /api/offers/compare` — deterministic per-component comparison. */
+export interface OfferComparisonRow {
+  offerId: string;
+  companyName?: string | null;
+  currency?: string | null;
+  components: {
+    baseSalary: number;
+    bonus: number;
+    rsuValue: number;
+    joiningBonus: number;
+    totalComp: number;
+  };
+  deltaFromHighest?: number | null;
+}
+
+/** `GET /api/offers/compare` response. */
+export interface OfferComparisonResult {
+  rows: OfferComparisonRow[];
+  highestOfferId?: string | null;
 }

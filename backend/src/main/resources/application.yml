@@ -637,14 +637,23 @@ application.analytics:
     max-pool-size: ${APPLICATION_ANALYTICS_EXECUTOR_MAX_POOL_SIZE:2}
     queue-capacity: ${APPLICATION_ANALYTICS_EXECUTOR_QUEUE_CAPACITY:100}
 browser.automation:
-  # INERT STUB. No Playwright dependency exists; every action throws. Flag has no real effect.
+  # Gap D — REAL headless-Chromium engine (Playwright), lazily launched only on first use. Still
+  # defaults false: nothing launches a browser process until this is explicitly flipped on, AND
+  # even then only Greenhouse/Lever (guest-apply-eligible, see GuestApplyEligibility — hardcoded,
+  # not flag-controlled) ever reach the real path; every other connector still resolves to ABORTED
+  # exactly as before Gap D.
   enabled: ${BROWSER_AUTOMATION_ENABLED:false}
+  # Diagnostics-visibility only (same precedent as WellfoundProvider#isFlagEnabled) — the actual
+  # guest-apply-only enforcement is a hardcoded connector allowlist (GuestApplyEligibility), NOT
+  # this flag, and this flag must not be made configurable to false.
+  guest-apply-only: ${BROWSER_AUTOMATION_GUEST_APPLY_ONLY:true}
   executor:
     core-pool-size: ${BROWSER_AUTOMATION_EXECUTOR_CORE_POOL_SIZE:1}
     max-pool-size: ${BROWSER_AUTOMATION_EXECUTOR_MAX_POOL_SIZE:2}
     queue-capacity: ${BROWSER_AUTOMATION_EXECUTOR_QUEUE_CAPACITY:20}
 ats.connector:
-  # Every connector is an unconfigured stub; submit() throws. Flag has no real effect.
+  # Greenhouse/Lever now real (Gap D, gated by browser.automation.enabled + GuestApplyEligibility);
+  # every other connector remains an unconfigured stub whose submit() throws.
   enabled: ${ATS_CONNECTOR_ENABLED:false}
   executor:
     core-pool-size: ${ATS_CONNECTOR_EXECUTOR_CORE_POOL_SIZE:2}
@@ -848,9 +857,43 @@ career:
       # from OPEN to HALF_OPEN (diagnostics-only; does not gate actual fetch calls — see the
       # tracker's javadoc for why full Resilience4j wiring per job-provider is out of scope here).
       circuit-cooldown-ms: ${CAREER_DISCOVERY_HEALTH_CIRCUIT_COOLDOWN_MS:300000}
+    # ---- Gap A: Company Discovery Agent probe sources (CompanySource impls). Base URLs mirror
+    # the already-verified Greenhouse/Ashby/SmartRecruiters job-provider endpoints one level up
+    # (career.discovery.greenhouse/ashby/smartrecruiters.*) — separate keys here since a probe
+    # source is gated by the single company.discovery.enabled master flag below, not its own.
+    company-agent:
+      greenhouse:
+        base-url: ${CAREER_DISCOVERY_COMPANY_AGENT_GREENHOUSE_BASE_URL:https://boards-api.greenhouse.io/v1}
+      ashby:
+        base-url: ${CAREER_DISCOVERY_COMPANY_AGENT_ASHBY_BASE_URL:https://api.ashbyhq.com}
+      smartrecruiters:
+        base-url: ${CAREER_DISCOVERY_COMPANY_AGENT_SMARTRECRUITERS_BASE_URL:https://api.smartrecruiters.com}
+      # CSV of candidate slugs to probe. Greenhouse/Ashby/SmartRecruiters expect a flat slug (e.g.
+      # "acme"); Workday expects "tenant;cluster;site" (see WorkdayCompanySource). Empty by
+      # default — never a hardcoded company list, matching every other provider in this codebase.
+      candidates: ${CAREER_DISCOVERY_COMPANY_AGENT_CANDIDATES:}
+  # ---- Gap C — Career Coach roadmap persistence (V61, additive, dark) ----
+  # Gates CareerRoadmapPersistenceService's parse+persist of the LangGraph career_strategy
+  # agent's 3/6/12-month roadmap + skill_gaps into the existing career_strategy row. Reads never
+  # require this flag — the UI section simply renders empty when nothing has been persisted yet.
+  roadmap:
+    persistence:
+      enabled: ${CAREER_ROADMAP_PERSISTENCE_ENABLED:false}
 
-# ---- Phase 7.8/7.9/7.7 Company research, interview prep, calendar (dark) ----
+# ---- Gap A: Company Discovery Agent (dark). Weekly, low-frequency background probe of
+# Greenhouse/Ashby/SmartRecruiters/Workday's real keyless public endpoints for candidate company
+# slugs (never a hardcoded company list — see career.discovery.company-agent.candidates above).
+# Hits land in company_connectors with discovery_status=PENDING_APPROVAL, enabled=false, awaiting
+# admin review via /api/company-discovery/{id}/approve|reject. Ships fully dark: enabled=false.
 company:
+  discovery:
+    enabled: ${COMPANY_DISCOVERY_ENABLED:false}
+    cron: ${COMPANY_DISCOVERY_CRON:0 0 5 * * MON}
+    # Candidate slugs live at career.discovery.company-agent.candidates (see above) — kept under
+    # the career.discovery.* namespace alongside every other discovery-provider CSV config, not
+    # duplicated here.
+    health:
+      circuit-cooldown-ms: ${COMPANY_DISCOVERY_HEALTH_CIRCUIT_COOLDOWN_MS:300000}
   research:
     enabled: ${COMPANY_RESEARCH_ENABLED:false}
 interview:
@@ -944,6 +987,15 @@ story:
     core-pool-size: ${STORY_EXECUTOR_CORE_POOL_SIZE:2}
     max-pool-size: ${STORY_EXECUTOR_MAX_POOL_SIZE:4}
     queue-capacity: ${STORY_EXECUTOR_QUEUE_CAPACITY:200}
+
+# ---- Gap B — Offer Intelligence & Salary Negotiation (V61, additive, dark) ----
+# Gates OfferAnalysisService's parse+persist of the LangGraph salary_intelligence agent's output
+# into the offers table, plus OfferController's writes (reads degrade to empty list when off).
+# Never generates legal/financial advice — informational/factual only (enforced in the Copilot
+# system prompt, not by this flag).
+offer:
+  intelligence:
+    enabled: ${OFFER_INTELLIGENCE_ENABLED:false}
 
 logging:
   level:

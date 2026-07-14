@@ -70,6 +70,7 @@ public class ApprovalService {
                     .applicationPackageId(applicationPackageId)
                     .safetyVerdict(verdict)
                     .status(ApprovalQueueEntry.STATUS_PENDING)
+                    .approvalType(ApprovalQueueEntry.TYPE_APPLICATION_PACKAGE)
                     .build());
             metrics.recordEnqueued();
             record(userId, jobId, entry.getId(), ApprovalAuditEntry.OUTCOME_ENQUEUED, "verdict=" + verdict);
@@ -82,8 +83,49 @@ public class ApprovalService {
         }
     }
 
+    /**
+     * Gap D — park a PENDING approval request for the NEW "approve this specific filled form"
+     * screenshot gate (see {@link ai.careerpilot.execution.browser.GuestApplyAutomationService}),
+     * distinct from {@link #enqueue}'s package-level approval — do not conflate the two. A human
+     * approves/rejects this row through the SAME existing {@code /api/execution/approve|reject}
+     * endpoints as a package approval (same table, same state machine); the only difference is
+     * {@code approvalType} and the attached {@code executionId}/{@code screenshotId}. Empty when
+     * disabled. Never throws.
+     */
+    @Transactional
+    public Optional<ApprovalQueueEntry> enqueueFormScreenshot(UUID userId, UUID jobId, UUID applicationPackageId,
+                                                               UUID executionId, UUID screenshotId, String verdict) {
+        if (!enabled) return Optional.empty();
+        try {
+            ApprovalQueueEntry entry = queue.save(ApprovalQueueEntry.builder()
+                    .userId(userId).jobId(jobId)
+                    .applicationPackageId(applicationPackageId)
+                    .safetyVerdict(verdict)
+                    .status(ApprovalQueueEntry.STATUS_PENDING)
+                    .approvalType(ApprovalQueueEntry.TYPE_FORM_SCREENSHOT)
+                    .executionId(executionId)
+                    .screenshotId(screenshotId)
+                    .build());
+            metrics.recordEnqueued();
+            record(userId, jobId, entry.getId(), ApprovalAuditEntry.OUTCOME_ENQUEUED,
+                    "type=FORM_SCREENSHOT execution=" + executionId + " screenshot=" + screenshotId);
+            log.info("APPROVAL_ENQUEUED_FORM_SCREENSHOT user={} job={} execution={} id={}",
+                    userId, jobId, executionId, entry.getId());
+            return Optional.of(entry);
+        } catch (Exception e) {
+            record(userId, jobId, null, ApprovalAuditEntry.OUTCOME_ERROR, e.toString());
+            log.warn("APPROVAL_ENQUEUE_FORM_SCREENSHOT error user={} job={}: {}", userId, jobId, e.toString());
+            return Optional.empty();
+        }
+    }
+
     public List<ApprovalQueueEntry> pending(UUID userId) {
         return queue.findByUserIdAndStatusOrderByRequestedAtDesc(userId, ApprovalQueueEntry.STATUS_PENDING);
+    }
+
+    /** Look up an approval entry by id, regardless of owner — used only by internal event-driven workers. */
+    public Optional<ApprovalQueueEntry> findById(UUID approvalId) {
+        return queue.findById(approvalId);
     }
 
     /** Human approval. PENDING -> APPROVED + publishes {@link ApprovalGrantedEvent}. 404/403/409 guarded. */

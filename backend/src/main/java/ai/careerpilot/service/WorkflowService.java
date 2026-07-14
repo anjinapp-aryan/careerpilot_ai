@@ -8,9 +8,11 @@ import ai.careerpilot.domain.Job;
 import ai.careerpilot.domain.Resume;
 import ai.careerpilot.domain.WorkflowRun;
 import ai.careerpilot.kafka.WorkflowEventProducer;
+import ai.careerpilot.offer.OfferAnalysisService;
 import ai.careerpilot.repo.JobRepository;
 import ai.careerpilot.repo.ResumeRepository;
 import ai.careerpilot.repo.WorkflowRunRepository;
+import ai.careerpilot.workflow.career.CareerRoadmapPersistenceService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -34,17 +36,22 @@ public class WorkflowService {
     private final WorkflowRunRepository runs;
     private final WorkflowEventProducer events;
     private final ResumeVersionService resumeVersions;
+    private final OfferAnalysisService offerAnalysis;
+    private final CareerRoadmapPersistenceService careerRoadmapPersistence;
     private final ObjectMapper mapper = new ObjectMapper();
 
     public WorkflowService(AgentServiceClient agent, ResumeRepository resumes, JobRepository jobs,
                            WorkflowRunRepository runs, WorkflowEventProducer events,
-                           ResumeVersionService resumeVersions) {
+                           ResumeVersionService resumeVersions, OfferAnalysisService offerAnalysis,
+                           CareerRoadmapPersistenceService careerRoadmapPersistence) {
         this.agent = agent;
         this.resumes = resumes;
         this.jobs = jobs;
         this.runs = runs;
         this.events = events;
         this.resumeVersions = resumeVersions;
+        this.offerAnalysis = offerAnalysis;
+        this.careerRoadmapPersistence = careerRoadmapPersistence;
     }
 
     /**
@@ -308,9 +315,33 @@ public class WorkflowService {
         }
         WorkflowRun saved = runs.save(run);
         log.info("Workflow Updated: thread={}, status={}", saved.getThreadId(), saved.getStatus());
+        captureGapBAndGapC(saved, state);
         events.publish(saved.getThreadId(),
                 Map.of("threadId", saved.getThreadId(), "status", saved.getStatus(), "userId", saved.getUserId().toString()));
         return saved;
+    }
+
+    /**
+     * Gap B / Gap C — additive side effects, wired at the same point WorkflowService already
+     * inspects {@code salary_insights}/{@code career_roadmap} for its nonEmpty completion check
+     * (see {@link #stageProducedOutput}). Both the LangGraph {@code salary_intelligence} and
+     * {@code career_strategy} agents run BEFORE the human_approval gate, so their output is
+     * already present in {@code state} by the time a run first reaches INTERRUPTED — this fires
+     * on every transition (start + resume) and each service upserts idempotently, so repeated
+     * calls on the same run are safe. Never throws — a capture failure must never break the
+     * existing workflow persistence/response contract.
+     */
+    private void captureGapBAndGapC(WorkflowRun run, Map<String, Object> state) {
+        try {
+            offerAnalysis.captureFromWorkflow(run.getUserId(), run.getThreadId(), state);
+        } catch (Exception e) {
+            log.warn("Offer intelligence capture failed for thread={}: {}", run.getThreadId(), e.toString());
+        }
+        try {
+            careerRoadmapPersistence.captureFromWorkflow(run.getUserId(), state);
+        } catch (Exception e) {
+            log.warn("Career roadmap capture failed for thread={}: {}", run.getThreadId(), e.toString());
+        }
     }
 
     private Integer intOrNull(Map<String, Object> state, String field) {

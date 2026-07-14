@@ -19,6 +19,7 @@ public class ApplicationExecutionMetrics {
     private final AtomicLong aborted = new AtomicLong();
     private final AtomicLong failures = new AtomicLong();
     private final AtomicLong retries = new AtomicLong();
+    private final AtomicLong awaitingApproval = new AtomicLong();
     private final AtomicLong latencySumMs = new AtomicLong();
     private final AtomicLong latencyCount = new AtomicLong();
 
@@ -27,6 +28,8 @@ public class ApplicationExecutionMetrics {
     public void recordAborted() { aborted.incrementAndGet(); }
     public void recordFailure() { failures.incrementAndGet(); }
     public void recordRetry() { retries.incrementAndGet(); }
+    /** Gap D — a guest-apply execution parked awaiting the human form-screenshot approval. */
+    public void recordAwaitingApproval() { awaitingApproval.incrementAndGet(); }
 
     public void recordLatency(long ms) {
         latencySumMs.addAndGet(ms);
@@ -40,6 +43,7 @@ public class ApplicationExecutionMetrics {
         out.put("applicationExecutionAborted", aborted.get());
         out.put("applicationExecutionFailures", failures.get());
         out.put("applicationExecutionRetries", retries.get());
+        out.put("applicationExecutionAwaitingApproval", awaitingApproval.get());
         long count = latencyCount.get();
         out.put("applicationExecutionAvgLatencyMs", count == 0 ? 0 : latencySumMs.get() / count);
         return out;

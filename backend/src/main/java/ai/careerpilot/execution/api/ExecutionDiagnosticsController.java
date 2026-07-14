@@ -3,7 +3,9 @@ package ai.careerpilot.execution.api;
 import ai.careerpilot.execution.analytics.AnalyticsMetrics;
 import ai.careerpilot.execution.ats.ATSConnectorRegistry;
 import ai.careerpilot.execution.ats.AtsConnectorMetrics;
+import ai.careerpilot.execution.ats.GuestApplyEligibility;
 import ai.careerpilot.execution.browser.BrowserAutomationMetrics;
+import ai.careerpilot.execution.browser.GuestApplyAutomationService;
 import ai.careerpilot.execution.config.ExecutionExecutorsConfig;
 import ai.careerpilot.execution.execution.ApplicationExecutionMetrics;
 import ai.careerpilot.execution.tracking.TrackingMetrics;
@@ -34,6 +36,7 @@ public class ExecutionDiagnosticsController {
     private final TrackingMetrics trackingMetrics;
     private final AnalyticsMetrics analyticsMetrics;
     private final ATSConnectorRegistry atsRegistry;
+    private final GuestApplyAutomationService guestApply;
 
     private final ThreadPoolTaskExecutor executionExecutor;
     private final ThreadPoolTaskExecutor browserExecutor;
@@ -54,6 +57,7 @@ public class ExecutionDiagnosticsController {
             ApplicationExecutionMetrics executionMetrics, BrowserAutomationMetrics browserMetrics,
             AtsConnectorMetrics atsMetrics, TrackingMetrics trackingMetrics,
             AnalyticsMetrics analyticsMetrics, ATSConnectorRegistry atsRegistry,
+            GuestApplyAutomationService guestApply,
             @Qualifier(ExecutionExecutorsConfig.APPLICATION_EXECUTION_EXECUTOR) ThreadPoolTaskExecutor executionExecutor,
             @Qualifier(ExecutionExecutorsConfig.BROWSER_AUTOMATION_EXECUTOR) ThreadPoolTaskExecutor browserExecutor,
             @Qualifier(ExecutionExecutorsConfig.ATS_CONNECTOR_EXECUTOR) ThreadPoolTaskExecutor atsExecutor,
@@ -65,6 +69,7 @@ public class ExecutionDiagnosticsController {
         this.trackingMetrics = trackingMetrics;
         this.analyticsMetrics = analyticsMetrics;
         this.atsRegistry = atsRegistry;
+        this.guestApply = guestApply;
         this.executionExecutor = executionExecutor;
         this.browserExecutor = browserExecutor;
         this.atsExecutor = atsExecutor;
@@ -82,8 +87,16 @@ public class ExecutionDiagnosticsController {
     @GetMapping("/browser")
     public Map<String, Object> browser() {
         Map<String, Object> m = browserMetrics.snapshot();
-        return stage(browserEnabled, false, m, browserExecutor,
+        Map<String, Object> out = stage(browserEnabled, false, m, browserExecutor,
                 (Long) m.get("browserTotal"), (Long) m.get("browserFailures"));
+        // Gap D — diagnostics-visibility flag only; real enforcement is GuestApplyEligibility below.
+        out.put("guestApplyOnlyFlag", guestApply.isGuestApplyOnlyFlagEnabled());
+        out.put("guestApplyEligibleConnectors", java.util.List.of("greenhouse", "lever"));
+        out.put("browserRealSubmissions", m.get("browserRealSubmissions"));
+        out.put("browserSimulatedSubmissions", m.get("browserSimulatedSubmissions"));
+        out.put("captchaOrLoginWallDetected", m.get("browserCaptchaOrLoginWallDetected"));
+        out.put("formScreenshotApprovalsPending", m.get("browserFormScreenshotApprovalsPending"));
+        return out;
     }
 
     @GetMapping("/ats")
@@ -93,6 +106,10 @@ public class ExecutionDiagnosticsController {
                 (Long) m.get("atsTotal"), (Long) m.get("atsFailures"));
         out.put("atsConnectorsRegistered", atsRegistry.all().size());
         out.put("atsConnectorsConfigured", atsRegistry.configuredCount());
+        out.put("atsConnectorsGuestApplyEligible", atsRegistry.all().stream()
+                .filter(c -> GuestApplyEligibility.isEligible(c.name()))
+                .map(c -> c.name())
+                .toList());
         return out;
     }
 

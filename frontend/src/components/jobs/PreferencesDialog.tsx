@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { X } from 'lucide-react';
 import { api } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input, Label } from '@/components/ui/input';
@@ -20,6 +21,41 @@ interface PreferencesDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }
+
+/** Common target-role titles offered as one-click chips in "Preferred roles". Not an
+ *  enum/enforced value set — `preferredRoles` stays free-text end-to-end (see
+ *  CandidatePreferencesDto), so a custom role typed below is just as valid as a chip here. */
+const ROLE_OPTIONS = [
+  'Software Engineer',
+  'Senior Software Engineer',
+  'Lead Software Engineer',
+  'Principal Software Engineer',
+  'Staff Software Engineer',
+  'Software Architect',
+  'Solution Architect',
+  'Technical Architect',
+  'Enterprise Architect',
+  'Cloud Architect',
+  'AI Architect',
+  'Platform Engineer',
+  'Site Reliability Engineer (SRE)',
+  'DevOps Engineer',
+  'Backend Engineer',
+  'Java Developer',
+  'Senior Java Developer',
+  'Spring Boot Developer',
+  'Microservices Engineer',
+  'Full Stack Developer',
+  'React Developer',
+  'Frontend Engineer',
+  'AI Engineer',
+  'Machine Learning Engineer',
+  'Data Engineer',
+  'Distributed Systems Engineer',
+  'Platform Architect',
+  'Engineering Manager',
+  'Technical Lead',
+];
 
 const EMPTY: CandidatePreferences = {
   homeCountry: null,
@@ -64,11 +100,13 @@ export function PreferencesDialog({ open, onOpenChange }: PreferencesDialogProps
   const { toast } = useToast();
   const [form, setForm] = useState<CandidatePreferences>(EMPTY);
 
-  // Raw text for the four comma-separated fields, kept separate from `form`'s parsed arrays so a
-  // trailing "," while typing isn't immediately stripped by a parse-then-rejoin round trip.
+  // Raw text for the comma-separated country/city/excluded fields, kept separate from `form`'s
+  // parsed arrays so a trailing "," while typing isn't immediately stripped by a parse-then-rejoin
+  // round trip. "Preferred roles" is chip-picker driven instead, so it stays a plain array.
   const [countriesText, setCountriesText] = useState('');
   const [citiesText, setCitiesText] = useState('');
-  const [rolesText, setRolesText] = useState('');
+  const [preferredRolesList, setPreferredRolesList] = useState<string[]>([]);
+  const [customRole, setCustomRole] = useState('');
   const [excludedText, setExcludedText] = useState('');
 
   const { data, isLoading } = useQuery<CandidatePreferences>({
@@ -86,7 +124,7 @@ export function PreferencesDialog({ open, onOpenChange }: PreferencesDialogProps
       setForm(merged);
       setCountriesText(csv(merged.preferredCountries));
       setCitiesText(csv(merged.preferredCities));
-      setRolesText(csv(merged.preferredRoles));
+      setPreferredRolesList(merged.preferredRoles);
       setExcludedText(csv(merged.excludedRoles));
     }
   }, [data]);
@@ -98,7 +136,7 @@ export function PreferencesDialog({ open, onOpenChange }: PreferencesDialogProps
           ...form,
           preferredCountries: parseCsv(countriesText),
           preferredCities: parseCsv(citiesText),
-          preferredRoles: parseCsv(rolesText),
+          preferredRoles: preferredRolesList,
           excludedRoles: parseCsv(excludedText),
         })
       ).data,
@@ -162,11 +200,66 @@ export function PreferencesDialog({ open, onOpenChange }: PreferencesDialogProps
 
             <div>
               <Label>Preferred roles</Label>
-              <Input
-                value={rolesText}
-                onChange={(e) => setRolesText(e.target.value)}
-                placeholder="Java Architect, Backend Engineer"
-              />
+              <div className="flex flex-wrap gap-1.5">
+                {ROLE_OPTIONS.map((role) => {
+                  const selected = preferredRolesList.includes(role);
+                  return (
+                    <button
+                      key={role}
+                      type="button"
+                      onClick={() =>
+                        setPreferredRolesList((prev) =>
+                          selected ? prev.filter((r) => r !== role) : [...prev, role],
+                        )
+                      }
+                      className={cn(
+                        'rounded-full border px-3 py-1 text-xs font-medium transition-colors',
+                        selected
+                          ? 'border-primary bg-primary/10 text-primary'
+                          : 'border-border text-muted-foreground hover:bg-muted',
+                      )}
+                    >
+                      {role}
+                    </button>
+                  );
+                })}
+              </div>
+              {preferredRolesList.some((r) => !ROLE_OPTIONS.includes(r)) && (
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {preferredRolesList
+                    .filter((r) => !ROLE_OPTIONS.includes(r))
+                    .map((role) => (
+                      <span
+                        key={role}
+                        className="flex items-center gap-1 rounded-full border border-primary bg-primary/10 px-3 py-1 text-xs font-medium text-primary"
+                      >
+                        {role}
+                        <button
+                          type="button"
+                          onClick={() => setPreferredRolesList((prev) => prev.filter((r) => r !== role))}
+                          aria-label={`Remove ${role}`}
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      </span>
+                    ))}
+                </div>
+              )}
+              <div className="mt-2 flex gap-2">
+                <Input
+                  value={customRole}
+                  onChange={(e) => setCustomRole(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key !== 'Enter') return;
+                    e.preventDefault();
+                    const v = customRole.trim();
+                    if (v && !preferredRolesList.includes(v)) setPreferredRolesList((prev) => [...prev, v]);
+                    setCustomRole('');
+                  }}
+                  placeholder="Other role — type and press Enter"
+                  className="h-9 text-sm"
+                />
+              </div>
             </div>
 
             <div>

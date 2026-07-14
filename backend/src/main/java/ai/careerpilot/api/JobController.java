@@ -84,6 +84,21 @@ public class JobController {
     }
 
     /**
+     * Batch lookup by ID, unscoped by org — needed by Saved/Applied, since those job IDs come
+     * from the current user's own {@code Application} rows and may reference either an org-scoped
+     * job or a discovered-pool job (org_id IS NULL, which {@link #get} can never match).
+     */
+    @GetMapping("/by-ids")
+    public List<Job> byIds(AuthenticatedUser user, @RequestParam String ids) {
+        List<UUID> parsed = java.util.Arrays.stream(ids.split(","))
+                .map(String::trim)
+                .filter(s -> !s.isEmpty())
+                .map(UUID::fromString)
+                .toList();
+        return jobs.getByIds(parsed);
+    }
+
+    /**
      * Recommended Jobs: deterministic 6-factor scoring, no AI call. Gated to high-confidence
      * matches (score >= threshold, confidence >= MEDIUM). {@code filter} drives the tab chips
      * (all|remote|hybrid|onsite|visa|relocation|high|new).

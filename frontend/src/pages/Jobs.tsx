@@ -27,6 +27,7 @@ import { Input, Label, Textarea } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Tabs } from '@/components/ui/tabs';
+import { Pagination } from '@/components/ui/pagination';
 import { useToast } from '@/components/ui/toast';
 import {
   Dialog,
@@ -87,9 +88,14 @@ export default function Jobs() {
   const [relocationFilter, setRelocationFilter] = useState(false);
   const [countrySearch, setCountrySearch] = useState('');
 
+  const [browsePage, setBrowsePage] = useState(0);
+  const [browseSize, setBrowseSize] = useState(20);
+  useEffect(() => setBrowsePage(0), [q, smartSearch]);
+
   const { data, isLoading } = useQuery<JobsPage>({
-    queryKey: ['jobs', q],
-    queryFn: async () => (await api.get('/api/jobs', { params: { q } })).data,
+    queryKey: ['jobs', q, browsePage, browseSize],
+    queryFn: async () =>
+      (await api.get('/api/jobs', { params: { q, page: browsePage, size: browseSize } })).data,
     enabled: tab === 'browse' && !smartSearch,
   });
 
@@ -103,6 +109,12 @@ export default function Jobs() {
   });
 
   const isDiscoverTab = tab === 'domestic' || tab === 'international';
+  const [discoverPage, setDiscoverPage] = useState(0);
+  const [discoverSize, setDiscoverSize] = useState(20);
+  useEffect(
+    () => setDiscoverPage(0),
+    [tab, homeCountry, remoteTypeFilter, sponsorshipFilter, relocationFilter, countrySearch],
+  );
   const discoverParams =
     tab === 'international'
       ? {
@@ -112,10 +124,23 @@ export default function Jobs() {
           sponsorship: sponsorshipFilter || undefined,
           relocation: relocationFilter || undefined,
           q: countrySearch || undefined,
+          page: discoverPage,
+          size: discoverSize,
         }
-      : { scope: tab, country: homeCountry };
+      : { scope: tab, country: homeCountry, page: discoverPage, size: discoverSize };
   const { data: discoveredPage, isLoading: discoveredLoading } = useQuery<JobsPage>({
-    queryKey: ['jobs', 'discovered', tab, homeCountry, remoteTypeFilter, sponsorshipFilter, relocationFilter, countrySearch],
+    queryKey: [
+      'jobs',
+      'discovered',
+      tab,
+      homeCountry,
+      remoteTypeFilter,
+      sponsorshipFilter,
+      relocationFilter,
+      countrySearch,
+      discoverPage,
+      discoverSize,
+    ],
     queryFn: async () => (await api.get('/api/jobs/discovered', { params: discoverParams })).data,
     enabled: isDiscoverTab,
   });
@@ -142,9 +167,12 @@ export default function Jobs() {
   const preferredCountries = preferences?.preferredCountries ?? [];
 
   // Browse "more opportunities": global discovered pool minus high-confidence recommendations.
+  const [poolPageNum, setPoolPageNum] = useState(0);
+  const [poolSize, setPoolSize] = useState(20);
   const { data: poolPage } = useQuery<JobsPage>({
-    queryKey: ['jobs', 'pool'],
-    queryFn: async () => (await api.get('/api/jobs/pool')).data,
+    queryKey: ['jobs', 'pool', poolPageNum, poolSize],
+    queryFn: async () =>
+      (await api.get('/api/jobs/pool', { params: { page: poolPageNum, size: poolSize } })).data,
     enabled: tab === 'browse',
   });
   const poolJobs = poolPage?.content ?? [];
@@ -155,15 +183,23 @@ export default function Jobs() {
     enabled: tab === 'saved' || tab === 'applied',
   });
 
-  const { data: allJobsPage } = useQuery<JobsPage>({
-    queryKey: ['jobs', ''],
-    queryFn: async () => (await api.get('/api/jobs')).data,
-    enabled: tab === 'saved' || tab === 'applied',
+  // Saved/Applied jobs may reference either an org-scoped job or a discovered-pool job
+  // (org_id IS NULL). `/api/jobs` is org-scoped only and can never resolve the latter, so this
+  // batch-fetches by exact ID instead — see JobController#byIds.
+  const applicationJobIds = useMemo(
+    () => Array.from(new Set((applications ?? []).map((a) => a.jobId))),
+    [applications],
+  );
+  const { data: allJobsPage } = useQuery<Job[]>({
+    queryKey: ['jobs', 'by-ids', applicationJobIds],
+    queryFn: async () =>
+      (await api.get('/api/jobs/by-ids', { params: { ids: applicationJobIds.join(',') } })).data,
+    enabled: (tab === 'saved' || tab === 'applied') && applicationJobIds.length > 0,
   });
 
   const jobMap = useMemo(() => {
     const m = new Map<string, Job>();
-    (allJobsPage?.content ?? []).forEach((j) => m.set(j.id, j));
+    (allJobsPage ?? []).forEach((j) => m.set(j.id, j));
     return m;
   }, [allJobsPage]);
 
@@ -452,8 +488,8 @@ export default function Jobs() {
             {discoveredLoading
               ? 'Loading roles…'
               : tab === 'domestic'
-                ? `${discoveredJobs.length} role${discoveredJobs.length === 1 ? '' : 's'} in ${homeCountry}`
-                : `${discoveredJobs.length} role${discoveredJobs.length === 1 ? '' : 's'} in your preferred countries`}
+                ? `${discoveredPage?.totalElements ?? 0} role${discoveredPage?.totalElements === 1 ? '' : 's'} in ${homeCountry}`
+                : `${discoveredPage?.totalElements ?? 0} role${discoveredPage?.totalElements === 1 ? '' : 's'} in your preferred countries`}
           </p>
           {discoveredLoading ? (
             <div className="space-y-4">
@@ -480,6 +516,17 @@ export default function Jobs() {
                   busy={track.isPending}
                 />
               ))}
+              <Pagination
+                page={discoveredPage?.number ?? discoverPage}
+                totalPages={discoveredPage?.totalPages ?? 0}
+                totalElements={discoveredPage?.totalElements ?? 0}
+                size={discoveredPage?.size ?? discoverSize}
+                onPageChange={setDiscoverPage}
+                onSizeChange={(s) => {
+                  setDiscoverSize(s);
+                  setDiscoverPage(0);
+                }}
+              />
             </div>
           )}
         </div>
@@ -613,6 +660,19 @@ export default function Jobs() {
                   busy={track.isPending}
                 />
               ))}
+              {!smartSearch && (
+                <Pagination
+                  page={data?.number ?? browsePage}
+                  totalPages={data?.totalPages ?? 0}
+                  totalElements={data?.totalElements ?? 0}
+                  size={data?.size ?? browseSize}
+                  onPageChange={setBrowsePage}
+                  onSizeChange={(s) => {
+                    setBrowseSize(s);
+                    setBrowsePage(0);
+                  }}
+                />
+              )}
             </div>
           )}
 
@@ -621,7 +681,7 @@ export default function Jobs() {
             <div className="space-y-4 pt-2">
               <div className="flex items-center gap-2">
                 <h2 className="text-sm font-semibold text-foreground">More opportunities</h2>
-                <Badge tone="neutral">{poolJobs.length}</Badge>
+                <Badge tone="neutral">{poolPage?.totalElements ?? poolJobs.length}</Badge>
               </div>
               <p className="text-xs text-muted-foreground">
                 Discovered roles that didn’t clear your 70% match bar — still worth a look.
@@ -637,6 +697,17 @@ export default function Jobs() {
                   busy={track.isPending}
                 />
               ))}
+              <Pagination
+                page={poolPage?.number ?? poolPageNum}
+                totalPages={poolPage?.totalPages ?? 0}
+                totalElements={poolPage?.totalElements ?? 0}
+                size={poolPage?.size ?? poolSize}
+                onPageChange={setPoolPageNum}
+                onSizeChange={(s) => {
+                  setPoolSize(s);
+                  setPoolPageNum(0);
+                }}
+              />
             </div>
           )}
         </div>

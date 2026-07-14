@@ -146,6 +146,17 @@ public class JobAggregationService {
                 .toList();
     }
 
+    /**
+     * Phase 5.3.1 — public entry point for callers that fetch outside the standard
+     * {@link #discoverAll()}/{@link #discoverProvider(String)} loop (e.g.
+     * {@code CompanyConnectorService}'s single-connector manual sync) but still want the exact
+     * same normalize/dedupe/upsert logic — reuses {@link #persist(String, List)} rather than
+     * duplicating it.
+     */
+    public int persistRawJobs(String source, List<RawJob> raw) {
+        return persist(source, raw);
+    }
+
     /** Upsert each raw job; existing rows (same source+external_id) are refreshed in place. */
     @Transactional
     protected int persist(String source, List<RawJob> raw) {

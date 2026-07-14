@@ -27,6 +27,11 @@ public class Application {
     @Column(name = "next_action_at") private Instant nextActionAt;
     @Column(columnDefinition = "text") private String notes;
 
+    // ── Application Command Center (V58, additive) ──────────────────────────────
+    @Builder.Default private Boolean favorite = false;
+    @Builder.Default private String priority = "MEDIUM"; // LOW|MEDIUM|HIGH
+    @Builder.Default private Boolean archived = false;
+
     @CreationTimestamp @Column(name = "created_at", updatable = false) private Instant createdAt;
     @UpdateTimestamp @Column(name = "updated_at") private Instant updatedAt;
 }

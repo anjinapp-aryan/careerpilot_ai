@@ -114,6 +114,13 @@ public class SkillContext {
         if (s != null && s.enabled()) sources.add("Application Submission Pipeline");
     }
 
+    private ai.careerpilot.applications.dto.ApplicationCardDtos.ApplicationCardResponse applicationCommandCenter;
+    public ai.careerpilot.applications.dto.ApplicationCardDtos.ApplicationCardResponse applicationCommandCenter() { return applicationCommandCenter; }
+    public void applicationCommandCenter(ai.careerpilot.applications.dto.ApplicationCardDtos.ApplicationCardResponse a) {
+        this.applicationCommandCenter = a;
+        if (a != null) sources.add("Application Command Center");
+    }
+
     public Set<String> sources() { return sources; }
     public void addSource(String source) { sources.add(source); }
     public String sourcesBlock() {

@@ -46,6 +46,7 @@ public class CopilotSkillRouter {
             StoryRecommendationHandler storyRecommendation,
             StoryGenerationHandler storyGeneration,
             SubmissionStatusHandler submissionStatus,
+            ExplainApplicationStatusHandler explainApplicationStatus,
             GeneralAssistantHandler generalAssistant) {
 
         this.handlers = new EnumMap<>(CopilotSkill.class);
@@ -76,6 +77,7 @@ public class CopilotSkillRouter {
         this.handlers.put(CopilotSkill.GENERATE_STAR_STORY, storyGeneration);
         this.handlers.put(CopilotSkill.SUBMISSION_STATUS, submissionStatus);
         this.handlers.put(CopilotSkill.EXPLAIN_SUBMISSION_STRATEGY, submissionStatus);
+        this.handlers.put(CopilotSkill.EXPLAIN_APPLICATION_STATUS, explainApplicationStatus);
 
         this.fallback = generalAssistant;
 
@@ -113,6 +115,16 @@ public class CopilotSkillRouter {
      */
     private CopilotSkill inferSkillFromMessage(String message) {
         String lower = message.toLowerCase();
+
+        // Applications Page command-center intents — checked first (specific phrasing) so they win
+        // over the more generic INTERVIEW_PREPARATION/APPLICATION_STRATEGY branches below.
+        if ((lower.contains("stuck") || lower.contains("why is this application") || lower.contains("why hasn't")
+                || lower.contains("improve my chances") || lower.contains("chances of getting")
+                || lower.contains("should i follow up") || lower.contains("follow-up email") || lower.contains("follow up email")
+                || lower.contains("outreach email") || lower.contains("predict") && lower.contains("interview")
+                || lower.contains("this application"))) {
+            return CopilotSkill.EXPLAIN_APPLICATION_STATUS;
+        }
 
         if (lower.contains("resume") && (lower.contains("improve") || lower.contains("analyze") || lower.contains("review"))) {
             return CopilotSkill.RESUME_ANALYSIS;

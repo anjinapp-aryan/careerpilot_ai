@@ -13,6 +13,7 @@ import { useToast } from '@/components/ui/toast';
 import { WorkflowTraceExplorer } from '@/components/workflow/WorkflowTraceExplorer';
 import { DailyDiscoveryHealthPanel } from '@/components/admin/DailyDiscoveryHealthPanel';
 import { JobProviderHealthPanel } from '@/components/admin/JobProviderHealthPanel';
+import { EnterpriseConnectorPanel } from '@/components/admin/EnterpriseConnectorPanel';
 import { AutopilotHealthPanel } from '@/components/admin/AutopilotHealthPanel';
 import { PackageIntelligencePanel } from '@/components/admin/PackageIntelligencePanel';
 import { ReviewPipelinePanel } from '@/components/admin/ReviewPipelinePanel';
@@ -811,6 +812,9 @@ export default function AdminDashboard() {
 
       {/* Job Discovery: full 8-provider chain health (incl. Ashby/SmartRecruiters), circuit state. */}
       <JobProviderHealthPanel />
+
+      {/* Phase 5.3/5.3.1 — Enterprise ATS Connector Framework: Workday/Taleo/SuccessFactors, persistent Company Connector registry. */}
+      <EnterpriseConnectorPanel />
 
       {/* Phase 7 — Application Agent (autopilot) health + provider registry. */}
       <AutopilotHealthPanel />

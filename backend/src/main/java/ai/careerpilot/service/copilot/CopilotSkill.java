@@ -33,7 +33,9 @@ public enum CopilotSkill {
     GENERATE_STAR_STORY("generate_star_story", "Generate/improve STAR story"),
     // Phase 7.16 — Real Application Submission Pipeline
     SUBMISSION_STATUS("submission_status", "Application submission status"),
-    EXPLAIN_SUBMISSION_STRATEGY("explain_submission_strategy", "Explain submission strategy");
+    EXPLAIN_SUBMISSION_STRATEGY("explain_submission_strategy", "Explain submission strategy"),
+    // Applications Page — AI Job Application Command Center
+    EXPLAIN_APPLICATION_STATUS("explain_application_status", "Explain application status");
 
     private final String key;
     private final String displayName;

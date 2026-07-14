@@ -2,7 +2,14 @@ package ai.careerpilot.api;
 
 import ai.careerpilot.jobdiscovery.JobAggregationService;
 import ai.careerpilot.jobdiscovery.JobDiscoveryHealthTracker;
+import ai.careerpilot.jobdiscovery.enterprise.CompanyConnector;
+import ai.careerpilot.jobdiscovery.enterprise.CompanyConnectorService;
+import ai.careerpilot.jobdiscovery.provider.EnterpriseAtsCompanyConnector;
 import ai.careerpilot.jobdiscovery.provider.JobProvider;
+import ai.careerpilot.jobdiscovery.provider.SuccessFactorsProvider;
+import ai.careerpilot.jobdiscovery.provider.TaleoProvider;
+import ai.careerpilot.jobdiscovery.provider.WorkdayCompanyConnector;
+import ai.careerpilot.jobdiscovery.provider.WorkdayProvider;
 import ai.careerpilot.repo.JobFetchAuditRepository;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -11,7 +18,9 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.time.Duration;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -36,17 +45,122 @@ public class JobDiscoveryDiagnosticsController {
     private final JobDiscoveryHealthTracker health;
     private final List<JobProvider> providers;
     private final JobFetchAuditRepository audits;
+    private final WorkdayProvider workday;
+    private final TaleoProvider taleo;
+    private final SuccessFactorsProvider successFactors;
+    private final CompanyConnectorService connectors;
 
     @Value("${jobs.discovery.enabled:true}") private boolean schedulerEnabled;
     @Value("${jobs.discovery.hourly.enabled:false}") private boolean hourlyEnabled;
     @Value("${jobs.discovery.cron:0 0 6 * * *}") private String cron;
+    @Value("${career.discovery.enterprise.enabled:false}") private boolean enterpriseEnabled;
 
     public JobDiscoveryDiagnosticsController(JobDiscoveryHealthTracker health,
                                              List<JobProvider> providers,
-                                             JobFetchAuditRepository audits) {
+                                             JobFetchAuditRepository audits,
+                                             WorkdayProvider workday,
+                                             TaleoProvider taleo,
+                                             SuccessFactorsProvider successFactors,
+                                             CompanyConnectorService connectors) {
         this.health = health;
         this.providers = providers;
         this.audits = audits;
+        this.workday = workday;
+        this.taleo = taleo;
+        this.successFactors = successFactors;
+        this.connectors = connectors;
+    }
+
+    /**
+     * Phase 5.3 — Enterprise ATS Connector Framework overview: master switch state, per-ATS
+     * flag/company-connector detail, and the same health/circuit-breaker snapshot the generic
+     * {@code /providers} endpoint already exposes (reused, not duplicated) for the three
+     * Enterprise ATS provider names.
+     */
+    @GetMapping("/enterprise")
+    public Map<String, Object> enterprise() {
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("masterEnabled", enterpriseEnabled);
+
+        Map<String, Object> workdayOut = providerSummary(workday);
+        workdayOut.put("flagEnabled", enterpriseEnabled);
+        workdayOut.put("companyCount", workday.companies().size());
+        workdayOut.put("companies", workday.companies().stream().map(this::workdayCompanySummary).toList());
+        out.put("workday", workdayOut);
+
+        Map<String, Object> taleoOut = providerSummary(taleo);
+        taleoOut.put("flagEnabled", taleo.isFlagEnabled());
+        taleoOut.put("companyCount", taleo.companies().size());
+        taleoOut.put("companies", taleo.companies().stream().map(this::enterpriseCompanySummary).toList());
+        taleoOut.put("note", "Connector architecture only — no verified public data feed; always inert.");
+        out.put("taleo", taleoOut);
+
+        Map<String, Object> sfOut = providerSummary(successFactors);
+        sfOut.put("flagEnabled", successFactors.isFlagEnabled());
+        sfOut.put("companyCount", successFactors.companies().size());
+        sfOut.put("companies", successFactors.companies().stream().map(this::enterpriseCompanySummary).toList());
+        sfOut.put("note", "Connector architecture only — no verified public data feed; always inert.");
+        out.put("successfactors", sfOut);
+
+        // Part 4/12 — persistent per-connector stats (jobs imported, health, failure count, avg
+        // latency) live in CompanyConnectorService/CompanyConnector now, reused here rather than
+        // re-derived; "jobs imported today"/"avg sync duration" reuse the same recent-audit
+        // window `/discovery` above already reads, filtered to the 3 Enterprise ATS provider names.
+        CompanyConnectorService.ConnectorStatistics stats = connectors.statistics();
+        out.put("configuredCompanies", stats.total());
+        out.put("healthyCompanies", stats.healthy());
+        out.put("failedCompanies", stats.failed());
+        out.put("disabledCompanies", stats.disabled());
+        out.put("jobsImportedTotal", stats.jobsImportedTotal());
+        out.put("averageJobsPerConnector", stats.averageJobsPerConnector());
+        out.put("topPerformingConnector", stats.topPerformingConnector());
+        out.put("worstConnector", stats.worstConnector());
+
+        var enterpriseAudits = audits.findTop20ByOrderByStartedAtDesc().stream()
+                .filter(a -> List.of("workday", "taleo", "successfactors").contains(a.getProvider()))
+                .toList();
+        Instant startOfToday = Instant.now().truncatedTo(ChronoUnit.DAYS);
+        int jobsImportedToday = enterpriseAudits.stream()
+                .filter(a -> a.getStartedAt() != null && !a.getStartedAt().isBefore(startOfToday))
+                .mapToInt(a -> a.getJobsPersisted())
+                .sum();
+        double avgSyncDurationMs = enterpriseAudits.stream()
+                .filter(a -> a.getStartedAt() != null && a.getFinishedAt() != null)
+                .mapToLong(a -> Duration.between(a.getStartedAt(), a.getFinishedAt()).toMillis())
+                .average().orElse(0);
+        out.put("jobsImportedToday", jobsImportedToday);
+        out.put("averageSyncDurationMs", avgSyncDurationMs);
+
+        // Legacy field names kept for any existing caller of this endpoint (additive, not removed).
+        long failedCompanies = List.of(workday).stream()
+                .filter(p -> health.snapshot(p.name()).circuitState() == JobDiscoveryHealthTracker.CircuitState.OPEN)
+                .count();
+        out.put("failedConnectors", failedCompanies);
+        out.put("disabledConnectors", (taleo.companies().isEmpty() ? 0 : 1) + (successFactors.companies().isEmpty() ? 0 : 1)
+                + (workday.isConfigured() ? 0 : 1));
+        return out;
+    }
+
+    private Map<String, Object> workdayCompanySummary(WorkdayCompanyConnector c) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("company", c.companyName());
+        m.put("atsType", "workday");
+        m.put("careerUrl", c.careerUrl());
+        m.put("publicJobEndpoint", c.jobsUrl());
+        m.put("country", c.country());
+        m.put("industry", c.industry());
+        m.put("priority", c.priority());
+        return m;
+    }
+
+    private Map<String, Object> enterpriseCompanySummary(EnterpriseAtsCompanyConnector c) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("company", c.company());
+        m.put("careerUrl", c.careerUrl());
+        m.put("country", c.country());
+        m.put("industry", c.industry());
+        m.put("priority", c.priority());
+        return m;
     }
 
     /** All registered providers' configured-state + health-tracker snapshot. */

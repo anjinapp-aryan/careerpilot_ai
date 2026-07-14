@@ -808,6 +808,41 @@ career:
       base-url: ${CAREER_DISCOVERY_SMARTRECRUITERS_BASE_URL:https://api.smartrecruiters.com}
       companies: ${CAREER_DISCOVERY_SMARTRECRUITERS_COMPANIES:}
       throttle-ms: ${CAREER_DISCOVERY_SMARTRECRUITERS_THROTTLE_MS:300}
+    # ---- Phase 5.2: AI Dev Jobs is a real, working, keyless public API (verified). DevITjobs and
+    # GraphQL Jobs ship as inert stubs — see their class javadocs for the dead-endpoint findings
+    # (DevITjobs UK's old domain 302s to a JobCopilot signup page; graphql.jobs does not resolve in
+    # DNS) — both always report unconfigured regardless of their flag, same as WellfoundProvider.
+    ai-dev-jobs:
+      enabled: ${CAREER_DISCOVERY_AI_DEV_JOBS_ENABLED:false}
+      base-url: ${CAREER_DISCOVERY_AI_DEV_JOBS_BASE_URL:https://aidevboard.com}
+      limit: ${CAREER_DISCOVERY_AI_DEV_JOBS_LIMIT:50}
+    devitjobs:
+      enabled: ${CAREER_DISCOVERY_DEVITJOBS_ENABLED:false}
+    graphql-jobs:
+      enabled: ${CAREER_DISCOVERY_GRAPHQL_JOBS_ENABLED:false}
+    # ---- Phase 5.3: Enterprise ATS Connector Framework. `enterprise.enabled` is the
+    # framework-wide master switch, AND'd with each provider's own flag (so both must be true).
+    # Workday is real (see WorkdayProvider javadoc); Taleo/SuccessFactors are connector
+    # architecture only — always inert regardless of flags (see their class javadocs for why).
+    enterprise:
+      enabled: ${CAREER_DISCOVERY_ENTERPRISE_ENABLED:false}
+    workday:
+      enabled: ${CAREER_DISCOVERY_WORKDAY_ENABLED:false}
+      # CSV of "tenant;cluster;site;displayName;country;industry;priority" entries — see
+      # WorkdayCompanyConnector for the format. Empty by default: no companies hardcoded.
+      companies: ${CAREER_DISCOVERY_WORKDAY_COMPANIES:}
+      limit: ${CAREER_DISCOVERY_WORKDAY_LIMIT:50}
+      throttle-ms: ${CAREER_DISCOVERY_WORKDAY_THROTTLE_MS:300}
+      # Phase 5.3.1: bounded opt-in per-job detail GET for richer fields (real location,
+      # description, employment type, apply URL...). 0 = off, exact Phase 5.3 behavior.
+      detail-fetch-limit: ${CAREER_DISCOVERY_WORKDAY_DETAIL_FETCH_LIMIT:0}
+    taleo:
+      enabled: ${CAREER_DISCOVERY_TALEO_ENABLED:false}
+      # CSV of "company;careerUrl;country;industry;priority" entries. Parsed but never fetched.
+      companies: ${CAREER_DISCOVERY_TALEO_COMPANIES:}
+    successfactors:
+      enabled: ${CAREER_DISCOVERY_SUCCESSFACTORS_ENABLED:false}
+      companies: ${CAREER_DISCOVERY_SUCCESSFACTORS_COMPANIES:}
     health:
       # Consecutive-failure cooldown before JobDiscoveryHealthTracker moves a provider's circuit
       # from OPEN to HALF_OPEN (diagnostics-only; does not gate actual fetch calls — see the

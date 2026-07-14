@@ -12,4 +12,7 @@ public interface ApplicationRepository extends JpaRepository<Application, UUID> 
 
     /** Phase 2C-3: the user's most recent application row for a job, if any (decision upsert target). */
     java.util.Optional<Application> findFirstByUserIdAndJobIdOrderByCreatedAtDesc(UUID userId, UUID jobId);
+
+    /** Application Command Center: ownership-scoped bulk fetch for the bulk-action endpoint. */
+    List<Application> findByUserIdAndIdIn(UUID userId, List<UUID> ids);
 }

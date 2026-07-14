@@ -727,6 +727,73 @@ export interface JobDiscoverySchedulerSummary {
   lastRunAt?: string | null;
 }
 
+/** Phase 5.3.1 — `GET /api/diagnostics/job-providers/enterprise` (extends the Phase 5.3 shape additively). */
+export interface EnterpriseAtsDiagnostics {
+  masterEnabled: boolean;
+  workday: JobProviderHealth & { flagEnabled: boolean; companyCount: number };
+  taleo: JobProviderHealth & { flagEnabled: boolean; companyCount: number; note: string };
+  successfactors: JobProviderHealth & { flagEnabled: boolean; companyCount: number; note: string };
+  configuredCompanies: number;
+  healthyCompanies: number;
+  failedCompanies: number;
+  disabledCompanies: number;
+  jobsImportedTotal: number;
+  averageJobsPerConnector: number;
+  topPerformingConnector: string | null;
+  worstConnector: string | null;
+  jobsImportedToday: number;
+  averageSyncDurationMs: number;
+}
+
+/** Phase 5.3.1 — one row from `GET /api/enterprise/connectors`. */
+export interface CompanyConnector {
+  id: string;
+  companyName: string;
+  atsType: 'WORKDAY' | 'TALEO' | 'SUCCESSFACTORS';
+  careerUrl?: string | null;
+  tenant?: string | null;
+  cluster?: string | null;
+  site?: string | null;
+  country?: string | null;
+  industry?: string | null;
+  priority: number;
+  enabled: boolean;
+  healthStatus: string;
+  lastSuccessfulSync?: string | null;
+  lastFailure?: string | null;
+  lastFailureReason?: string | null;
+  failureCount: number;
+  averageLatencyMs: number;
+  jobsImported: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Phase 5.3.1 — `POST /api/enterprise/connectors/{id}/sync` and the `sync-all`/`sync-failed` list variants. */
+export interface ConnectorSyncResult {
+  connectorId: string;
+  company: string;
+  atsType: string;
+  success: boolean;
+  jobsFetched: number;
+  jobsImported: number;
+  latencyMs: number;
+  error?: string | null;
+}
+
+/** Phase 5.3.1 — `GET /api/enterprise/connectors/statistics`. */
+export interface ConnectorStatistics {
+  total: number;
+  enabled: number;
+  disabled: number;
+  healthy: number;
+  failed: number;
+  jobsImportedTotal: number;
+  averageJobsPerConnector: number;
+  topPerformingConnector: string | null;
+  worstConnector: string | null;
+}
+
 export interface WorkflowStatusStepperProps {
   workflowId: string;
   agents?: WorkflowAgent[];
@@ -741,4 +808,107 @@ export interface WorkflowStatusStepperProps {
   focusNonce?: number;
   /** Horizontal-only: bubbles a stage click up for navigation (does not expand anything locally). */
   onStageNavigate?: (stageName: string) => void;
+}
+
+/* ────────────────────────────────────────────────────────────────────────────────────────────
+ * Applications Page — AI Job Application Command Center
+ * Mirrors ai.careerpilot.applications.dto.ApplicationCardDtos.ApplicationCardResponse.
+ * ──────────────────────────────────────────────────────────────────────────────────────────── */
+
+export type ApplicationHealthStatus = 'EXCELLENT' | 'HEALTHY' | 'NEEDS_ATTENTION' | 'RISK' | 'COLD' | 'STALE';
+
+export type ApplicationRecommendationAction =
+  | 'WAIT'
+  | 'FOLLOW_UP_NOW'
+  | 'WITHDRAW'
+  | 'REAPPLY_LATER'
+  | 'IMPROVE_RESUME'
+  | 'IMPROVE_COVER_LETTER'
+  | 'OUTREACH'
+  | 'NETWORK';
+
+export type ApplicationPriority = 'LOW' | 'MEDIUM' | 'HIGH';
+
+/** `GET /api/applications/cards` and `GET /api/applications/{id}` response shape. */
+export interface ApplicationCard {
+  id: string;
+  jobId: string;
+  resumeId?: string | null;
+  status: string;
+  matchScore?: number | null;
+  atsScore?: number | null;
+  nextAction?: string | null;
+  nextActionAt?: string | null;
+  notes?: string | null;
+  favorite: boolean;
+  priority: ApplicationPriority;
+  archived: boolean;
+  createdAt: string;
+  updatedAt?: string;
+
+  jobTitle?: string | null;
+  company?: string | null;
+  location?: string | null;
+  salaryRange?: string | null;
+  remoteType?: 'REMOTE' | 'HYBRID' | 'ONSITE' | null;
+  source?: string | null;
+  externalUrl?: string | null;
+  sponsorshipAvailable?: boolean | null;
+
+  resumeTailored: boolean;
+  atsAnalysisReady: boolean;
+  coverLetterReady: boolean;
+  applicationPackageReady: boolean;
+  applicationReviewReady: boolean;
+
+  visaRequired?: boolean | null;
+
+  healthStatus: ApplicationHealthStatus;
+  healthScore: number;
+  healthReasoning: string;
+  recommendationAction: ApplicationRecommendationAction;
+  recommendationReasoning: string;
+  suggestedNextAction: string;
+  suggestedNextActionAt?: string | null;
+
+  /** Phase 3A lifecycle status (one of the 16 real statuses), or null when tracking has no row yet. */
+  lifecycleStatus?: string | null;
+}
+
+export type ApplicationBulkAction = 'STATUS' | 'ARCHIVE' | 'NOTES' | 'NEXT_ACTION' | 'RESUME' | 'EXPORT';
+
+export interface ApplicationBulkRequest {
+  ids: string[];
+  action: ApplicationBulkAction;
+  payload?: Record<string, string>;
+}
+
+export interface ApplicationBulkResult {
+  requested: number;
+  applied: number;
+  failedIds: string[];
+}
+
+/** `GET /api/workflow/applications/{jobId}/lifecycle` — Phase 3A lifecycle row + status history. */
+export interface LifecycleView {
+  lifecycle?: {
+    currentStatus?: string;
+    previousStatus?: string | null;
+    company?: string | null;
+    country?: string | null;
+    applicationDate?: string | null;
+    source?: string | null;
+    updatedAt?: string | null;
+  } | null;
+  history?: { fromStatus?: string | null; toStatus?: string | null; createdAt?: string | null }[];
+}
+
+/** `GET /api/workflow/applications/{jobId}/timeline` — Phase 3A observable-event timeline. */
+export interface TimelineEntry {
+  id: string;
+  eventType: string;
+  eventSource?: string | null;
+  confidence?: number | null;
+  details?: string | null;
+  occurredAt?: string | null;
 }

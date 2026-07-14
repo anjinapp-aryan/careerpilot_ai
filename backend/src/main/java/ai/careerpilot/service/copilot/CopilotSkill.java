@@ -30,7 +30,10 @@ public enum CopilotSkill {
     JOB_DISCOVERY_HEALTH("job_discovery_health", "Job discovery provider health"),
     // Phase 7.15 — STAR Story Intelligence & Behavioral AI
     SUGGEST_STAR_STORY("suggest_star_story", "Suggest best STAR story"),
-    GENERATE_STAR_STORY("generate_star_story", "Generate/improve STAR story");
+    GENERATE_STAR_STORY("generate_star_story", "Generate/improve STAR story"),
+    // Phase 7.16 — Real Application Submission Pipeline
+    SUBMISSION_STATUS("submission_status", "Application submission status"),
+    EXPLAIN_SUBMISSION_STRATEGY("explain_submission_strategy", "Explain submission strategy");
 
     private final String key;
     private final String displayName;

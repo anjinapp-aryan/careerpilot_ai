@@ -45,6 +45,7 @@ public class CopilotSkillRouter {
             JobDiscoveryHealthHandler jobDiscoveryHealth,
             StoryRecommendationHandler storyRecommendation,
             StoryGenerationHandler storyGeneration,
+            SubmissionStatusHandler submissionStatus,
             GeneralAssistantHandler generalAssistant) {
 
         this.handlers = new EnumMap<>(CopilotSkill.class);
@@ -73,6 +74,8 @@ public class CopilotSkillRouter {
         this.handlers.put(CopilotSkill.JOB_DISCOVERY_HEALTH, jobDiscoveryHealth);
         this.handlers.put(CopilotSkill.SUGGEST_STAR_STORY, storyRecommendation);
         this.handlers.put(CopilotSkill.GENERATE_STAR_STORY, storyGeneration);
+        this.handlers.put(CopilotSkill.SUBMISSION_STATUS, submissionStatus);
+        this.handlers.put(CopilotSkill.EXPLAIN_SUBMISSION_STRATEGY, submissionStatus);
 
         this.fallback = generalAssistant;
 
@@ -200,6 +203,18 @@ public class CopilotSkillRouter {
                 || (lower.contains("behavioral") && lower.contains("story"))
                 || (lower.contains("bullet") && lower.contains("star"))) {
             return CopilotSkill.GENERATE_STAR_STORY;
+        }
+
+        // Phase 7.16 — application submission pipeline intents, checked after the more specific
+        // skills above so e.g. "application strategy" alone still routes to APPLICATION_STRATEGY.
+        if (lower.contains("submission status") || (lower.contains("submission") && lower.contains("status"))) {
+            return CopilotSkill.SUBMISSION_STATUS;
+        }
+        if (lower.contains("why human approval") || (lower.contains("why") && lower.contains("submission") && lower.contains("fail"))) {
+            return CopilotSkill.SUBMISSION_STATUS;
+        }
+        if (lower.contains("submission strategy")) {
+            return CopilotSkill.EXPLAIN_SUBMISSION_STRATEGY;
         }
 
         return null;

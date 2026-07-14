@@ -25,6 +25,7 @@ import { Tabs } from '@/components/ui/tabs';
 import { Dialog, DialogBody, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { WorkflowTraceExplorer } from '@/components/workflow/WorkflowTraceExplorer';
 import { ExecutionApprovalsPanel } from '@/components/execution/ExecutionApprovalsPanel';
+import { MySubmissionsPanel } from '@/components/submission/MySubmissionsPanel';
 import { ApplicationPackageDrawer } from '@/components/applications/ApplicationPackageDrawer';
 import { ApplicationReviewDrawer } from '@/components/applications/ApplicationReviewDrawer';
 import { generatePackage } from '@/lib/applicationPackage';
@@ -192,6 +193,9 @@ export default function Applications() {
 
       {/* Phase 2E — pending auto-apply approvals; renders nothing while the engine is dark. */}
       <ExecutionApprovalsPanel />
+
+      {/* Phase 7.16 — the user's submission sessions + generated artifacts; dark-safe (renders nothing when empty). */}
+      <MySubmissionsPanel />
 
       <DndContext sensors={sensors} onDragStart={onDragStart} onDragEnd={onDragEnd}>
         <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-6">

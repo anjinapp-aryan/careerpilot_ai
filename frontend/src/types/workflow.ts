@@ -65,6 +65,48 @@ export interface Application {
 }
 
 /**
+ * Phase 7.16 — one Application Submission Pipeline session. Mirrors
+ * `ApplicationSubmissionDtos.SessionResponse`. Ships DARK — only populated when
+ * `application.submission.enabled` is on (see `lib/applicationSubmission.ts`).
+ */
+export interface ApplicationSubmissionSession {
+  id: string;
+  userId: string;
+  jobId: string;
+  applicationId?: string | null;
+  resumeId?: string | null;
+  resumeTailoringId?: string | null;
+  applicationPackageId?: string | null;
+  applicationReviewId?: string | null;
+  companyKnowledgeId?: string | null;
+  approvalQueueEntryId?: string | null;
+  applicationExecutionId?: string | null;
+  status: string;
+  submissionMethod: string;
+  provider?: string | null;
+  correlationId?: string | null;
+  failureReason?: string | null;
+  startedAt?: string | null;
+  completedAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ApplicationSubmissionAnswer {
+  id: string;
+  questionText: string;
+  questionCategory: string;
+  answerText?: string | null;
+  sourceRefs?: string | null;
+  createdAt: string;
+}
+
+export interface ApplicationSubmissionSessionDetail {
+  session: ApplicationSubmissionSession;
+  answers: ApplicationSubmissionAnswer[];
+}
+
+/**
  * Spring Data `Page<Job>` envelope. Only `content` is required by the UI;
  * pagination metadata is kept optional so we tolerate either a full Page
  * payload or a trimmed-down response.

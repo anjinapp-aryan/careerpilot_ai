@@ -28,6 +28,7 @@ public class SkillContext {
     private ai.careerpilot.review.api.ReviewExplainContextService.ReviewExplainContext applicationReview;
     private ai.careerpilot.companyintel.api.CompanyExplainContextService.CompanyExplainContext companyIntel;
     private ai.careerpilot.story.api.StoryCopilotContextService.StoryCopilotContext story;
+    private ai.careerpilot.submission.api.SubmissionCopilotContextService.SubmissionCopilotContext submission;
 
     private final Set<String> sources = new LinkedHashSet<>();
 
@@ -105,6 +106,12 @@ public class SkillContext {
     public void story(ai.careerpilot.story.api.StoryCopilotContextService.StoryCopilotContext s) {
         this.story = s;
         if (s != null && s.enabled()) sources.add("STAR Story Intelligence");
+    }
+
+    public ai.careerpilot.submission.api.SubmissionCopilotContextService.SubmissionCopilotContext submission() { return submission; }
+    public void submission(ai.careerpilot.submission.api.SubmissionCopilotContextService.SubmissionCopilotContext s) {
+        this.submission = s;
+        if (s != null && s.enabled()) sources.add("Application Submission Pipeline");
     }
 
     public Set<String> sources() { return sources; }

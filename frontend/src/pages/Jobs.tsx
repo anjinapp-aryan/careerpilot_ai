@@ -11,6 +11,7 @@ import {
   Filter,
   MapPin,
   Plus,
+  RefreshCw,
   Search,
   Send,
   Sparkles,
@@ -42,6 +43,7 @@ import { PreferencesDialog } from '@/components/jobs/PreferencesDialog';
 import { JobBadges } from '@/components/jobs/JobBadges';
 import { RelevanceDrawer } from '@/components/jobs/RelevanceDrawer';
 import { trackJobEvent } from '@/lib/jobTelemetry';
+import { applicationSubmission } from '@/lib/applicationSubmission';
 import type { Application, CandidatePreferences, Job, JobsPage } from '@/types/workflow';
 
 type JobsTab = 'recommended' | 'domestic' | 'international' | 'saved' | 'applied' | 'browse';
@@ -189,6 +191,24 @@ export default function Jobs() {
     onError: () => toast({ variant: 'error', title: 'Could not add job' }),
   });
 
+  const refreshDiscovery = useMutation({
+    mutationFn: async () =>
+      (await api.post('/api/jobs/discovery/run')).data as {
+        providersRun: number;
+        totalFetched: number;
+        totalPersisted: number;
+      },
+    onSuccess: (summary) => {
+      qc.invalidateQueries({ queryKey: ['jobs'] });
+      toast({
+        variant: 'success',
+        title: 'Jobs refreshed',
+        description: `${summary.providersRun} provider${summary.providersRun === 1 ? '' : 's'} ran, ${summary.totalPersisted} new/updated job${summary.totalPersisted === 1 ? '' : 's'}.`,
+      });
+    },
+    onError: () => toast({ variant: 'error', title: 'Refresh failed', description: 'Could not run job discovery — try again shortly.' }),
+  });
+
   const track = useMutation({
     mutationFn: async ({ jobId, status }: { jobId: string; status: string }) =>
       (await api.post('/api/applications', { jobId, status })).data,
@@ -204,9 +224,42 @@ export default function Jobs() {
     onError: () => toast({ variant: 'error', title: 'Action failed' }),
   });
 
-  // Telemetry-wrapped actions for the discovered/saved/browse/pool cards.
+  // Phase 7.16 — dark-flag check for the Real Application Submission Pipeline. Disabled by default
+  // (application.submission.enabled=false), in which case this resolves to `false` and applyJob()
+  // below keeps today's exact `track.mutate({ jobId, status: 'APPLIED' })` behavior — zero change.
+  const { data: submissionEnabled } = useQuery({
+    queryKey: ['diagnostics', 'application-submission', 'enabled'],
+    queryFn: () => applicationSubmission.isEnabled(),
+    staleTime: 5 * 60_000,
+    retry: false,
+  });
+
+  const startSubmission = useMutation({
+    mutationFn: async (jobId: string) => applicationSubmission.start(jobId),
+    onSuccess: (session) => {
+      if (!session) {
+        toast({ variant: 'error', title: 'Could not start application submission' });
+        return;
+      }
+      qc.invalidateQueries({ queryKey: ['applications'] });
+      qc.invalidateQueries({ queryKey: ['dashboard'] });
+      toast({
+        variant: 'success',
+        title: 'Application submission started',
+        description: `Session status: ${session.status}. Track it from the Applications board.`,
+      });
+    },
+    onError: () => toast({ variant: 'error', title: 'Could not start application submission' }),
+  });
+
+  // Telemetry-wrapped actions for the discovered/saved/browse/pool cards. Flag-gated: with
+  // application.submission.enabled off (default), behaves byte-for-byte as before.
   const applyJob = (jobId: string) => {
     trackJobEvent('apply', { jobId });
+    if (submissionEnabled) {
+      startSubmission.mutate(jobId);
+      return;
+    }
     track.mutate({ jobId, status: 'APPLIED' });
   };
   const saveJob = (jobId: string) => {
@@ -283,6 +336,14 @@ export default function Jobs() {
         description="Discover roles, track openings, and push them into your pipeline."
         actions={
           <>
+            <Button
+              variant="outline"
+              onClick={() => refreshDiscovery.mutate()}
+              disabled={refreshDiscovery.isPending}
+            >
+              <RefreshCw className={cn('h-4 w-4', refreshDiscovery.isPending && 'animate-spin')} />
+              {refreshDiscovery.isPending ? 'Refreshing…' : 'Refresh jobs'}
+            </Button>
             <Button variant="outline" onClick={() => setShowPreferences(true)}>
               <Settings2 className="h-4 w-4" /> Preferences
             </Button>
@@ -306,7 +367,7 @@ export default function Jobs() {
         <div className="space-y-4">
           <CandidateProfileCard />
           <RecommendedJobs
-            onApply={(jobId) => track.mutate({ jobId, status: 'APPLIED' })}
+            onApply={(jobId) => applyJob(jobId)}
             onSave={(jobId) => track.mutate({ jobId, status: 'SAVED' })}
             busy={track.isPending}
           />

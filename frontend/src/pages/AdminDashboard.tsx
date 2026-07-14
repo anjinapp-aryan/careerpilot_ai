@@ -18,6 +18,7 @@ import { PackageIntelligencePanel } from '@/components/admin/PackageIntelligence
 import { ReviewPipelinePanel } from '@/components/admin/ReviewPipelinePanel';
 import { CompanyIntelligencePanel } from '@/components/admin/CompanyIntelligencePanel';
 import { StoryIntelligencePanel } from '@/components/admin/StoryIntelligencePanel';
+import { SubmissionPipelinePanel } from '@/components/admin/SubmissionPipelinePanel';
 
 /** Bar-chart rows for an "Unknown" bucket are real data but not actionable — muted instead of the brand color. */
 const UNKNOWN_LABEL = 'Unknown';
@@ -825,6 +826,9 @@ export default function AdminDashboard() {
 
       {/* Phase 7.15 — STAR Story Intelligence & Behavioral AI: flags, story/version counts, queue health. */}
       <StoryIntelligencePanel />
+
+      {/* Phase 7.16 — Real Application Submission Pipeline: flags, session counts, queue health. */}
+      <SubmissionPipelinePanel />
 
       {/* Phase 4G — Correlation Explorer, shared with the Workflow page. */}
       <WorkflowTraceExplorer />

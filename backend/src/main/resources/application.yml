@@ -1,6 +1,21 @@
 spring:
   application:
     name: careerpilot-backend
+  lifecycle:
+    # Ceiling for server.shutdown=graceful: how long Tomcat waits for in-flight
+    # requests to finish before the JVM forces exit on SIGTERM. Set above the
+    # agent-service's own read-timeout-ms (120s, see agent-service block below)
+    # so an in-flight workflow call isn't truncated mid-shutdown.
+    timeout-per-shutdown-phase: ${SHUTDOWN_TIMEOUT:45s}
+  task:
+    scheduling:
+      pool:
+        # Default Spring Boot scheduling pool is 1 thread — shared by every
+        # @Scheduled class (job discovery, job lake, retention, candidate-profile
+        # rebuild, company discovery, autopilot, career orchestrator). With more
+        # than one of those trigger flags enabled and overlapping cron times, a
+        # single-threaded pool lets one long run silently starve the others.
+        size: ${TASK_SCHEDULER_POOL_SIZE:4}
   datasource:
     # DATABASE_URL is a JDBC URL. Neon credentials can be embedded as query
     # params (?user=...&password=...) so one var covers auth too; the
@@ -12,6 +27,15 @@ spring:
     hikari:
       maximum-pool-size: ${DB_POOL_MAX:10}
       minimum-idle: ${DB_POOL_MIN:2}
+      # Neon serverless can recycle/suspend idle connections server-side; keep our
+      # pool's max-lifetime comfortably under that so Hikari retires connections
+      # proactively instead of handing out ones the server has already dropped.
+      connection-timeout: ${DB_CONNECTION_TIMEOUT_MS:30000}
+      max-lifetime: ${DB_MAX_LIFETIME_MS:1500000}
+      # 0 = disabled (framework default). Set DB_LEAK_DETECTION_MS (e.g. 60000) in
+      # an env that's suspected of leaking connections; leave 0 in steady-state
+      # prod to avoid the per-checkout timing overhead.
+      leak-detection-threshold: ${DB_LEAK_DETECTION_MS:0}
   jpa:
     hibernate:
       ddl-auto: validate
@@ -55,6 +79,7 @@ spring:
       include-message: always
 
 server:
+  shutdown: graceful
   port: ${PORT:8080}
   forward-headers-strategy: framework
   tomcat:

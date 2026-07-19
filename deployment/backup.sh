@@ -9,7 +9,11 @@
 # Keeps the latest 10 timestamped backups, deleting older ones automatically.
 #
 # Usage: sudo ./backup.sh [REPO_DIR]
-#   REPO_DIR defaults to /opt/careerpilot
+#   REPO_DIR defaults to the repository root this script lives in (i.e. the
+#   parent of the deployment/ directory) — works no matter where the repo was
+#   cloned (/opt/careerpilot, /opt/careerpilot/careerpilot_ai, /home/opc/..., etc).
+#   Only docker-compose.yml is read from REPO_DIR; careerpilot.env and the
+#   systemd unit are backed up from their fixed system locations regardless.
 
 set -Eeuo pipefail
 
@@ -26,7 +30,9 @@ log_error() { printf "${C_RED}[ERROR]${C_RESET} %s\n" "$*" >&2; }
 
 trap 'log_error "backup.sh failed at line ${LINENO} (exit code $?)"' ERR
 
-readonly REPO_DIR="${1:-/opt/careerpilot}"
+readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly DEFAULT_REPO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+readonly REPO_DIR="${1:-${DEFAULT_REPO_DIR}}"
 readonly ENV_FILE="/etc/careerpilot/careerpilot.env"
 readonly SERVICE_FILE="/etc/systemd/system/careerpilot.service"
 readonly COMPOSE_FILE="${REPO_DIR}/docker-compose.yml"

@@ -2,13 +2,15 @@
 # setup-env.sh — Prepare production configuration for CareerPilot AI.
 #
 # Ensures /etc/careerpilot/careerpilot.env exists with correct permissions,
-# and that /opt/careerpilot/.env is a symlink pointing at it (the mechanism
+# and that <repo>/.env is a symlink pointing at it (the mechanism
 # docker-compose.yml's `env_file: - .env` relies on in production).
 #
 # Idempotent: safe to rerun.
 #
 # Usage: sudo ./setup-env.sh [REPO_DIR]
-#   REPO_DIR defaults to /opt/careerpilot
+#   REPO_DIR defaults to the repository root this script lives in (i.e. the
+#   parent of the deployment/ directory) — works no matter where the repo was
+#   cloned (/opt/careerpilot, /opt/careerpilot/careerpilot_ai, /home/opc/..., etc).
 
 set -Eeuo pipefail
 
@@ -27,7 +29,9 @@ trap 'log_error "setup-env.sh failed at line ${LINENO} (exit code $?)"' ERR
 
 readonly ENV_DIR="/etc/careerpilot"
 readonly ENV_FILE="${ENV_DIR}/careerpilot.env"
-readonly REPO_DIR="${1:-/opt/careerpilot}"
+readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly DEFAULT_REPO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+readonly REPO_DIR="${1:-${DEFAULT_REPO_DIR}}"
 readonly SYMLINK_PATH="${REPO_DIR}/.env"
 
 require_root() {

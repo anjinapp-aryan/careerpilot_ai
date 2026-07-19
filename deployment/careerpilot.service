@@ -1,6 +1,5 @@
 [Unit]
 Description=CareerPilot AI (Docker Compose stack)
-Documentation=file:///opt/careerpilot/DEPLOYMENT_ORACLE_CLOUD.md
 Requires=docker.service
 After=docker.service network-online.target
 Wants=network-online.target
@@ -8,11 +7,25 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 RemainAfterExit=yes
+
+# WorkingDirectory is the ONLY path in this entire unit that encodes where the
+# repository was cloned. Every path below is either resolved relative to it
+# (docker-compose.yml) or is a fixed, repo-independent absolute path
+# (/etc/careerpilot/careerpilot.env) — so this is the single line to edit if
+# the repo lives somewhere other than the example path shown here.
+#
+# systemd unit files cannot auto-detect a clone location at daemon-reload
+# time (WorkingDirectory does not support environment-variable or command
+# substitution, unlike the shell scripts under deployment/), so this MUST be
+# set by hand to match the actual `git clone` destination on this VM before
+# running `systemctl daemon-reload`. See deployment/README.md's "First-time
+# VM setup" for the full sequence.
 WorkingDirectory=/opt/careerpilot
 
 # No secrets in this unit: all runtime configuration is loaded from
 # /etc/careerpilot/careerpilot.env by docker-compose.yml's `env_file: - .env`
-# directive, via the /opt/careerpilot/.env symlink created by setup-env.sh.
+# directive, via the <repo>/.env symlink created by setup-env.sh (relative to
+# WorkingDirectory above — not a second hardcoded path).
 # --env-file here is only for Compose's own YAML-level ${VAR} substitution
 # (e.g. the minio MINIO_ROOT_USER/PASSWORD rename) — same file, same content.
 ExecStart=/usr/bin/docker compose --env-file /etc/careerpilot/careerpilot.env -f docker-compose.yml up -d --remove-orphans

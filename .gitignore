@@ -22,3 +22,9 @@ node_modules/
 .env
 .env.*
 careerpilot.env
+
+# Built by the frontend Dockerfile's own `npm run build` stage now — never a
+# build input, and committing it was the exact root cause of a real bug
+# (stale VITE_API_BASE_URL baked into a checked-in bundle, silently ignored
+# by every later Docker build). See frontend/Dockerfile.
+frontend/dist

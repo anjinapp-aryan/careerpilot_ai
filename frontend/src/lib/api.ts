@@ -2,7 +2,13 @@ import axios from 'axios';
 import { useAuthStore } from '@/lib/auth';
 
 export const api = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080',
+  // Every call site (Login.tsx, Register.tsx, etc.) already includes the
+  // "/api" prefix in its own path — baseURL is meant to be just the origin
+  // (or empty, for a same-origin reverse-proxy deployment). `??` (not `||`)
+  // matters here: an intentional empty string ("" — same-origin, nginx
+  // proxies /api/* to the backend) must NOT fall through to the localhost
+  // dev default, which `||` would do since "" is falsy.
+  baseURL: import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8080',
   // Without a timeout, a hung backend (dead connection, crash-loop) leaves requests
   // pending indefinitely with no signal to the user. 60s covers Render's own documented
   // free-tier cold-start worst case ("50 seconds or more") — an earlier, tighter 20s

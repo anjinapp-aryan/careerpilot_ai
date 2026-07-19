@@ -20,7 +20,7 @@ RemainAfterExit=yes
 # set by hand to match the actual `git clone` destination on this VM before
 # running `systemctl daemon-reload`. See deployment/README.md's "First-time
 # VM setup" for the full sequence.
-WorkingDirectory=/opt/careerpilot
+WorkingDirectory=/opt/careerpilot/careerpilot_ai
 
 # No secrets in this unit: all runtime configuration is loaded from
 # /etc/careerpilot/careerpilot.env by docker-compose.yml's `env_file: - .env`

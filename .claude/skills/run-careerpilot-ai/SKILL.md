@@ -35,11 +35,14 @@ Images are already built in this repo, so this recreates containers in seconds (
 `--build` only after changing source):
 
 ```bash
-docker compose --env-file .env up -d
+docker compose --env-file .env -f docker-compose.yml -f docker-compose.local.yml up -d
 ```
 
 Brings up `redis`, `zookeeper`, `kafka`, `minio`, `agent-service`, `backend`, `frontend`.
-Postgres is **not** in compose — backend talks directly to Neon.
+Postgres is **not** in compose — backend talks directly to Neon. The `-f docker-compose.local.yml`
+overlay is required for this local/agent path — without it, `docker-compose.yml` alone applies
+its Oracle-VM-hardened form (no host ports for redis/kafka/minio/agent-service, `SPRING_PROFILES_ACTIVE=prod`),
+and the health poll below plus every `localhost:8088`/`:9001` reference will fail.
 
 ### 2. Wait for health (backend is slowest — ~20s)
 
@@ -126,16 +129,16 @@ re-authorize if endpoints start returning 401.
 ### 5. Tear down
 
 ```bash
-docker compose --env-file .env down
+docker compose --env-file .env -f docker-compose.yml -f docker-compose.local.yml down
 ```
 
 ## Run (human path) — for eyeballing in a browser
 
-`docker compose --env-file .env up -d`, then open:
+`docker compose --env-file .env -f docker-compose.yml -f docker-compose.local.yml up -d`, then open:
 - Frontend: http://localhost:5173
 - Backend Swagger: http://localhost:8080/swagger-ui.html
 - Agent service docs: http://localhost:8088/docs
-- MinIO console: http://localhost:9001 (minioadmin / minioadmin)
+- MinIO console: http://localhost:9001 (credentials = `S3_ACCESS_KEY` / `S3_SECRET_KEY` from `.env`, not the old `minioadmin` default)
 
 ### Per-service, no Docker (slower to set up)
 
@@ -182,5 +185,5 @@ cd frontend && npm install && npm run dev                      # this gives real
 - **Screenshot step prints `NO SCREENSHOT`** → Edge not found at the standard paths; locate it
   with `(Get-Command msedge.exe).Source` and pass that path, or open http://localhost:5173
   manually.
-- **Ports already bound** → a previous stack is still running: `docker compose --env-file .env down`
-  then retry.
+- **Ports already bound** → a previous stack is still running:
+  `docker compose --env-file .env -f docker-compose.yml -f docker-compose.local.yml down` then retry.

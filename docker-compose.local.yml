@@ -1,0 +1,32 @@
+# Local-dev overlay — NOT auto-merged (only the literal name
+# docker-compose.override.yml gets that treatment). Apply it explicitly:
+#   docker compose --env-file .env -f docker-compose.yml -f docker-compose.local.yml up -d
+#
+# Restores local-dev conveniences (direct host access to internal services,
+# verbose logging, Swagger UI) that were intentionally stripped from
+# docker-compose.yml when it was hardened for the Oracle Cloud VM deploy (no
+# ports beyond frontend/backend published, SPRING_PROFILES_ACTIVE=prod).
+#
+# On the VM: don't copy this file over, and don't pass the -f flag above —
+# docker-compose.yml alone gives you the hardened production behavior.
+
+services:
+  redis:
+    ports:
+      - "6379:6379"
+  kafka:
+    ports:
+      - "9092:9092"
+  minio:
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+  agent-service:
+    ports:
+      - "8088:8088"
+  backend:
+    environment:
+      # Empty = no active profile, i.e. application.yml's own dev-friendly
+      # defaults (DEBUG ai.careerpilot logging, Swagger enabled) — matching
+      # the pre-hardening local behavior documented in CLAUDE.md.
+      SPRING_PROFILES_ACTIVE: ""

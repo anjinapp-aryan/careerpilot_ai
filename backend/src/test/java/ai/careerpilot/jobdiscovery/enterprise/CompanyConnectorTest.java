@@ -40,4 +40,26 @@ class CompanyConnectorTest {
         assertEquals("DOWN", c.getHealthStatus());
         assertEquals(3, c.getFailureCount());
     }
+
+    @Test
+    void discoveryFieldsDefaultToNullForManuallyCreatedConnectors() {
+        var c = CompanyConnector.builder().companyName("Acme").atsType("WORKDAY").build();
+
+        assertNull(c.getDiscoveryStatus());
+        assertNull(c.getDiscoveredAt());
+        assertNull(c.getDiscoveredBy());
+    }
+
+    @Test
+    void discoveryFieldsRoundtripForDiscoveredConnectors() {
+        var c = new CompanyConnector();
+        var now = java.time.Instant.now();
+        c.setDiscoveryStatus("PENDING_APPROVAL");
+        c.setDiscoveredAt(now);
+        c.setDiscoveredBy("greenhouse-probe");
+
+        assertEquals("PENDING_APPROVAL", c.getDiscoveryStatus());
+        assertEquals(now, c.getDiscoveredAt());
+        assertEquals("greenhouse-probe", c.getDiscoveredBy());
+    }
 }

@@ -7,6 +7,7 @@ import ai.careerpilot.domain.Job;
 import ai.careerpilot.execution.ats.ATSConnector;
 import ai.careerpilot.execution.ats.ATSConnectorRegistry;
 import ai.careerpilot.execution.browser.BrowserAutomationProvider;
+import ai.careerpilot.execution.browser.GuestApplyAutomationService;
 import ai.careerpilot.repo.ApplicationExecutionAuditRepository;
 import ai.careerpilot.repo.ApplicationExecutionRepository;
 import ai.careerpilot.repo.ApplicationPackageRepository;
@@ -22,18 +23,29 @@ import java.util.Optional;
 import java.util.UUID;
 
 /**
- * Phase 2E.1 — the Application Execution Engine's state machine. HIGH RISK, ships DARK.
+ * Phase 2E.1 / Gap D — the Application Execution Engine's state machine. HIGH RISK, ships DARK
+ * (both {@code application.execution.enabled} and {@code browser.automation.enabled} default false).
  *
  * <p>{@link #execute} drives one attempt through
- * {@code QUEUED -> VALIDATING -> EXECUTING -> (SUBMITTED | ABORTED | FAILED)}. The terminal
- * {@code SUBMITTED} state is <b>unreachable in the 2E build</b>: the actual submission is delegated
- * to an execution backend (an {@link ATSConnector} if one {@code detect()}s + is configured, else
- * the {@link BrowserAutomationProvider}), and in this phase every connector is unconfigured and the
- * browser provider is a throwing stub — so an execution that starts can only resolve to
- * {@code ABORTED "no execution backend configured"}. Nothing is ever submitted.
+ * {@code QUEUED -> VALIDATING -> EXECUTING -> (SUBMITTED | AWAITING_APPROVAL | ABORTED | FAILED)}.
+ *
+ * <p><b>Gap D adds a real path to SUBMITTED</b>, but ONLY for a resolved {@link ATSConnector} that
+ * is both {@code isConfigured()} AND guest-apply-eligible ({@link
+ * ai.careerpilot.execution.ats.GuestApplyEligibility} — hardcoded, e.g. Greenhouse/Lever; never
+ * LinkedIn or any login-required connector). For that narrow case, {@link
+ * GuestApplyAutomationService#attemptFill} navigates, aborts immediately on any CAPTCHA/login-wall
+ * marker, fills only real (never fabricated) applicant fields, screenshots the filled form, and
+ * parks a NEW mandatory human "approve this specific filled form" request — the execution moves to
+ * the non-terminal {@link ApplicationExecution#STATUS_AWAITING_APPROVAL}, not straight to SUBMITTED.
+ * Only {@link #finalizeGuestApplySubmit}, invoked by {@code FormApprovalExecutionWorker} after that
+ * human decision, performs the real submit click and reaches terminal SUBMITTED.
+ *
+ * <p>Every other case — any other connector, or the generic {@link BrowserAutomationProvider} path
+ * — is UNCHANGED from the pre-Gap-D build: still resolves to terminal {@code ABORTED} ("... not
+ * enabled in this build"). Zero regression for the majority of traffic.
  *
  * <p>Append-only + fully audited; never throws out of {@link #execute} (failures become a terminal
- * {@code FAILED} row + ERROR audit entry). Flag-gated dark by {@code application.execution.enabled}.
+ * {@code FAILED} row + ERROR audit entry).
  */
 @Service
 public class ApplicationExecutionService {
@@ -46,6 +58,7 @@ public class ApplicationExecutionService {
     private final JobRepository jobs;
     private final ATSConnectorRegistry connectors;
     private final BrowserAutomationProvider browser;
+    private final GuestApplyAutomationService guestApply;
     private final ApplicationExecutionMetrics metrics;
     private final boolean enabled;
 
@@ -55,6 +68,7 @@ public class ApplicationExecutionService {
                                        JobRepository jobs,
                                        ATSConnectorRegistry connectors,
                                        BrowserAutomationProvider browser,
+                                       GuestApplyAutomationService guestApply,
                                        ApplicationExecutionMetrics metrics,
                                        @Value("${application.execution.enabled:false}") boolean enabled) {
         this.executions = executions;
@@ -63,6 +77,7 @@ public class ApplicationExecutionService {
         this.jobs = jobs;
         this.connectors = connectors;
         this.browser = browser;
+        this.guestApply = guestApply;
         this.metrics = metrics;
         this.enabled = enabled;
     }
@@ -73,7 +88,8 @@ public class ApplicationExecutionService {
 
     /**
      * Run one execution attempt for an approved application package. Empty when disabled/missing.
-     * Never throws. In the 2E build this always terminates in {@code ABORTED} (no execution backend).
+     * Never throws. Resolves to {@code SUBMITTED} only via the (rare, gated) Gap D guest-apply path
+     * described in the class javadoc — every other case still resolves to {@code ABORTED}.
      */
     @Transactional
     public Optional<ApplicationExecution> execute(UUID userId, UUID jobId, UUID applicationPackageId) {
@@ -120,13 +136,17 @@ public class ApplicationExecutionService {
                         "application package not ASSEMBLED (status=" + pkg.getStatus() + ")", start);
             }
 
-            // EXECUTING — resolve the execution backend. In the 2E build none is available.
+            // EXECUTING — resolve the execution backend.
             transition(exec, ApplicationExecution.STATUS_EXECUTING, "resolving execution backend");
             ATSConnector connector = connectors.detect(job);
             if (connector != null && connector.isConfigured()) {
                 exec.setExecutionType(ApplicationExecution.TYPE_ATS_CONNECTOR);
                 exec.setProvider(connector.name());
-                // No connector is configured in the 2E build; guarded here for the future path.
+
+                if (guestApply.isEligible(connector)) {
+                    return runGuestApplyFill(exec, job, connector, start);
+                }
+                // Any other (login-required) connector: unchanged pre-Gap-D behavior.
                 return terminal(exec, ApplicationExecution.STATUS_ABORTED,
                         "ATS connector present but submission not enabled in this build", start);
             }
@@ -152,6 +172,55 @@ public class ApplicationExecutionService {
         }
     }
 
+    private Optional<ApplicationExecution> runGuestApplyFill(ApplicationExecution exec, Job job,
+                                                              ATSConnector connector, long start) {
+        GuestApplyAutomationService.AttemptOutcome outcome = guestApply.attemptFill(exec, job, connector);
+        return switch (outcome.kind()) {
+            case AWAITING_APPROVAL -> awaitingApproval(exec, start);
+            case ABORTED -> terminal(exec, ApplicationExecution.STATUS_ABORTED, outcome.reason(), start);
+            case SUBMITTED -> terminal(exec, ApplicationExecution.STATUS_SUBMITTED, null, start);
+            case ERROR -> terminal(exec, ApplicationExecution.STATUS_FAILED, outcome.reason(), start);
+        };
+    }
+
+    /**
+     * Gap D — invoked ONLY by {@code FormApprovalExecutionWorker} after a human approves the
+     * FORM_SCREENSHOT entry parked by {@link #runGuestApplyFill}. Double-guarded: refuses to act
+     * unless the execution is genuinely still {@code AWAITING_APPROVAL} (so a duplicate/rejected
+     * event can never re-fire a submit click). Never throws.
+     */
+    @Transactional
+    public void finalizeGuestApplySubmit(UUID executionId) {
+        long start = System.currentTimeMillis();
+        ApplicationExecution exec = executions.findById(executionId).orElse(null);
+        if (exec == null) {
+            log.warn("APP_EXECUTION finalizeGuestApplySubmit: execution {} not found", executionId);
+            return;
+        }
+        if (!ApplicationExecution.STATUS_AWAITING_APPROVAL.equals(exec.getExecutionStatus())) {
+            log.warn("APP_EXECUTION finalizeGuestApplySubmit refused: execution {} not AWAITING_APPROVAL (status={})",
+                    executionId, exec.getExecutionStatus());
+            return;
+        }
+        Job job = jobs.findById(exec.getJobId()).orElse(null);
+        if (job == null) {
+            terminal(exec, ApplicationExecution.STATUS_FAILED, "job no longer exists", start);
+            return;
+        }
+        ATSConnector connector = connectors.detect(job);
+        if (connector == null || !guestApply.isEligible(connector)) {
+            terminal(exec, ApplicationExecution.STATUS_FAILED,
+                    "resolved connector no longer guest-apply eligible at finalize time", start);
+            return;
+        }
+        GuestApplyAutomationService.AttemptOutcome outcome = guestApply.finalizeSubmit(exec, job, connector);
+        switch (outcome.kind()) {
+            case SUBMITTED -> terminal(exec, ApplicationExecution.STATUS_SUBMITTED, null, start);
+            case ABORTED -> terminal(exec, ApplicationExecution.STATUS_ABORTED, outcome.reason(), start);
+            default -> terminal(exec, ApplicationExecution.STATUS_FAILED, outcome.reason(), start);
+        }
+    }
+
     public Optional<ApplicationExecution> status(UUID executionId, UUID userId) {
         return executions.findByIdAndUserId(executionId, userId);
     }
@@ -165,6 +234,19 @@ public class ApplicationExecutionService {
         exec.setExecutionStatus(status);
         executions.save(exec);
         record(exec.getUserId(), exec.getJobId(), exec.getId(), status, reason);
+    }
+
+    /** Gap D — parks the execution at the new non-terminal AWAITING_APPROVAL status (not a terminal()). */
+    private Optional<ApplicationExecution> awaitingApproval(ApplicationExecution exec, long start) {
+        exec.setExecutionStatus(ApplicationExecution.STATUS_AWAITING_APPROVAL);
+        executions.save(exec);
+        metrics.recordAwaitingApproval();
+        metrics.recordLatency(System.currentTimeMillis() - start);
+        record(exec.getUserId(), exec.getJobId(), exec.getId(), ApplicationExecution.STATUS_AWAITING_APPROVAL,
+                "guest-apply form filled — awaiting human screenshot approval");
+        log.info("APP_EXECUTION user={} job={} type={} status=AWAITING_APPROVAL",
+                exec.getUserId(), exec.getJobId(), exec.getExecutionType());
+        return Optional.of(exec);
     }
 
     private Optional<ApplicationExecution> terminal(ApplicationExecution exec, String status,

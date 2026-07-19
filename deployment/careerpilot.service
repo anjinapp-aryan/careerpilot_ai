@@ -1,0 +1,28 @@
+[Unit]
+Description=CareerPilot AI (Docker Compose stack)
+Documentation=file:///opt/careerpilot/DEPLOYMENT_ORACLE_CLOUD.md
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/careerpilot
+
+# No secrets in this unit: all runtime configuration is loaded from
+# /etc/careerpilot/careerpilot.env by docker-compose.yml's `env_file: - .env`
+# directive, via the /opt/careerpilot/.env symlink created by setup-env.sh.
+# --env-file here is only for Compose's own YAML-level ${VAR} substitution
+# (e.g. the minio MINIO_ROOT_USER/PASSWORD rename) — same file, same content.
+ExecStart=/usr/bin/docker compose --env-file /etc/careerpilot/careerpilot.env -f docker-compose.yml up -d --remove-orphans
+ExecStop=/usr/bin/docker compose --env-file /etc/careerpilot/careerpilot.env -f docker-compose.yml down --timeout 60
+ExecReload=/usr/bin/docker compose --env-file /etc/careerpilot/careerpilot.env -f docker-compose.yml up -d --remove-orphans
+
+Restart=on-failure
+RestartSec=10
+TimeoutStartSec=180
+TimeoutStopSec=120
+
+[Install]
+WantedBy=multi-user.target

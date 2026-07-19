@@ -57,6 +57,11 @@
 
         <dependency><groupId>software.amazon.awssdk</groupId><artifactId>s3</artifactId><version>${aws.sdk.version}</version></dependency>
 
+        <!-- Gap D — real browser automation for the guest/no-login apply flow (execution.browser).
+             Headless Chromium only; no credentialed login is ever performed (see
+             ai.careerpilot.execution.browser.PlaywrightAutomationProvider javadoc). -->
+        <dependency><groupId>com.microsoft.playwright</groupId><artifactId>playwright</artifactId><version>1.48.0</version></dependency>
+
         <dependency><groupId>org.apache.tika</groupId><artifactId>tika-core</artifactId><version>2.9.2</version></dependency>
         <dependency><groupId>org.apache.tika</groupId><artifactId>tika-parsers-standard-package</artifactId><version>2.9.2</version></dependency>
 

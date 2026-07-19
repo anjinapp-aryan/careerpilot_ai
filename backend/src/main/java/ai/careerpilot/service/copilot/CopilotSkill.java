@@ -35,7 +35,10 @@ public enum CopilotSkill {
     SUBMISSION_STATUS("submission_status", "Application submission status"),
     EXPLAIN_SUBMISSION_STRATEGY("explain_submission_strategy", "Explain submission strategy"),
     // Applications Page — AI Job Application Command Center
-    EXPLAIN_APPLICATION_STATUS("explain_application_status", "Explain application status");
+    EXPLAIN_APPLICATION_STATUS("explain_application_status", "Explain application status"),
+    // Gap B — Offer Intelligence & Salary Negotiation
+    EXPLAIN_OFFER("explain_offer", "Explain offer"),
+    COMPARE_OFFERS("compare_offers", "Compare offers");
 
     private final String key;
     private final String displayName;

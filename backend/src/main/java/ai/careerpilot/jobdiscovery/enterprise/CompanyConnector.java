@@ -47,6 +47,13 @@ public class CompanyConnector {
     @Column(name = "average_latency_ms") @Builder.Default private Long averageLatencyMs = 0L;
     @Column(name = "jobs_imported") @Builder.Default private Integer jobsImported = 0;
 
+    // Gap A — Company Discovery Agent (V60, additive). Null for connectors created manually by an
+    // admin (Phase 5.3.1 CSV bootstrap / manual insert); set only on rows created by
+    // CompanyDiscoveryService after a successful probe. "PENDING_APPROVAL" | "APPROVED" | "REJECTED".
+    @Column(name = "discovery_status") private String discoveryStatus;
+    @Column(name = "discovered_at") private Instant discoveredAt;
+    @Column(name = "discovered_by") private String discoveredBy;
+
     @CreationTimestamp @Column(name = "created_at", updatable = false) private Instant createdAt;
     @UpdateTimestamp @Column(name = "updated_at") private Instant updatedAt;
 }

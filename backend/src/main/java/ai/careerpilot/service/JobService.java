@@ -180,4 +180,16 @@ public class JobService {
         return jobs.findByIdAndOrgId(id, orgId)
                 .orElseThrow(() -> new IllegalArgumentException("Job not found or access denied"));
     }
+
+    /**
+     * Batch job lookup by ID, unscoped by org. Safe because callers (Saved/Applied) already
+     * restrict {@code ids} to jobs the current user has an {@code Application} row for — and
+     * {@code Application} ownership is enforced by {@code user_id} elsewhere — so this never
+     * exposes a job the caller couldn't already see. Needed because discovered-pool jobs have
+     * {@code org_id IS NULL} and can never match an org-scoped lookup like {@link #get}.
+     */
+    public List<Job> getByIds(List<UUID> ids) {
+        if (ids.isEmpty()) return List.of();
+        return jobs.findAllById(ids);
+    }
 }

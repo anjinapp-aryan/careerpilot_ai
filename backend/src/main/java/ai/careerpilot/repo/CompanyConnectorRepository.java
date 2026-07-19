@@ -15,4 +15,8 @@ public interface CompanyConnectorRepository extends JpaRepository<CompanyConnect
     long countByAtsType(String atsType);
     long countByEnabledTrue();
     long countByHealthStatus(String healthStatus);
+
+    // Gap A — Company Discovery Agent (additive).
+    List<CompanyConnector> findByDiscoveryStatus(String discoveryStatus);
+    long countByDiscoveryStatus(String discoveryStatus);
 }

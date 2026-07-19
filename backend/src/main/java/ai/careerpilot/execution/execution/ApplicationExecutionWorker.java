@@ -1,5 +1,7 @@
 package ai.careerpilot.execution.execution;
 
+import ai.careerpilot.domain.ApprovalQueueEntry;
+import ai.careerpilot.execution.approval.ApprovalService;
 import ai.careerpilot.execution.config.ExecutionExecutorsConfig;
 import ai.careerpilot.execution.event.ApprovalGrantedEvent;
 import org.slf4j.Logger;
@@ -19,9 +21,14 @@ import org.springframework.transaction.event.TransactionalEventListener;
  * {@code TaskRejectedException}) is caught and logged, never propagated. Gated by its own
  * {@code application.execution.trigger.enabled} flag, independent of {@code application.execution.enabled}.
  *
- * <p>This is the sole consumer of {@code ApprovalGrantedEvent}, which no automatic path publishes —
- * so this worker never fires without a human decision, and even then {@link ApplicationExecutionService}
- * can only reach a terminal {@code ABORTED} in the 2E build (no execution backend).
+ * <p>This is the consumer of {@code ApprovalGrantedEvent} for {@link
+ * ApprovalQueueEntry#TYPE_APPLICATION_PACKAGE} approvals (which no automatic path publishes — so
+ * this worker never fires without a human decision). Gap D adds a SEPARATE {@link
+ * ApprovalQueueEntry#TYPE_FORM_SCREENSHOT} approval subtype for its own "approve this specific
+ * filled form" gate, owned by {@code FormApprovalExecutionWorker} — this worker explicitly skips
+ * those events so a form-screenshot approval never spawns a brand-new, duplicate {@link
+ * ApplicationExecutionService#execute} call on top of the execution that is already parked
+ * awaiting that very approval.
  */
 @Component
 public class ApplicationExecutionWorker {
@@ -29,13 +36,16 @@ public class ApplicationExecutionWorker {
     private static final Logger log = LoggerFactory.getLogger(ApplicationExecutionWorker.class);
 
     private final ApplicationExecutionService execution;
+    private final ApprovalService approvalService;
     private final ThreadPoolTaskExecutor executor;
     private final boolean triggerEnabled;
 
     public ApplicationExecutionWorker(ApplicationExecutionService execution,
+                                      ApprovalService approvalService,
                                       @Qualifier(ExecutionExecutorsConfig.APPLICATION_EXECUTION_EXECUTOR) ThreadPoolTaskExecutor executor,
                                       @Value("${application.execution.trigger.enabled:false}") boolean triggerEnabled) {
         this.execution = execution;
+        this.approvalService = approvalService;
         this.executor = executor;
         this.triggerEnabled = triggerEnabled;
     }
@@ -45,6 +55,10 @@ public class ApplicationExecutionWorker {
     public void onApprovalGranted(ApprovalGrantedEvent event) {
         if (!triggerEnabled || !execution.isEnabled()) return;
         try {
+            ApprovalQueueEntry entry = approvalService.findById(event.approvalId()).orElse(null);
+            if (entry != null && ApprovalQueueEntry.TYPE_FORM_SCREENSHOT.equals(entry.getApprovalType())) {
+                return; // Gap D's own approval subtype — FormApprovalExecutionWorker owns this one
+            }
             executor.execute(() -> execution.execute(event.userId(), event.jobId(), event.applicationPackageId()));
         } catch (Exception e) {
             log.warn("Application execution worker failed (user={}, job={}): {}",

@@ -6,6 +6,7 @@ import {
   Sparkles,
   ShieldCheck,
   BookOpen,
+  Banknote,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -64,6 +65,13 @@ export const NAV_GROUPS: NavGroup[] = [
         icon: KanbanSquare,
         keywords: ['pipeline', 'kanban', 'tracker', 'status'],
         description: 'Application pipeline board',
+      },
+      {
+        to: '/offers',
+        label: 'Offers',
+        icon: Banknote,
+        keywords: ['offer', 'salary', 'compensation', 'negotiation', 'compare'],
+        description: 'Offer intelligence & salary negotiation',
       },
     ],
   },

@@ -61,6 +61,7 @@ public class SecurityConfig {
                     "/api/ai/stats",
                     "/api/diagnostics/**",
                     "/api/enterprise/**",
+                    "/api/company-discovery/**",
                     "/actuator/health",
                     "/actuator/info",
                     "/v3/api-docs/**",

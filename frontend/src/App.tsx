@@ -11,6 +11,7 @@ import Workflow from '@/pages/Workflow';
 import CareerIntelligence from '@/pages/CareerIntelligence';
 import Recommendations from '@/pages/Recommendations';
 import StoryLibrary from '@/pages/StoryLibrary';
+import Offers from '@/pages/Offers';
 import AdminDashboard from '@/pages/AdminDashboard';
 import AppShell from '@/components/app-shell/AppShell';
 
@@ -49,6 +50,7 @@ export default function App() {
         <Route path="career" element={<CareerIntelligence />} />
         <Route path="recommendations" element={<Recommendations />} />
         <Route path="stories" element={<StoryLibrary />} />
+        <Route path="offers" element={<Offers />} />
         <Route
           path="admin"
           element={

@@ -26,6 +26,15 @@ public class ApplicationExecution {
     public static final String STATUS_FAILED = "FAILED";
     public static final String STATUS_RETRY = "RETRY";
     public static final String STATUS_ABORTED = "ABORTED";
+    /**
+     * Gap D — a NEW non-terminal status: the guest-apply form has been filled and a screenshot is
+     * parked at {@code ApprovalQueueEntry.TYPE_FORM_SCREENSHOT} awaiting the human "approve this
+     * specific filled form" decision. Set by {@code ApplicationExecutionService} when {@code
+     * GuestApplyAutomationService#attemptFill} returns AWAITING_APPROVAL; resolved by {@code
+     * FormApprovalExecutionWorker} once approved (-> SUBMITTED) or rejected (stays here — a human
+     * rejection of the form does not retry automatically).
+     */
+    public static final String STATUS_AWAITING_APPROVAL = "AWAITING_APPROVAL";
 
     public static final String TYPE_BROWSER = "BROWSER";
     public static final String TYPE_ATS_CONNECTOR = "ATS_CONNECTOR";

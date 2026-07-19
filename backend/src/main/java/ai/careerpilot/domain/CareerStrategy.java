@@ -23,4 +23,12 @@ public class CareerStrategy {
     @Column(name = "market_demand_score") private BigDecimal marketDemandScore;
     @Column(name = "recommended_trajectory", columnDefinition = "text") private String recommendedTrajectory;
     @Column(name = "computed_at") private Instant computedAt;
+
+    // ── Gap C — Career Coach roadmap persistence (V61, additive) ──────────────────────────────
+    // Populated by CareerRoadmapPersistenceService from the LangGraph career_strategy agent's
+    // horizoned roadmap, behind career.roadmap.persistence.enabled (default off).
+    @Column(name = "roadmap_3_month", columnDefinition = "text") private String roadmap3Month;
+    @Column(name = "roadmap_6_month", columnDefinition = "text") private String roadmap6Month;
+    @Column(name = "roadmap_12_month", columnDefinition = "text") private String roadmap12Month;
+    @Column(name = "skill_gaps_json", columnDefinition = "text") private String skillGapsJson;
 }

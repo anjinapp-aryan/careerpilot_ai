@@ -121,6 +121,14 @@ public class SkillContext {
         if (a != null) sources.add("Application Command Center");
     }
 
+    // Gap B — Offer Intelligence & Salary Negotiation (additive; no other skill sets this).
+    private java.util.List<ai.careerpilot.offer.Offer> offers;
+    public java.util.List<ai.careerpilot.offer.Offer> offers() { return offers; }
+    public void offers(java.util.List<ai.careerpilot.offer.Offer> o) {
+        this.offers = o;
+        if (o != null && !o.isEmpty()) sources.add("Offer Intelligence");
+    }
+
     public Set<String> sources() { return sources; }
     public void addSource(String source) { sources.add(source); }
     public String sourcesBlock() {

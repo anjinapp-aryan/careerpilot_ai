@@ -16,6 +16,8 @@ management:
       show-details: when-authorized
 
 spring:
+ lifecycle:
+  timeout-per-shutdown-phase: 30s
   jpa:
     properties:
       hibernate:
@@ -38,3 +40,6 @@ careerpilot:
   kafka:
     # Enable Kafka locally if docker-compose is running
     enabled: ${KAFKA_ENABLED:true}
+
+server:
+  shutdown: graceful

@@ -1,5 +1,6 @@
 package ai.careerpilot.execution;
 
+import ai.careerpilot.domain.ApprovalQueueEntry;
 import ai.careerpilot.execution.analytics.AnalyticsService;
 import ai.careerpilot.execution.analytics.AnalyticsWorker;
 import ai.careerpilot.execution.approval.ApprovalService;
@@ -9,6 +10,7 @@ import ai.careerpilot.execution.event.ApprovalGrantedEvent;
 import ai.careerpilot.execution.event.SafetyValidatedEvent;
 import ai.careerpilot.execution.execution.ApplicationExecutionService;
 import ai.careerpilot.execution.execution.ApplicationExecutionWorker;
+import ai.careerpilot.execution.execution.FormApprovalExecutionWorker;
 import ai.careerpilot.execution.safety.SafetyEngine;
 import ai.careerpilot.execution.safety.SafetyResult;
 import ai.careerpilot.execution.safety.SafetyValidationWorker;
@@ -19,6 +21,8 @@ import ai.careerpilot.resumetailoring.event.ApplicationPackageReadyEvent;
 import org.junit.jupiter.api.Test;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
+
+import java.util.Optional;
 
 import java.util.List;
 import java.util.UUID;
@@ -117,17 +121,21 @@ class ExecutionWorkersTest {
     @Test
     void executionWorkerRunsWhenTriggerAndEngineOn() {
         ApplicationExecutionService execution = mock(ApplicationExecutionService.class);
+        ApprovalService approvalService = mock(ApprovalService.class);
         when(execution.isEnabled()).thenReturn(true);
-        new ApplicationExecutionWorker(execution, inlineExecutor(), true)
-                .onApprovalGranted(new ApprovalGrantedEvent(userId, jobId, pkgId, UUID.randomUUID(), "boss"));
+        UUID approvalId = UUID.randomUUID();
+        when(approvalService.findById(approvalId)).thenReturn(Optional.empty());
+        new ApplicationExecutionWorker(execution, approvalService, inlineExecutor(), true)
+                .onApprovalGranted(new ApprovalGrantedEvent(userId, jobId, pkgId, approvalId, "boss"));
         verify(execution).execute(userId, jobId, pkgId);
     }
 
     @Test
     void executionWorkerNoOpsWhenTriggerOff() {
         ApplicationExecutionService execution = mock(ApplicationExecutionService.class);
+        ApprovalService approvalService = mock(ApprovalService.class);
         when(execution.isEnabled()).thenReturn(true);
-        new ApplicationExecutionWorker(execution, inlineExecutor(), false)
+        new ApplicationExecutionWorker(execution, approvalService, inlineExecutor(), false)
                 .onApprovalGranted(new ApprovalGrantedEvent(userId, jobId, pkgId, UUID.randomUUID(), "boss"));
         verify(execution, never()).execute(any(), any(), any());
     }
@@ -135,10 +143,67 @@ class ExecutionWorkersTest {
     @Test
     void executionWorkerNoOpsWhenEngineDisabled() {
         ApplicationExecutionService execution = mock(ApplicationExecutionService.class);
+        ApprovalService approvalService = mock(ApprovalService.class);
         when(execution.isEnabled()).thenReturn(false);
-        new ApplicationExecutionWorker(execution, inlineExecutor(), true)
+        new ApplicationExecutionWorker(execution, approvalService, inlineExecutor(), true)
                 .onApprovalGranted(new ApprovalGrantedEvent(userId, jobId, pkgId, UUID.randomUUID(), "boss"));
         verify(execution, never()).execute(any(), any(), any());
+    }
+
+    @Test
+    void executionWorkerSkipsFormScreenshotApprovals_ownedByFormApprovalExecutionWorker() {
+        ApplicationExecutionService execution = mock(ApplicationExecutionService.class);
+        ApprovalService approvalService = mock(ApprovalService.class);
+        when(execution.isEnabled()).thenReturn(true);
+        UUID approvalId = UUID.randomUUID();
+        ApprovalQueueEntry formEntry = ApprovalQueueEntry.builder()
+                .id(approvalId).approvalType(ApprovalQueueEntry.TYPE_FORM_SCREENSHOT).build();
+        when(approvalService.findById(approvalId)).thenReturn(Optional.of(formEntry));
+        new ApplicationExecutionWorker(execution, approvalService, inlineExecutor(), true)
+                .onApprovalGranted(new ApprovalGrantedEvent(userId, jobId, pkgId, approvalId, "boss"));
+        verify(execution, never()).execute(any(), any(), any());
+    }
+
+    // ── FormApprovalExecutionWorker (Gap D) ──
+
+    @Test
+    void formApprovalWorkerFinalizesSubmitOnlyForFormScreenshotApprovals() {
+        ApprovalService approvalService = mock(ApprovalService.class);
+        ApplicationExecutionService execution = mock(ApplicationExecutionService.class);
+        when(execution.isEnabled()).thenReturn(true);
+        UUID approvalId = UUID.randomUUID();
+        UUID executionId = UUID.randomUUID();
+        ApprovalQueueEntry formEntry = ApprovalQueueEntry.builder()
+                .id(approvalId).approvalType(ApprovalQueueEntry.TYPE_FORM_SCREENSHOT).executionId(executionId).build();
+        when(approvalService.findById(approvalId)).thenReturn(Optional.of(formEntry));
+        new FormApprovalExecutionWorker(approvalService, execution, inlineExecutor())
+                .onApprovalGranted(new ApprovalGrantedEvent(userId, jobId, pkgId, approvalId, "boss"));
+        verify(execution).finalizeGuestApplySubmit(executionId);
+    }
+
+    @Test
+    void formApprovalWorkerIgnoresPackageLevelApprovals() {
+        ApprovalService approvalService = mock(ApprovalService.class);
+        ApplicationExecutionService execution = mock(ApplicationExecutionService.class);
+        when(execution.isEnabled()).thenReturn(true);
+        UUID approvalId = UUID.randomUUID();
+        ApprovalQueueEntry pkgEntry = ApprovalQueueEntry.builder()
+                .id(approvalId).approvalType(ApprovalQueueEntry.TYPE_APPLICATION_PACKAGE).build();
+        when(approvalService.findById(approvalId)).thenReturn(Optional.of(pkgEntry));
+        new FormApprovalExecutionWorker(approvalService, execution, inlineExecutor())
+                .onApprovalGranted(new ApprovalGrantedEvent(userId, jobId, pkgId, approvalId, "boss"));
+        verify(execution, never()).finalizeGuestApplySubmit(any());
+    }
+
+    @Test
+    void formApprovalWorkerNoOpsWhenEngineDisabled() {
+        ApprovalService approvalService = mock(ApprovalService.class);
+        ApplicationExecutionService execution = mock(ApplicationExecutionService.class);
+        when(execution.isEnabled()).thenReturn(false);
+        new FormApprovalExecutionWorker(approvalService, execution, inlineExecutor())
+                .onApprovalGranted(new ApprovalGrantedEvent(userId, jobId, pkgId, UUID.randomUUID(), "boss"));
+        verify(execution, never()).finalizeGuestApplySubmit(any());
+        verifyNoInteractions(approvalService);
     }
 
     // ── TrackingWorker + AnalyticsWorker (fed by ApplicationSubmittedEvent, never emitted in 2E) ──
@@ -188,14 +253,23 @@ class ExecutionWorkersTest {
         doThrow(new RuntimeException("queue full")).when(boom).execute(any());
 
         ApplicationExecutionService execution = mock(ApplicationExecutionService.class);
+        ApprovalService approvalService = mock(ApprovalService.class);
         when(execution.isEnabled()).thenReturn(true);
         // must not throw
-        new ApplicationExecutionWorker(execution, boom, true)
+        new ApplicationExecutionWorker(execution, approvalService, boom, true)
                 .onApprovalGranted(new ApprovalGrantedEvent(userId, jobId, pkgId, UUID.randomUUID(), "boss"));
 
         ApprovalService approval = mock(ApprovalService.class);
         when(approval.isEnabled()).thenReturn(true);
         new ApprovalWorker(approval, boom)
                 .onSafetyValidated(new SafetyValidatedEvent(userId, jobId, pkgId, "SAFE"));
+
+        // FormApprovalExecutionWorker must also never propagate a saturated-executor failure.
+        ApprovalQueueEntry formEntry = ApprovalQueueEntry.builder()
+                .id(UUID.randomUUID()).approvalType(ApprovalQueueEntry.TYPE_FORM_SCREENSHOT)
+                .executionId(UUID.randomUUID()).build();
+        when(approvalService.findById(any())).thenReturn(Optional.of(formEntry));
+        new FormApprovalExecutionWorker(approvalService, execution, boom)
+                .onApprovalGranted(new ApprovalGrantedEvent(userId, jobId, pkgId, UUID.randomUUID(), "boss"));
     }
 }

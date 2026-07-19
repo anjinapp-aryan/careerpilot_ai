@@ -56,11 +56,13 @@ Run once, from a fresh Oracle Linux 9 VM.
 # 1. Install Docker CE + Compose plugin, enable/start the daemon
 sudo ./deployment/install-docker.sh
 
-# 2. Clone the repo (if not already there) and place the real, secret-filled
-#    env file at /etc/careerpilot/careerpilot.env — setup-env.sh will refuse
-#    to proceed if it's missing, since it never generates one for you.
+# 2. Clone the repo, then start from the checked-in template and fill in
+#    real values — setup-env.sh will refuse to proceed if careerpilot.env
+#    is missing, since it never generates one for you.
 sudo git clone <repo-url> /opt/careerpilot
-#   ... create /etc/careerpilot/careerpilot.env with production values ...
+sudo mkdir -p /etc/careerpilot
+sudo cp /opt/careerpilot/careerpilot.env.example /etc/careerpilot/careerpilot.env
+sudo nano /etc/careerpilot/careerpilot.env   # fill in every REPLACE_ME value
 
 # 3. Lock down permissions on careerpilot.env and create the
 #    /opt/careerpilot/.env -> /etc/careerpilot/careerpilot.env symlink that

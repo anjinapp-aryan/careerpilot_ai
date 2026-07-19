@@ -9,8 +9,10 @@
 # Aborts if the git working tree is dirty (uncommitted changes would be lost
 # by the checkout, and could mask what's actually running).
 #
-# Usage: ./rollback.sh [REPO_DIR]
-#   REPO_DIR defaults to /opt/careerpilot
+# Usage: ./rollback.sh [REPO_DIR] [TARGET_REF]
+#   REPO_DIR defaults to the repository root this script lives in (i.e. the
+#   parent of the deployment/ directory) — works no matter where the repo was
+#   cloned (/opt/careerpilot, /opt/careerpilot/careerpilot_ai, /home/opc/..., etc).
 
 set -Eeuo pipefail
 
@@ -27,10 +29,11 @@ log_error() { printf "${C_RED}[ERROR]${C_RESET} %s\n" "$*" >&2; }
 
 trap 'log_error "rollback.sh failed at line ${LINENO} (exit code $?). Stack may be stopped — inspect with: docker compose ps"' ERR
 
-readonly REPO_DIR="${1:-/opt/careerpilot}"
+readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly DEFAULT_REPO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+readonly REPO_DIR="${1:-${DEFAULT_REPO_DIR}}"
 readonly ENV_FILE="/etc/careerpilot/careerpilot.env"
 readonly COMPOSE_FILE="${REPO_DIR}/docker-compose.yml"
-readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 cd "${REPO_DIR}"
 

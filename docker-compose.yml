@@ -20,15 +20,17 @@ services:
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
       ZOOKEEPER_TICK_TIME: 2000
-    # zookeeper-shell.sh ships inside the cp-zookeeper image (part of the bundled
-    # Confluent Platform CLI) — no curl/wget install. It launches a short-lived JVM
-    # per check, so this runs less often than the other checks on purpose: kafka's
-    # own healthcheck (below) already gives an indirect, cheaper signal that
-    # zookeeper is reachable, so this one exists mainly for direct diagnosis via
-    # `docker compose ps`, not as a load-bearing dependency gate.
+    # Checks ZooKeeper's own AdminServer `ruok` endpoint (port 8080 inside this
+    # container only — not published, no clash with the backend's host 8080).
+    # curl ships in the cp-zookeeper image. Previous check invoked
+    # "zookeeper-shell.sh", which does not exist in this image (Confluent strips
+    # the .sh suffix: /usr/bin/zookeeper-shell) — every probe died with
+    # exec-not-found, permanently unhealthy, which blocked kafka (service_healthy
+    # gate) and transitively the backend. curl is also far cheaper than the
+    # JVM-per-probe the shell would spawn.
     healthcheck:
-      test: ["CMD", "zookeeper-shell.sh", "localhost:2181", "ls", "/"]
-      interval: 45s
+      test: ["CMD", "curl", "-f", "http://localhost:8080/commands/ruok"]
+      interval: 30s
       timeout: 10s
       retries: 5
       start_period: 20s
@@ -50,13 +52,15 @@ services:
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
-    # kafka-broker-api-versions.sh ships inside the cp-kafka image (bundled Kafka
-    # admin CLI) — a real protocol-level check against the broker, no HTTP tooling
-    # needed at all. Checks the PLAINTEXT_HOST listener (bound on 0.0.0.0:9092
-    # inside the container regardless of whether that port is published to the
-    # host — see KAFKA_LISTENERS above).
+    # kafka-broker-api-versions ships inside the cp-kafka image (bundled Kafka
+    # admin CLI; Confluent images strip the upstream .sh suffix — /usr/bin/
+    # kafka-broker-api-versions, NOT ...-versions.sh) — a real protocol-level
+    # check against the broker, no HTTP tooling needed at all. Checks the
+    # PLAINTEXT_HOST listener (bound on 0.0.0.0:9092 inside the container
+    # regardless of whether that port is published to the host — see
+    # KAFKA_LISTENERS above).
     healthcheck:
-      test: ["CMD", "kafka-broker-api-versions.sh", "--bootstrap-server", "localhost:9092"]
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
       interval: 30s
       timeout: 10s
       retries: 8
@@ -100,6 +104,13 @@ services:
     # pure maintainability change, not a bug fix — same canonical env file as backend.
     env_file:
       - .env
+    # PORT must be pinned here: the shared .env carries PORT=8080 for the Spring
+    # backend, but this Dockerfile's CMD is `uvicorn ... --port ${PORT:-8088}` —
+    # without this override the env_file value leaks in and uvicorn binds 8080,
+    # breaking the healthcheck below AND the backend's AGENT_SERVICE_URL (both
+    # expect 8088). environment: beats env_file: in Compose precedence.
+    environment:
+      PORT: "8088"
     # No host port published: only the backend calls the agent-service, reached
     # internally at http://agent-service:8088 (AGENT_SERVICE_URL below). The
     # browser never talks to this service directly, so it doesn't need to be

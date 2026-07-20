@@ -42,7 +42,7 @@ pip install -r requirements-dev.txt   # pytest + pytest-asyncio, on top of requi
 pytest                                 # single test: pytest tests/test_rate_limiter.py::test_name
 ```
 - Backend: **no tests yet**. `spring-boot-starter-test` + `spring-security-test` are on the classpath ([backend/pom.xml](backend/pom.xml)) — run with `mvn test`, single test with `mvn -Dtest=ClassName#method test`.
-- Frontend: **no tests yet**; vitest is the natural fit given the Vite toolchain. There is also **no lint step configured** — the only `npm` scripts are `dev`, `build`, and `preview` (no `lint`, no eslint config).
+- Frontend: vitest is wired (`npm test` runs `vitest run`), with at least one real spec ([lib/authError.test.ts](frontend/src/lib/authError.test.ts)) — coverage is still thin, add specs alongside the code you touch. There is still **no lint step configured** — no `lint` script, no eslint config.
 
 ## Architecture — the things you need to read multiple files to see
 
@@ -134,6 +134,40 @@ Two independent flags per stage (`<stage>.enabled` gates the engine itself; `<st
 
 Each stage's job table (`resume_tailoring_jobs`, `ats_optimization_jobs`, `gap_analysis_jobs`, `ats_explainability_jobs`, `cover_letter_jobs`, `application_package_jobs`, `auto_apply_package_jobs` — migrations `V24`–`V30`) tracks `QUEUED`/`RUNNING`/`SUCCEEDED`/`FAILED` and is the only way to trace an async run; there is no synchronous fallback API for any stage. Poll a stage's status via its own `GET /api/diagnostics/<stage>` and `GET /api/diagnostics/<stage>/queue` endpoints ([DiagnosticsController.java](backend/src/main/java/ai/careerpilot/api/DiagnosticsController.java) for resume-tailoring/ATS-optimization, [PipelineDiagnosticsController.java](backend/src/main/java/ai/careerpilot/api/PipelineDiagnosticsController.java) for gap-analysis/ATS-explainability/cover-letter/application-package/auto-apply-package).
 
+### Phase 2E — Application execution (`execution/`) plus real browser automation
+[execution/](backend/src/main/java/ai/careerpilot/execution/) reuses the same `@Async` + `@TransactionalEventListener(AFTER_COMMIT)` worker pattern as resume tailoring, chained: safety validation (`execution/safety/SafetyEngine`) → mandatory human approval (`execution/approval/ApprovalService`, `POST /api/execution/approve`) → execution (`execution/execution/ApplicationExecutionService`) → retry policy (`execution/retry/RetryPolicyService`, deterministic failure-class → RETRY/PAUSE/STOP) → tracking → analytics, each its own sub-package/executor via `execution/config/ExecutionExecutorsConfig.java`.
+
+Real browser automation lives here too: `execution/browser/GuestApplyAutomationService.java` drives Microsoft Playwright's Java API via `PlaywrightAutomationProvider`. "Guest" means unauthenticated/no-login apply forms only — eligibility is a **hardcoded allowlist** in `execution/ats/GuestApplyEligibility.java` limited to `{greenhouse, lever}` (the only ATSes with public no-login forms); every other connector under `execution/ats/connector/` is a stub. `login()` unconditionally throws — no credentials are ever stored or entered. The flow is two-phase: fill only verified real `User` fields, screenshot the unsubmitted form, queue a `FORM_SCREENSHOT` approval — only after a human approves does `finalizeSubmit()` re-navigate and actually click submit. Gated by `BROWSER_AUTOMATION_ENABLED` (default `false`); the safety/approval stage flags default to fail-closed "on" even though the execution stage itself is dark.
+
+### Phase 3A — Workflow tracking is a second, deliberately separate tracking system
+[workflow/](backend/src/main/java/ai/careerpilot/workflow/) is explicitly documented in its own code as event-driven, not a linear pipeline. `workflow/correlation/WorkflowCorrelationService` keeps one row per running Phase 3A instance, upserted on every stage transition; `WorkflowDeadLetterService` is where every worker's catch block writes instead of propagating, for audit/replay. `workflow/tracking/ApplicationLifecycleService` + `ApplicationStatusMachine` is the canonical per-(user,job) status machine — **deliberately separate from Phase 2E's execution-scoped tracking**: `application.tracking.*` (Phase 2E) and `workflow.tracking.*` (Phase 3A) are two different config namespaces tracking two different things, don't conflate them. `workflow/timeline/TimelineService` is a human-readable, confidence-scored event stream distinct from the validated status history, and `workflow/analytics/` is its own metric set, separate from Phase 2E's `execution_analytics`.
+
+Two narrower additions in the same package family: `workflow/email/EmailIntelligenceService` is a deterministic keyword classifier that is **fully inert** — no mailbox integration exists, nothing fetches email, rows only arrive via a manual-ingest path. `workflow/interview/InterviewService` tracks interview rounds (Recruiter/Technical/System Design/Manager/HR/Final/Offer) with append-only feedback. All gated by their own `workflow.*` / `email.intelligence.*` / `interview.tracking.*` flags, default `false`.
+
+### Phase 6 — Learning-from-outcomes exists but is deliberately disconnected from live scoring
+`learning/LearningEventBridge` (same async-listener pattern) captures 2D/2E/3A domain events — application submitted/rejected/accepted, interview detected, offer received, recommendation approved — into `LearningEvent` rows. Downstream, `learning/pattern/SuccessPatternEngine` + `FailurePatternEngine` compute pattern rows, and `learning/recommendation/RecommendationWeightManager` upserts weights that `learning/recommendation/AdaptiveRecommendationEngine.getBoost(userId, dimension, key)` exposes as a read-only facade.
+
+**Important**: that engine's own Javadoc states it is not wired into `JobScoring`/`JobMatchingService` — built end-to-end, but live job matching does not consult it. Treat it like the "Provisioned-but-unused" list below, not as an active feature. Also in this phase: `learning/resume/ResumeLearningService` (best resume version by interview/offer rate), and `learning/career/CareerLearningEngine` + `CareerStrategyEngine` — the latter is what actually populates `domain/CareerStrategy`, combining a probability engine and a trajectory analyzer into one row per user. Gated by `learning.adaptive-recommendation.enabled` / `learning.adaptive-career.enabled`, both default `false`.
+
+### Phase 7 — Autopilot, submission orchestration, and the Application Command Center are three different patterns
+- [autopilot/](backend/src/main/java/ai/careerpilot/autopilot/) (`ApplicationDecisionEngine`, `AutoApplyEngine`, an `ApplicationProvider` SPI for Ashby/Greenhouse/Lever/LinkedIn/SmartRecruiters/Taleo/Workday/CompanyPortal) is scheduler/orchestrator style (`AutopilotScheduler`, `CareerOrchestrator`), not an event chain. Gated by `application.decision.enabled` / `application.auto.enabled`.
+- [submission/](backend/src/main/java/ai/careerpilot/submission/) (`ApplicationSubmissionSessionService`, `SubmissionStateMachine`) is a single orchestrator that **links by id** — never copies — into existing dormant rows from earlier stages (execution, packageintel, review, companyintel, story), spanning validation → field-mapping → question-detection → strategy → optional-approval → execution → verification → tracking → learning, publishing its own session-progress events rather than running N independent stage workers. Gated by `application.submission.*`, default `false`.
+- [applications/](backend/src/main/java/ai/careerpilot/applications/) — the Application Command Center (`ApplicationCardService`, `ApplicationHealthService`, `ApplicationNextActionService`, `ApplicationRecommendationService`) — has **no flag, no worker, no event**. It's a plain synchronous, always-on read/aggregation `@Service` layer over existing `applications` data (adds `favorite`/`priority`/`archived` columns). This is the one subsystem in this whole section that is live by default, not dark-shipped.
+
+### Company intelligence, offer intelligence, and career roadmap persistence
+- `companyintel/CompanyKnowledgeService` builds a per-user company "knowledge graph" (versioned 0–100 scores, timeline, relationship edges) purely from artifacts the platform already produced — never fabricated. Gated `company.knowledge.enabled`.
+- `jobdiscovery/enterprise/CompanyConnectorService` is an admin-manageable DB layer over the existing CSV-configured enterprise connectors (Workday/Taleo/SuccessFactors): CSV env vars stay the deploy-time source of truth, the DB bootstraps from CSV once and then becomes authoritative for enable/disable/health.
+- `jobdiscovery/discovery/CompanyDiscoveryService` probes keyless public ATS endpoints (Greenhouse/Ashby/SmartRecruiters/Workday) for new company slugs, inserting `PENDING_APPROVAL` connector rows for admin review. Gated `company.discovery.enabled`.
+- `offer/OfferAnalysisService` parses the `salary_insights` key the LangGraph `salary_intelligence` agent already writes into `WorkflowRun` state and upserts an `Offer` row (percentiles, negotiation strategy, leverage points). Gated `offer.intelligence.enabled`.
+- `workflow/career/CareerRoadmapPersistenceService` parses `career_roadmap`/`skill_gaps` from the `career_strategy` agent's output into the `career_strategy` table. Gated `career.roadmap.persistence.enabled`.
+
+Both offer analysis and roadmap persistence are real implementations, not stubs, but ship dark; `WorkflowService` calls them as try/catch-isolated additive side effects on workflow transitions — same non-throwing convention as everywhere else.
+
+### Daily Brief already exists, dark by default — don't re-build it
+`dailydiscovery/DailyJobDiscoveryScheduler` runs a separate 02:00 cron from the existing 06:00 `jobs.discovery.*` scheduler, driving `DailyJobDiscoveryCoordinator` → `DailyJobDiscoveryService` (computes a per-user snapshot: recommended/must-apply/high-priority/human-review counts, top companies/skills) → `DailyCareerSummaryGenerator` (rewrites the deterministic snapshot into a 4–6 sentence summary via `AiGatewayService`, falling back to the raw template on any AI failure — every number is computed, never invented). REST surface: `dailydiscovery/api/DailyDiscoveryController` (`GET /api/daily-discovery/summary`, `GET /api/daily-discovery/analytics`, `POST /api/daily-discovery/run` manual trigger). Gated by `career.discovery.scheduler.enabled` / `career.discovery.summary.enabled`, both `false`.
+
+`story/StarStoryEngine` (gated `story.engine.enabled`) is the same dark-by-default shape for STAR-method interview story extraction/generation/quality-evaluation.
+
 ### Frontend data flow
 [lib/api.ts](frontend/src/lib/api.ts) is a single axios instance with a bearer-token request interceptor (reading from the zustand store in [lib/auth.ts](frontend/src/lib/auth.ts)) and a 401-→-logout response interceptor. Auth state persists to localStorage via zustand's `persist` middleware. Server state uses TanStack Query — refetches are explicit (`queryClient.invalidateQueries`) after mutations; there is no SSE/WebSocket, so the Workflow page only updates on user action.
 
@@ -165,6 +199,17 @@ Each stage's job table (`resume_tailoring_jobs`, `ats_optimization_jobs`, `gap_a
 
 Every Phase 2D stage above ships dark (all flags `false`) and is meant to be canaried one at a time — flip `<stage>_ENABLED` first, verify via its diagnostics endpoint, then flip `<stage>_TRIGGER...ENABLED` to chain it onto the prior stage's event.
 
+The Phase 2E–7 flags below follow the same dark-ship convention, but most gate on an inline `@Value("${...:false}")` default with **no corresponding `application.yml` entry** — unlike the fully-wired Phase 2D flags above, enabling them means adding the property yourself, not just setting an env var Spring already binds.
+
+| Property | Effect |
+|---|---|
+| `BROWSER_AUTOMATION_ENABLED` | Enables real Playwright-driven guest-apply automation (Greenhouse/Lever only); requires human approval of a form screenshot before actual submit |
+| `career.discovery.scheduler.enabled` / `career.discovery.summary.enabled` | Daily Brief: 02:00 discovery snapshot + AI-rewritten morning summary |
+| `learning.adaptive-recommendation.enabled` | Enables the outcome-learning engine — note `getBoost()` still isn't consulted by live matching even when on |
+| `learning.adaptive-career.enabled` | Populates `CareerStrategy` via `CareerStrategyEngine` |
+| `offer.intelligence.enabled` / `career.roadmap.persistence.enabled` | Persist salary-intelligence and career-roadmap agent output instead of discarding it |
+| `company.knowledge.enabled` / `company.discovery.enabled` | Company knowledge graph + keyless-endpoint company discovery (admin-approval queue) |
+
 ## Provisioned-but-unused (do not assume these are integrated)
 
 Knowing what is *not* wired prevents wasted debugging:
@@ -177,6 +222,7 @@ Knowing what is *not* wired prevents wasted debugging:
 - `security.rate-limit.*` values — read by no limiter (no Bucket4j / RedisRateLimiter)
 - `@KafkaListener` — zero consumers exist; producer events go nowhere
 - `refresh_tokens` table — exists but no refresh endpoint wired
+- `AdaptiveRecommendationEngine.getBoost()` (`learning/recommendation/`) — computed and persisted end-to-end, but not called by `JobScoring`/`JobMatchingService`; live job matching does not use outcome-based learning today despite the pipeline existing
 
 When in doubt, grep for the symbol — if it has no callers, it is scaffolding.
 

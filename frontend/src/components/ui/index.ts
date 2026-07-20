@@ -11,6 +11,8 @@ export {
 export { Badge } from './badge';
 export type { BadgeProps, BadgeTone } from './badge';
 export { Input, Textarea, Label } from './input';
+export { PasswordInput } from './password-input';
+export type { PasswordInputProps } from './password-input';
 export { Skeleton, SkeletonText } from './skeleton';
 export { Separator } from './separator';
 export { Kbd } from './kbd';

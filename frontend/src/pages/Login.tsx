@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { AlertTriangle, Compass } from 'lucide-react';
+import { Compass } from 'lucide-react';
 import { api } from '@/lib/api';
 import { authErrorMessage } from '@/lib/authError';
 import { useAuthStore } from '@/lib/auth';
 import { AuthLayout } from '@/components/auth/AuthLayout';
 import { Button } from '@/components/ui/button';
 import { Input, Label } from '@/components/ui/input';
+import { PasswordInput } from '@/components/ui/password-input';
 import { useToast } from '@/components/ui/toast';
 
 export default function Login() {
@@ -35,6 +36,7 @@ export default function Login() {
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (loading) return; // duplicate-submission guard (Enter key while a request is in flight)
     setErr(null);
     setLoading(true);
     try {
@@ -76,6 +78,7 @@ export default function Login() {
             placeholder="you@company.com"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
+            disabled={loading}
             required
           />
         </div>
@@ -84,23 +87,17 @@ export default function Login() {
             <Label htmlFor="password">Password</Label>
             <span className="mb-1.5 text-xs font-medium text-primary">Forgot?</span>
           </div>
-          <Input
+          <PasswordInput
             id="password"
-            type="password"
             autoComplete="current-password"
             placeholder="••••••••"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
+            disabled={loading}
+            error={err ?? undefined}
             required
           />
         </div>
-
-        {err && (
-          <div className="flex items-center gap-2 rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-sm text-danger">
-            <AlertTriangle className="h-4 w-4 shrink-0" />
-            {err}
-          </div>
-        )}
 
         <Button type="submit" className="w-full" size="lg" loading={loading}>
           {loading ? 'Signing in…' : 'Sign in'}

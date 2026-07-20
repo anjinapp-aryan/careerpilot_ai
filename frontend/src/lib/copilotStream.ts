@@ -1,7 +1,11 @@
 import { useAuthStore } from '@/lib/auth';
 import type { CopilotStreamRequest } from '@/types/copilot';
 
-const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080';
+// `??` (not `||`) matters here: an intentional empty string ("" — same-origin,
+// nginx proxies /api/* to the backend) must NOT fall through to the localhost
+// dev default, which `||` would do since "" is falsy. See src/lib/api.ts for
+// the same fix and the full story (a real bug that shipped once already).
+const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8080';
 
 export interface StreamHandlers {
   /** Fired once with the (possibly newly created) conversation id. */

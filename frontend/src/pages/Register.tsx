@@ -7,6 +7,7 @@ import { useAuthStore } from '@/lib/auth';
 import { AuthLayout } from '@/components/auth/AuthLayout';
 import { Button } from '@/components/ui/button';
 import { Input, Label } from '@/components/ui/input';
+import { PasswordInput } from '@/components/ui/password-input';
 
 export default function Register() {
   const [form, setForm] = useState({ organizationName: '', fullName: '', email: '', password: '' });
@@ -21,6 +22,7 @@ export default function Register() {
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (loading) return; // duplicate-submission guard (Enter key while a request is in flight)
     setErr(null);
     setLoading(true);
     try {
@@ -55,27 +57,29 @@ export default function Register() {
       <form onSubmit={onSubmit} className="mt-8 space-y-4">
         <div>
           <Label htmlFor="org">Organization</Label>
-          <Input id="org" placeholder="Acme Inc." value={form.organizationName} onChange={on('organizationName')} required />
+          <Input id="org" placeholder="Acme Inc." value={form.organizationName} onChange={on('organizationName')} disabled={loading} required />
         </div>
         <div>
           <Label htmlFor="name">Full name</Label>
-          <Input id="name" placeholder="Jane Doe" value={form.fullName} onChange={on('fullName')} required />
+          <Input id="name" placeholder="Jane Doe" value={form.fullName} onChange={on('fullName')} disabled={loading} required />
         </div>
         <div>
           <Label htmlFor="email">Email</Label>
-          <Input id="email" type="email" autoComplete="email" placeholder="you@company.com" value={form.email} onChange={on('email')} required />
+          <Input id="email" type="email" autoComplete="email" placeholder="you@company.com" value={form.email} onChange={on('email')} disabled={loading} required />
         </div>
         <div>
           <Label htmlFor="password">Password</Label>
-          <Input
+          <PasswordInput
             id="password"
-            type="password"
             autoComplete="new-password"
             placeholder="At least 8 characters"
             value={form.password}
             onChange={on('password')}
+            disabled={loading}
             required
             minLength={8}
+            showStrength
+            showValidation
           />
         </div>
 

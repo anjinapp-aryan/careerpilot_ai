@@ -3,6 +3,7 @@ package ai.careerpilot.workflow.interview;
 import ai.careerpilot.domain.Interview;
 import ai.careerpilot.domain.InterviewFeedback;
 import ai.careerpilot.domain.InterviewTimeline;
+import ai.careerpilot.memory.CareerMemoryService;
 import ai.careerpilot.repo.InterviewFeedbackRepository;
 import ai.careerpilot.repo.InterviewRepository;
 import ai.careerpilot.repo.InterviewTimelineRepository;
@@ -30,15 +31,18 @@ public class InterviewService {
     private final InterviewFeedbackRepository feedback;
     private final InterviewTimelineRepository timeline;
     private final InterviewMetrics metrics;
+    private final CareerMemoryService careerMemory;
     private final boolean enabled;
 
     public InterviewService(InterviewRepository interviews, InterviewFeedbackRepository feedback,
                             InterviewTimelineRepository timeline, InterviewMetrics metrics,
+                            CareerMemoryService careerMemory,
                             @Value("${interview.tracking.enabled:false}") boolean enabled) {
         this.interviews = interviews;
         this.feedback = feedback;
         this.timeline = timeline;
         this.metrics = metrics;
+        this.careerMemory = careerMemory;
         this.enabled = enabled;
     }
 
@@ -78,8 +82,19 @@ public class InterviewService {
     public Optional<InterviewFeedback> addFeedback(UUID interviewId, String text, Integer rating) {
         if (!enabled) return Optional.empty();
         try {
-            return Optional.of(feedback.save(InterviewFeedback.builder()
-                    .interviewId(interviewId).feedback(text).rating(rating).build()));
+            InterviewFeedback saved = feedback.save(InterviewFeedback.builder()
+                    .interviewId(interviewId).feedback(text).rating(rating).build());
+            // Additive Phase 7.15.1 side effect — never blocks or fails the feedback save.
+            try {
+                interviews.findById(interviewId).ifPresent(interview -> careerMemory.record(
+                        interview.getUserId(), "INTERVIEW_FEEDBACK", "INTERVIEW",
+                        interview.getInterviewType(), text, java.math.BigDecimal.ONE,
+                        "INTERVIEW_INTELLIGENCE", rating != null && rating <= 2 ? 4 : 3, false,
+                        interview.getJobId(), null, null, null));
+            } catch (Exception e) {
+                log.debug("Career memory capture failed for interview feedback {}: {}", interviewId, e.toString());
+            }
+            return Optional.of(saved);
         } catch (Exception e) {
             metrics.recordFailure();
             log.warn("INTERVIEW feedback error interview={}: {}", interviewId, e.toString());

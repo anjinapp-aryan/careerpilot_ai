@@ -59,6 +59,7 @@ public class JobMatchingService {
     private final MustApplyEvaluator mustApplyEvaluator;
     private final LearningRecommendationBooster learningBooster;
     private final ai.careerpilot.companyintel.CompanyKnowledgeBooster companyBooster;
+    private final ai.careerpilot.memory.CareerMemoryBooster careerMemoryBooster;
     private final ObjectMapper mapper = new ObjectMapper();
 
     /** Full-spec Recommended gate: score >= minScore AND >= 1 role family AND >= 3 skill families. */
@@ -113,6 +114,7 @@ public class JobMatchingService {
                               MustApplyEvaluator mustApplyEvaluator,
                               LearningRecommendationBooster learningBooster,
                               ai.careerpilot.companyintel.CompanyKnowledgeBooster companyBooster,
+                              ai.careerpilot.memory.CareerMemoryBooster careerMemoryBooster,
                               @Value("${jobs.recommendation.strict-gate-enabled:true}") boolean strictGateEnabled,
                               @Value("${jobs.recommendation.gate-min-score:70}") int gateMinScore,
                               @Value("${jobs.recommendation.gate-min-skills:3}") int gateMinSkillFamilies,
@@ -137,6 +139,7 @@ public class JobMatchingService {
         this.mustApplyEvaluator = mustApplyEvaluator;
         this.learningBooster = learningBooster;
         this.companyBooster = companyBooster;
+        this.careerMemoryBooster = careerMemoryBooster;
         this.strictGateEnabled = strictGateEnabled;
         this.gateMinScore = gateMinScore;
         this.gateMinSkillFamilies = gateMinSkillFamilies;
@@ -201,8 +204,8 @@ public class JobMatchingService {
                     int rs = scoring.roleSimilarity(j, effectiveSkills(j, enrichedSkills), skills, targetRole);
                     return rs < 0 || rs >= roleRelevanceMin;
                 })
-                .map(j -> new Scored(j, applyCompanyKnowledgeBoost(userId, j,
-                        applyLearningBoost(userId, j, scoring.scoreV2(j, effectiveSkills(j, enrichedSkills), ctx, prefs)))))
+                .map(j -> new Scored(j, applyCareerMemoryBoost(userId, j, applyCompanyKnowledgeBoost(userId, j,
+                        applyLearningBoost(userId, j, scoring.scoreV2(j, effectiveSkills(j, enrichedSkills), ctx, prefs))))))
                 .filter(s -> passesGate(s.result()))
                 .toList();
         List<Scored> ranked = scored.stream()
@@ -311,6 +314,23 @@ public class JobMatchingService {
     private JobScoring.ScoreResultV2 applyCompanyKnowledgeBoost(UUID userId, Job job, JobScoring.ScoreResultV2 base) {
         if (!companyBooster.isActive()) return base;
         int boost = companyBooster.computeBoost(userId, job.getCompany());
+        if (boost == 0) return base;
+        int adjusted = Math.min(100, Math.max(0, base.matchScore() + boost));
+        return new JobScoring.ScoreResultV2(adjusted, base.matchedSkills(), base.missingSkills(),
+                base.breakdown(), base.confidence(),
+                base.matchedSkillFamilyCount(), base.matchedRoleCount());
+    }
+
+    /**
+     * Phase 7.15.1 — applies the career-memory boost/penalty (±5 max) on top of the company
+     * knowledge boost, same seam and clamping as {@link #applyCompanyKnowledgeBoost}. Returns
+     * {@code base} unchanged (same object) when memory or this specific boost is dark, so stock
+     * ranking is byte-for-byte identical to today until BOTH {@code career.memory.enabled} AND
+     * {@code jobs.matching.career-memory-boost.enabled} are explicitly turned on.
+     */
+    private JobScoring.ScoreResultV2 applyCareerMemoryBoost(UUID userId, Job job, JobScoring.ScoreResultV2 base) {
+        if (!careerMemoryBooster.isActive()) return base;
+        int boost = careerMemoryBooster.computeBoost(userId, job);
         if (boost == 0) return base;
         int adjusted = Math.min(100, Math.max(0, base.matchScore() + boost));
         return new JobScoring.ScoreResultV2(adjusted, base.matchedSkills(), base.missingSkills(),

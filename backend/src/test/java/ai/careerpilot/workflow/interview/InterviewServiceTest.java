@@ -1,6 +1,7 @@
 package ai.careerpilot.workflow.interview;
 
 import ai.careerpilot.domain.Interview;
+import ai.careerpilot.memory.CareerMemoryService;
 import ai.careerpilot.repo.InterviewFeedbackRepository;
 import ai.careerpilot.repo.InterviewRepository;
 import ai.careerpilot.repo.InterviewTimelineRepository;
@@ -19,11 +20,12 @@ class InterviewServiceTest {
     private final InterviewFeedbackRepository feedback = mock(InterviewFeedbackRepository.class);
     private final InterviewTimelineRepository timeline = mock(InterviewTimelineRepository.class);
     private final InterviewMetrics metrics = new InterviewMetrics();
+    private final CareerMemoryService careerMemory = mock(CareerMemoryService.class);
     private final UUID userId = UUID.randomUUID();
     private final UUID jobId = UUID.randomUUID();
 
     private InterviewService svc(boolean enabled) {
-        return new InterviewService(interviews, feedback, timeline, metrics, enabled);
+        return new InterviewService(interviews, feedback, timeline, metrics, careerMemory, enabled);
     }
 
     @Test

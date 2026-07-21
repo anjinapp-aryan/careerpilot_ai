@@ -31,7 +31,7 @@ class OfferAnalysisServiceTest {
 
     @Test
     void doesNothingWhenDisabled() {
-        OfferAnalysisService service = new OfferAnalysisService(repo, false);
+        OfferAnalysisService service = new OfferAnalysisService(repo, mock(ai.careerpilot.memory.CareerMemoryService.class),false);
         UUID userId = UUID.randomUUID();
         Map<String, Object> state = Map.of("salary_insights", Map.of("currency", "USD", "p50", 150000));
 
@@ -43,7 +43,7 @@ class OfferAnalysisServiceTest {
 
     @Test
     void capturesWellFormedSalaryInsights() {
-        OfferAnalysisService service = new OfferAnalysisService(repo, true);
+        OfferAnalysisService service = new OfferAnalysisService(repo, mock(ai.careerpilot.memory.CareerMemoryService.class),true);
         UUID userId = UUID.randomUUID();
         when(repo.findByUserIdAndSourceThreadId(userId, "thread-1")).thenReturn(Optional.empty());
 
@@ -67,7 +67,7 @@ class OfferAnalysisServiceTest {
 
     @Test
     void upsertsExistingOfferForSameThread() {
-        OfferAnalysisService service = new OfferAnalysisService(repo, true);
+        OfferAnalysisService service = new OfferAnalysisService(repo, mock(ai.careerpilot.memory.CareerMemoryService.class),true);
         UUID userId = UUID.randomUUID();
         Offer existing = Offer.builder().id(UUID.randomUUID()).userId(userId).sourceThreadId("thread-1")
                 .source("SALARY_INTELLIGENCE_AGENT").build();
@@ -84,7 +84,7 @@ class OfferAnalysisServiceTest {
 
     @Test
     void returnsNullWhenSalaryInsightsKeyMissing() {
-        OfferAnalysisService service = new OfferAnalysisService(repo, true);
+        OfferAnalysisService service = new OfferAnalysisService(repo, mock(ai.careerpilot.memory.CareerMemoryService.class),true);
         Offer result = service.captureFromWorkflow(UUID.randomUUID(), "thread-1", Map.of("other_key", "value"));
         assertNull(result);
         verify(repo, never()).save(any());
@@ -92,14 +92,14 @@ class OfferAnalysisServiceTest {
 
     @Test
     void returnsNullWhenSalaryInsightsIsEmptyMap() {
-        OfferAnalysisService service = new OfferAnalysisService(repo, true);
+        OfferAnalysisService service = new OfferAnalysisService(repo, mock(ai.careerpilot.memory.CareerMemoryService.class),true);
         Offer result = service.captureFromWorkflow(UUID.randomUUID(), "thread-1", Map.of("salary_insights", Map.of()));
         assertNull(result);
     }
 
     @Test
     void returnsNullWhenSalaryInsightsIsWrongType() {
-        OfferAnalysisService service = new OfferAnalysisService(repo, true);
+        OfferAnalysisService service = new OfferAnalysisService(repo, mock(ai.careerpilot.memory.CareerMemoryService.class),true);
         Map<String, Object> state = Map.of("salary_insights", "not-a-map");
         Offer result = service.captureFromWorkflow(UUID.randomUUID(), "thread-1", state);
         assertNull(result);
@@ -107,7 +107,7 @@ class OfferAnalysisServiceTest {
 
     @Test
     void toleratesMalformedNumericFields() {
-        OfferAnalysisService service = new OfferAnalysisService(repo, true);
+        OfferAnalysisService service = new OfferAnalysisService(repo, mock(ai.careerpilot.memory.CareerMemoryService.class),true);
         UUID userId = UUID.randomUUID();
         when(repo.findByUserIdAndSourceThreadId(any(), any())).thenReturn(Optional.empty());
 
@@ -126,7 +126,7 @@ class OfferAnalysisServiceTest {
 
     @Test
     void returnsNullOnNullState() {
-        OfferAnalysisService service = new OfferAnalysisService(repo, true);
+        OfferAnalysisService service = new OfferAnalysisService(repo, mock(ai.careerpilot.memory.CareerMemoryService.class),true);
         assertNull(service.captureFromWorkflow(UUID.randomUUID(), "thread-1", null));
     }
 
@@ -135,7 +135,7 @@ class OfferAnalysisServiceTest {
         OfferRepository failingRepo = mock(OfferRepository.class);
         when(failingRepo.findByUserIdAndSourceThreadId(any(), any())).thenReturn(Optional.empty());
         when(failingRepo.save(any())).thenThrow(new RuntimeException("db down"));
-        OfferAnalysisService service = new OfferAnalysisService(failingRepo, true);
+        OfferAnalysisService service = new OfferAnalysisService(failingRepo, mock(ai.careerpilot.memory.CareerMemoryService.class),true);
 
         Map<String, Object> state = Map.of("salary_insights", Map.of("currency", "USD", "p50", 100000));
 

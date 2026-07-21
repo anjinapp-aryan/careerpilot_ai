@@ -57,5 +57,12 @@ public class ApplicationExecution {
     @Column(name = "started_at") private Instant startedAt;
     @Column(name = "completed_at") private Instant completedAt;
 
+    // ── Phase 7.16.1 — submission evidence. Populated only by SubmissionVerificationService,
+    // never fabricated: null means "we genuinely don't have this," not "not applicable." ──
+    @Column(name = "confirmation_number", columnDefinition = "text") private String confirmationNumber;
+    @Column(name = "verification_status") private String verificationStatus;
+    @Column(name = "verification_method") private String verificationMethod;
+    @Column(name = "verified_at") private Instant verifiedAt;
+
     @CreationTimestamp @Column(name = "created_at", updatable = false) private Instant createdAt;
 }

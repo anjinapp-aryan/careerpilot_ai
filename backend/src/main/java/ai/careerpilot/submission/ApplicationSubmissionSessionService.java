@@ -421,8 +421,20 @@ public class ApplicationSubmissionSessionService {
         // matching autopilot's existing safe semantics. A real ATSConnector SUBMITTED also counts.
         advance(session, ApplicationSubmissionSession.STATUS_SUBMITTED);
 
-        // Step 11 — verify: no fabricated confirmation number, just what we genuinely have.
-        advance(session, ApplicationSubmissionSession.STATUS_VERIFIED);
+        // Step 11 — verify (Phase 7.16.1): VERIFIED is now gated behind real evidence rather than
+        // a bare transition. The linked ApplicationExecution row already carries the verification
+        // result — SubmissionVerificationService populated it as part of Step 9's execute() call
+        // (see ApplicationExecutionService.finalizeGuestApplySubmit), so no second verification
+        // call happens here; this step only reads the evidence back and reflects it in the
+        // session's own state, same "no fabrication" contract as before, now actually enforced.
+        advance(session, ApplicationSubmissionSession.STATUS_VERIFYING);
+        ApplicationExecution exec = execution.orElse(null);
+        boolean hasEvidence = exec != null
+                && "VERIFIED".equals(exec.getVerificationStatus())
+                && exec.getConfirmationNumber() != null;
+        advance(session, hasEvidence
+                ? ApplicationSubmissionSession.STATUS_VERIFIED
+                : ApplicationSubmissionSession.STATUS_VERIFICATION_FAILED);
 
         // Step 12 — tracking via the canonical lifecycle service, plus the kanban Application row so
         // the completed submission actually lands in the "Applied" column. Update the existing card

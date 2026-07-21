@@ -1,6 +1,7 @@
 package ai.careerpilot.service;
 
 import ai.careerpilot.domain.RecommendationFeedback;
+import ai.careerpilot.memory.CareerMemoryService;
 import ai.careerpilot.repo.RecommendationFeedbackRepository;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -23,13 +24,13 @@ class RecommendationFeedbackServiceTest {
 
     private RecommendationFeedbackService service(RecommendationFeedbackRepository repo, boolean enabled) {
         when(repo.save(any(RecommendationFeedback.class))).thenAnswer(inv -> inv.getArgument(0));
-        return new RecommendationFeedbackService(repo, enabled);
+        return new RecommendationFeedbackService(repo, mock(CareerMemoryService.class), enabled);
     }
 
     @Test
     void disabledIsANoOpAndNeverWrites() {
         RecommendationFeedbackRepository repo = mock(RecommendationFeedbackRepository.class);
-        RecommendationFeedbackService svc = new RecommendationFeedbackService(repo, false);
+        RecommendationFeedbackService svc = new RecommendationFeedbackService(repo, mock(CareerMemoryService.class), false);
         assertTrue(svc.record(userId, jobId, "APPROVE", "x").isEmpty());
         verify(repo, never()).save(any());
     }
@@ -59,7 +60,30 @@ class RecommendationFeedbackServiceTest {
     void unknownActionThrowsWhenEnabled() {
         RecommendationFeedbackRepository repo = mock(RecommendationFeedbackRepository.class);
         assertThrows(IllegalArgumentException.class,
-                () -> new RecommendationFeedbackService(repo, true).record(userId, jobId, "maybe", null));
+                () -> new RecommendationFeedbackService(repo, mock(CareerMemoryService.class), true)
+                        .record(userId, jobId, "maybe", null));
+    }
+
+    @Test
+    void enabledSaveAlsoCapturesCareerMemory() {
+        RecommendationFeedbackRepository repo = mock(RecommendationFeedbackRepository.class);
+        CareerMemoryService careerMemory = mock(CareerMemoryService.class);
+        when(repo.save(any(RecommendationFeedback.class))).thenAnswer(inv -> inv.getArgument(0));
+        new RecommendationFeedbackService(repo, careerMemory, true).record(userId, jobId, "REJECT", "relocation required");
+        ArgumentCaptor<RecommendationFeedback> captor = ArgumentCaptor.forClass(RecommendationFeedback.class);
+        verify(careerMemory).captureFeedback(captor.capture());
+        assertEquals("relocation required", captor.getValue().getReason());
+    }
+
+    @Test
+    void careerMemoryFailureNeverBreaksFeedbackSave() {
+        RecommendationFeedbackRepository repo = mock(RecommendationFeedbackRepository.class);
+        CareerMemoryService careerMemory = mock(CareerMemoryService.class);
+        when(repo.save(any(RecommendationFeedback.class))).thenAnswer(inv -> inv.getArgument(0));
+        doThrow(new RuntimeException("boom")).when(careerMemory).captureFeedback(any());
+        Optional<RecommendationFeedback> saved =
+                new RecommendationFeedbackService(repo, careerMemory, true).record(userId, jobId, "APPROVE", null);
+        assertTrue(saved.isPresent());
     }
 
     @Test

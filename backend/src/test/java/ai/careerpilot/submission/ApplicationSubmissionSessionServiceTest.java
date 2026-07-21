@@ -170,6 +170,27 @@ class ApplicationSubmissionSessionServiceTest {
         when(executionService.execute(userId, jobId, pkg.getId())).thenReturn(Optional.of(exec));
     }
 
+    /** Phase 7.16.1 — same as {@link #stubExecutionSubmitted()} but with real verification evidence already on the execution row (as SubmissionVerificationService would have set it). */
+    private void stubExecutionSubmittedAndVerified() {
+        ApplicationExecution exec = ApplicationExecution.builder().id(UUID.randomUUID())
+                .userId(userId).jobId(jobId).applicationPackageId(pkg.getId())
+                .executionStatus(ApplicationExecution.STATUS_SUBMITTED)
+                .executionType(ApplicationExecution.TYPE_MANUAL).attemptCount(1)
+                .confirmationNumber("real-evidence-blob").verificationStatus("VERIFIED").build();
+        when(executionService.execute(userId, jobId, pkg.getId())).thenReturn(Optional.of(exec));
+    }
+
+    /** Captures every status the session passed through (by string, not by mutated-object reference — {@code session} is reused across advance() calls, so only string capture at save()-time is trustworthy). */
+    private List<String> captureSessionStatusesOverTime() {
+        List<String> statuses = new java.util.ArrayList<>();
+        when(sessions.save(any(ApplicationSubmissionSession.class))).thenAnswer(inv -> {
+            ApplicationSubmissionSession s = inv.getArgument(0);
+            statuses.add(s.getStatus());
+            return s;
+        });
+        return statuses;
+    }
+
     // ── flags ──
 
     @Test
@@ -320,6 +341,38 @@ class ApplicationSubmissionSessionServiceTest {
         verify(learningPipeline).capture(eq(LearningEventType.APPLICATION_SUBMITTED), any(), eq(userId), eq(jobId), anyString(), anyString());
         verify(lifecycleService).transition(userId, jobId, ApplicationLifecycle.STATUS_SUBMITTED, "application-submission pipeline");
         verify(approvalService, never()).enqueue(any(), any(), any(), any());
+    }
+
+    // ── Phase 7.16.1 — VERIFIED is gated behind real evidence, VERIFICATION_FAILED is not a dead end ──
+
+    @Test
+    void runPipelineReachesVerificationFailedNotFabricatedVerifiedWhenNoEvidence() {
+        // The common case today: stubExecutionSubmitted()'s execution row carries no
+        // confirmationNumber/verificationStatus (exactly like real traffic before Gap D's guest-
+        // apply path runs) — VERIFIED must never be fabricated for this.
+        stubExecutionSubmitted();
+        List<String> statuses = captureSessionStatusesOverTime();
+
+        service(true, false, true, false).runPipeline(sessionId);
+
+        assertTrue(statuses.contains(ApplicationSubmissionSession.STATUS_VERIFYING), statuses.toString());
+        assertTrue(statuses.contains(ApplicationSubmissionSession.STATUS_VERIFICATION_FAILED), statuses.toString());
+        assertFalse(statuses.contains(ApplicationSubmissionSession.STATUS_VERIFIED),
+                "must never fabricate VERIFIED without real evidence: " + statuses);
+        // Deliberately NOT a dead end — proceeds all the way to COMPLETED regardless.
+        assertEquals(ApplicationSubmissionSession.STATUS_COMPLETED, session.getStatus());
+    }
+
+    @Test
+    void runPipelineReachesVerifiedWhenExecutionHasRealEvidence() {
+        stubExecutionSubmittedAndVerified();
+        List<String> statuses = captureSessionStatusesOverTime();
+
+        service(true, false, true, false).runPipeline(sessionId);
+
+        assertTrue(statuses.contains(ApplicationSubmissionSession.STATUS_VERIFIED), statuses.toString());
+        assertFalse(statuses.contains(ApplicationSubmissionSession.STATUS_VERIFICATION_FAILED), statuses.toString());
+        assertEquals(ApplicationSubmissionSession.STATUS_COMPLETED, session.getStatus());
     }
 
     @Test

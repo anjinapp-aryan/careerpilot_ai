@@ -64,15 +64,34 @@ class SubmissionStateMachineTest {
     }
 
     @Test
-    void submittedAdvancesOnlyToVerified() {
-        assertTrue(SubmissionStateMachine.canTransition(STATUS_SUBMITTED, STATUS_VERIFIED));
+    void submittedAdvancesOnlyToVerifying() {
+        // Phase 7.16.1 — VERIFYING inserted so VERIFIED can never be a bare transition; it must
+        // pass through a real evidence check first.
+        assertTrue(SubmissionStateMachine.canTransition(STATUS_SUBMITTED, STATUS_VERIFYING));
+        assertFalse(SubmissionStateMachine.canTransition(STATUS_SUBMITTED, STATUS_VERIFIED));
         assertFalse(SubmissionStateMachine.canTransition(STATUS_SUBMITTED, STATUS_TRACKING));
+    }
+
+    @Test
+    void verifyingBranchesToVerifiedOrVerificationFailed() {
+        assertTrue(SubmissionStateMachine.canTransition(STATUS_VERIFYING, STATUS_VERIFIED));
+        assertTrue(SubmissionStateMachine.canTransition(STATUS_VERIFYING, STATUS_VERIFICATION_FAILED));
+        assertFalse(SubmissionStateMachine.canTransition(STATUS_VERIFYING, STATUS_TRACKING));
     }
 
     @Test
     void verifiedAdvancesOnlyToTracking() {
         assertTrue(SubmissionStateMachine.canTransition(STATUS_VERIFIED, STATUS_TRACKING));
         assertFalse(SubmissionStateMachine.canTransition(STATUS_VERIFIED, STATUS_COMPLETED));
+    }
+
+    @Test
+    void verificationFailedAdvancesOnlyToTracking() {
+        // Deliberately NOT terminal and NOT the same as FAILED — the application likely was
+        // submitted, we simply couldn't prove it, so tracking still proceeds.
+        assertTrue(SubmissionStateMachine.canTransition(STATUS_VERIFICATION_FAILED, STATUS_TRACKING));
+        assertFalse(SubmissionStateMachine.isTerminal(STATUS_VERIFICATION_FAILED));
+        assertFalse(SubmissionStateMachine.canTransition(STATUS_VERIFICATION_FAILED, STATUS_COMPLETED));
     }
 
     @Test
@@ -86,7 +105,8 @@ class SubmissionStateMachineTest {
         for (String active : new String[] {
                 STATUS_CREATED, STATUS_VALIDATING, STATUS_PACKAGE_READY, STATUS_REVIEW_READY,
                 STATUS_COMPANY_READY, STATUS_STAR_READY, STATUS_READY_FOR_SUBMISSION, STATUS_WAITING_APPROVAL,
-                STATUS_SUBMITTING, STATUS_SUBMITTED, STATUS_VERIFIED, STATUS_TRACKING}) {
+                STATUS_SUBMITTING, STATUS_SUBMITTED, STATUS_VERIFYING, STATUS_VERIFIED,
+                STATUS_VERIFICATION_FAILED, STATUS_TRACKING}) {
             assertTrue(SubmissionStateMachine.canTransition(active, STATUS_FAILED), active + " -> FAILED must be legal");
         }
     }
@@ -140,7 +160,8 @@ class SubmissionStateMachineTest {
         for (String s : new String[] {
                 STATUS_CREATED, STATUS_VALIDATING, STATUS_PACKAGE_READY, STATUS_REVIEW_READY,
                 STATUS_COMPANY_READY, STATUS_STAR_READY, STATUS_READY_FOR_SUBMISSION, STATUS_WAITING_APPROVAL,
-                STATUS_SUBMITTING, STATUS_SUBMITTED, STATUS_VERIFIED, STATUS_TRACKING, STATUS_COMPLETED, STATUS_FAILED}) {
+                STATUS_SUBMITTING, STATUS_SUBMITTED, STATUS_VERIFYING, STATUS_VERIFIED,
+                STATUS_VERIFICATION_FAILED, STATUS_TRACKING, STATUS_COMPLETED, STATUS_FAILED}) {
             assertTrue(SubmissionStateMachine.isKnown(s), s + " should be known");
         }
         assertFalse(SubmissionStateMachine.isKnown("BOGUS"));

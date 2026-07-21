@@ -7,6 +7,7 @@ import ai.careerpilot.execution.ats.ATSConnector;
 import ai.careerpilot.execution.ats.ATSConnectorRegistry;
 import ai.careerpilot.execution.browser.BrowserAutomationProvider;
 import ai.careerpilot.execution.browser.GuestApplyAutomationService;
+import ai.careerpilot.execution.verification.SubmissionVerificationService;
 import ai.careerpilot.repo.ApplicationExecutionAuditRepository;
 import ai.careerpilot.repo.ApplicationExecutionRepository;
 import ai.careerpilot.repo.ApplicationPackageRepository;
@@ -45,6 +46,7 @@ class ApplicationExecutionServiceTest {
     private ATSConnectorRegistry connectors;
     private BrowserAutomationProvider browser;
     private GuestApplyAutomationService guestApply;
+    private SubmissionVerificationService verification;
 
     @BeforeEach
     void setUp() {
@@ -55,6 +57,7 @@ class ApplicationExecutionServiceTest {
         connectors = mock(ATSConnectorRegistry.class);
         browser = mock(BrowserAutomationProvider.class);
         guestApply = mock(GuestApplyAutomationService.class);
+        verification = mock(SubmissionVerificationService.class);
         when(executions.save(any(ApplicationExecution.class))).thenAnswer(inv -> {
             ApplicationExecution e = inv.getArgument(0);
             if (e.getId() == null) e.setId(UUID.randomUUID());
@@ -71,7 +74,7 @@ class ApplicationExecutionServiceTest {
 
     private ApplicationExecutionService service(boolean enabled) {
         return new ApplicationExecutionService(executions, audit, packages, jobs, connectors, browser,
-                guestApply, new ApplicationExecutionMetrics(), enabled);
+                guestApply, verification, new ApplicationExecutionMetrics(), enabled);
     }
 
     @Test
@@ -193,6 +196,54 @@ class ApplicationExecutionServiceTest {
 
         assertThat(awaiting.getExecutionStatus()).isEqualTo(ApplicationExecution.STATUS_SUBMITTED);
         assertThat(awaiting.getCompletedAt()).isNotNull();
+        // Phase 7.16.1 — verification must fire on every real SUBMITTED outcome, with the
+        // confirmation reference the automation actually captured (never fabricated).
+        org.mockito.Mockito.verify(verification).verify(awaiting, connector, "conf-123");
+    }
+
+    @Test
+    void finalizeGuestApplySubmit_verificationExceptionNeverBlocksSubmittedOutcome() {
+        UUID execId = UUID.randomUUID();
+        ApplicationExecution awaiting = ApplicationExecution.builder()
+                .id(execId).userId(userId).jobId(jobId).applicationPackageId(pkgId)
+                .executionStatus(ApplicationExecution.STATUS_AWAITING_APPROVAL)
+                .executionType(ApplicationExecution.TYPE_ATS_CONNECTOR)
+                .attemptCount(1).build();
+        when(executions.findById(execId)).thenReturn(Optional.of(awaiting));
+        ATSConnector connector = mock(ATSConnector.class);
+        when(connector.isConfigured()).thenReturn(true);
+        when(connector.name()).thenReturn("greenhouse");
+        when(connectors.detect(any())).thenReturn(connector);
+        when(guestApply.isEligible(connector)).thenReturn(true);
+        when(guestApply.finalizeSubmit(any(), any(), any()))
+                .thenReturn(GuestApplyAutomationService.AttemptOutcome.submitted("conf-123"));
+        when(verification.verify(any(), any(), any())).thenThrow(new RuntimeException("verification engine down"));
+
+        org.junit.jupiter.api.Assertions.assertDoesNotThrow(() -> service(true).finalizeGuestApplySubmit(execId));
+
+        assertThat(awaiting.getExecutionStatus()).isEqualTo(ApplicationExecution.STATUS_SUBMITTED);
+    }
+
+    @Test
+    void abortedOutcomeNeverInvokesVerification() {
+        UUID execId = UUID.randomUUID();
+        ApplicationExecution awaiting = ApplicationExecution.builder()
+                .id(execId).userId(userId).jobId(jobId).applicationPackageId(pkgId)
+                .executionStatus(ApplicationExecution.STATUS_AWAITING_APPROVAL)
+                .executionType(ApplicationExecution.TYPE_ATS_CONNECTOR)
+                .attemptCount(1).build();
+        when(executions.findById(execId)).thenReturn(Optional.of(awaiting));
+        ATSConnector connector = mock(ATSConnector.class);
+        when(connector.isConfigured()).thenReturn(true);
+        when(connector.name()).thenReturn("greenhouse");
+        when(connectors.detect(any())).thenReturn(connector);
+        when(guestApply.isEligible(connector)).thenReturn(true);
+        when(guestApply.finalizeSubmit(any(), any(), any()))
+                .thenReturn(GuestApplyAutomationService.AttemptOutcome.aborted("captcha detected"));
+
+        service(true).finalizeGuestApplySubmit(execId);
+
+        org.mockito.Mockito.verifyNoInteractions(verification);
     }
 
     @Test

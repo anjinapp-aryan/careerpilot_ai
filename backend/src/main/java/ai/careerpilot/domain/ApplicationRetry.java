@@ -26,6 +26,16 @@ public class ApplicationRetry {
     public static final String CLASS_DUPLICATE = "DUPLICATE";
     public static final String CLASS_RATE_LIMITED = "RATE_LIMITED";
     public static final String CLASS_UNKNOWN = "UNKNOWN";
+    // Phase 7.16.1 — verification-specific failure classes, reused by RetryPolicyService rather
+    // than a separate verification-only retry mechanism.
+    /** A submission may well have gone through, but no evidence could be captured — needs a human, never auto-retried (retrying risks a real duplicate). */
+    public static final String CLASS_CONFIRMATION_MISSING = "CONFIRMATION_MISSING";
+    /** The ATS/connector itself reported an error distinct from a network failure. */
+    public static final String CLASS_ATS_ERROR = "ATS_ERROR";
+    /** The browser automation layer (Playwright) failed independent of the target site. */
+    public static final String CLASS_BROWSER_FAILURE = "BROWSER_FAILURE";
+    /** The resolved ATSConnector itself failed (e.g. threw during verifySubmission). */
+    public static final String CLASS_PROVIDER_FAILURE = "PROVIDER_FAILURE";
 
     // actions
     public static final String ACTION_RETRY = "RETRY";

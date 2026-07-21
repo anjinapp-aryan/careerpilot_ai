@@ -9,6 +9,7 @@ import ai.careerpilot.execution.browser.GuestApplyAutomationService;
 import ai.careerpilot.execution.config.ExecutionExecutorsConfig;
 import ai.careerpilot.execution.execution.ApplicationExecutionMetrics;
 import ai.careerpilot.execution.tracking.TrackingMetrics;
+import ai.careerpilot.execution.verification.VerificationMetrics;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
@@ -35,6 +36,7 @@ public class ExecutionDiagnosticsController {
     private final AtsConnectorMetrics atsMetrics;
     private final TrackingMetrics trackingMetrics;
     private final AnalyticsMetrics analyticsMetrics;
+    private final VerificationMetrics verificationMetrics;
     private final ATSConnectorRegistry atsRegistry;
     private final GuestApplyAutomationService guestApply;
 
@@ -56,7 +58,8 @@ public class ExecutionDiagnosticsController {
     public ExecutionDiagnosticsController(
             ApplicationExecutionMetrics executionMetrics, BrowserAutomationMetrics browserMetrics,
             AtsConnectorMetrics atsMetrics, TrackingMetrics trackingMetrics,
-            AnalyticsMetrics analyticsMetrics, ATSConnectorRegistry atsRegistry,
+            AnalyticsMetrics analyticsMetrics, VerificationMetrics verificationMetrics,
+            ATSConnectorRegistry atsRegistry,
             GuestApplyAutomationService guestApply,
             @Qualifier(ExecutionExecutorsConfig.APPLICATION_EXECUTION_EXECUTOR) ThreadPoolTaskExecutor executionExecutor,
             @Qualifier(ExecutionExecutorsConfig.BROWSER_AUTOMATION_EXECUTOR) ThreadPoolTaskExecutor browserExecutor,
@@ -68,6 +71,7 @@ public class ExecutionDiagnosticsController {
         this.atsMetrics = atsMetrics;
         this.trackingMetrics = trackingMetrics;
         this.analyticsMetrics = analyticsMetrics;
+        this.verificationMetrics = verificationMetrics;
         this.atsRegistry = atsRegistry;
         this.guestApply = guestApply;
         this.executionExecutor = executionExecutor;
@@ -125,6 +129,27 @@ public class ExecutionDiagnosticsController {
         Map<String, Object> m = analyticsMetrics.snapshot();
         return stage(analyticsEnabled, analyticsTriggerEnabled, m, analyticsExecutor,
                 (Long) m.get("analyticsTotal"), (Long) m.get("analyticsFailures"));
+    }
+
+    /**
+     * Phase 7.16.1 — no dedicated executor (verification runs inline within
+     * {@code finalizeGuestApplySubmit}'s transaction, not on its own async stage), so this
+     * doesn't reuse {@link #stage}; same enabled/health/counts shape otherwise.
+     */
+    @GetMapping("/submission-verification")
+    public Map<String, Object> submissionVerification() {
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("enabled", executionEnabled);
+        out.putAll(verificationMetrics.snapshot());
+        long total = (long) verificationMetrics.snapshot().get("verificationAttempts");
+        long verified = (long) verificationMetrics.snapshot().get("verified");
+        String health;
+        if (!executionEnabled) health = "NOT_CONFIGURED";
+        else if (total == 0) health = "UP";
+        else if (verified * 100 < total * 30) health = "DEGRADED"; // fewer than 30% of attempts actually verified
+        else health = "UP";
+        out.put("health", health);
+        return out;
     }
 
     private static Map<String, Object> stage(boolean enabled, boolean triggerEnabled,

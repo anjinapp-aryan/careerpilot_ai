@@ -203,6 +203,8 @@ export interface CandidateProfile {
   targetRoles: string[];
   domains: string[];
   languages: string[];
+  /** Was missing from this type until Phase 7.15.3A even though the backend DTO always had it. */
+  homeCountry?: string | null;
   preferredCountries: string[];
   preferredCities: string[];
   workModes: string[];
@@ -976,4 +978,101 @@ export interface OfferComparisonRow {
 export interface OfferComparisonResult {
   rows: OfferComparisonRow[];
   highestOfferId?: string | null;
+}
+
+/** One row from `GET /api/career-memory`, `/timeline`, or `?category=`. */
+export interface CareerDecisionMemory {
+  id: string;
+  userId: string;
+  decisionType: string;
+  category: string;
+  value?: string | null;
+  reason?: string | null;
+  confidence?: number | null;
+  source: string;
+  importance?: number | null;
+  aiGenerated?: boolean | null;
+  userConfirmed?: boolean | null;
+  expiresAt?: string | null;
+  jobId?: string | null;
+  correlationId?: string | null;
+  workflowId?: string | null;
+  usageCount?: number | null;
+  lastUsedAt?: string | null;
+  createdAt: string;
+}
+
+/** `GET /api/career-memory/summary` — the "AI Learned About You" header stats. */
+export interface CareerMemorySummary {
+  totalMemories: number;
+  verifiedCount: number;
+  needsReviewCount: number;
+  conflictingCount: number;
+  lowConfidenceCount: number;
+  averageConfidence: number;
+  lastUpdated?: string | null;
+}
+
+/**
+ * `GET /api/candidate-profile` response shape — this is the SAME wire shape as the existing
+ * {@link CandidateProfile} type above (this file already had one before Phase 7.15.3; that
+ * earlier addition duplicated it under a different name — fixed by aliasing instead).
+ */
+export type CandidateProfileDto = CandidateProfile;
+
+/** `POST /api/career-memory` body — "Edit Memory". */
+export interface EditMemoryRequest {
+  category: string;
+  value: string;
+  reason?: string | null;
+}
+
+/** One row of `GET /api/interviews`. */
+export interface InterviewFeedbackEntry {
+  feedback?: string | null;
+  rating?: number | null;
+  createdAt: string;
+}
+export interface InterviewDto {
+  id: string;
+  jobId: string;
+  interviewType: string;
+  interviewer?: string | null;
+  durationMinutes?: number | null;
+  result?: string | null;
+  scheduledAt?: string | null;
+  createdAt: string;
+  feedback: InterviewFeedbackEntry[];
+}
+
+/** `GET /api/diagnostics/career-memory` — public, aggregate-only (never per-user). */
+export interface CareerMemoryDiagnostics {
+  enabled: boolean;
+  copilotContextEnabled: boolean;
+  totalMemories: number;
+  executorActiveCount: number;
+  executorQueueSize: number;
+  health: string;
+  extractionAttempts?: number;
+  extractionSuccesses?: number;
+  extractionFailures?: number;
+  retrievalCount?: number;
+  avgRetrievalLatencyMs?: number;
+  byCategory?: Record<string, number>;
+  bySource?: Record<string, number>;
+  averageConfidence?: number | null;
+  freshness?: { createdLast7d: number; createdLast30d: number; createdLast90d: number };
+  topRemembered?: { decisionType: string; value: string; uses: number }[];
+  conversationIntelligence?: {
+    enabled: boolean;
+    conversationsAnalyzed?: number;
+    decisionsDetected?: number;
+    memoriesAccepted?: number;
+    rejectedLowConfidence?: number;
+    duplicatesSkipped?: number;
+    writeFailures?: number;
+    averageConfidence?: number;
+    avgProcessingLatencyMs?: number;
+    memoryWriteSuccessRate?: number;
+  };
 }

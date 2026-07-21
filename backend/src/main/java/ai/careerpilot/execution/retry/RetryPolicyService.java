@@ -25,6 +25,10 @@ import java.util.UUID;
  *   VALIDATION_FAILED  -> STOP            (retrying can't fix bad data)
  *   DUPLICATE          -> STOP            (must never resubmit)
  *   UNKNOWN            -> STOP            (fail closed)
+ *   CONFIRMATION_MISSING -> PAUSE         (Phase 7.16.1 — may have actually submitted; needs a human, never auto-retried)
+ *   ATS_ERROR          -> RETRY           (Phase 7.16.1 — bounded by maxAttempts, transient ATS-side error)
+ *   BROWSER_FAILURE    -> RETRY           (Phase 7.16.1 — bounded by maxAttempts, Playwright-side error)
+ *   PROVIDER_FAILURE   -> RETRY           (Phase 7.16.1 — bounded by maxAttempts, connector threw)
  * </pre>
  * Once {@code attempt >= maxAttempts} (default 3), a would-be RETRY becomes STOP — the engine can
  * never loop endlessly.
@@ -76,6 +80,21 @@ public class RetryPolicyService {
                 || r.contains("required field")) {
             return ApplicationRetry.CLASS_VALIDATION_FAILED;
         }
+        // Phase 7.16.1 — verification-specific classes, checked after the more specific matches
+        // above (e.g. "timeout" already routes to NETWORK before we'd get here).
+        if (r.contains("no post-submit page") || r.contains("confirmation") && r.contains("missing")
+                || r.contains("no evidence") || r.contains("unable to verify")) {
+            return ApplicationRetry.CLASS_CONFIRMATION_MISSING;
+        }
+        if (r.contains("ats error") || r.contains("ats rejected") || r.contains("ats-side")) {
+            return ApplicationRetry.CLASS_ATS_ERROR;
+        }
+        if (r.contains("playwright") || r.contains("browser") && (r.contains("crash") || r.contains("closed"))) {
+            return ApplicationRetry.CLASS_BROWSER_FAILURE;
+        }
+        if (r.contains("connector") && (r.contains("error") || r.contains("failed"))) {
+            return ApplicationRetry.CLASS_PROVIDER_FAILURE;
+        }
         return ApplicationRetry.CLASS_UNKNOWN;
     }
 
@@ -93,8 +112,12 @@ public class RetryPolicyService {
             case ApplicationRetry.CLASS_RATE_LIMITED -> attemptsRemain
                     ? new RetryDecision(cls, ApplicationRetry.ACTION_RETRY_BACKOFF, backoffFor(attempt))
                     : new RetryDecision(cls, ApplicationRetry.ACTION_STOP, 0L);
-            case ApplicationRetry.CLASS_CAPTCHA, ApplicationRetry.CLASS_LOGIN_FAILED ->
+            case ApplicationRetry.CLASS_CAPTCHA, ApplicationRetry.CLASS_LOGIN_FAILED, ApplicationRetry.CLASS_CONFIRMATION_MISSING ->
                     new RetryDecision(cls, ApplicationRetry.ACTION_PAUSE, 0L);
+            case ApplicationRetry.CLASS_ATS_ERROR, ApplicationRetry.CLASS_BROWSER_FAILURE, ApplicationRetry.CLASS_PROVIDER_FAILURE ->
+                    attemptsRemain
+                            ? new RetryDecision(cls, ApplicationRetry.ACTION_RETRY, 0L)
+                            : new RetryDecision(cls, ApplicationRetry.ACTION_STOP, 0L);
             default -> // VALIDATION_FAILED, DUPLICATE, UNKNOWN
                     new RetryDecision(cls, ApplicationRetry.ACTION_STOP, 0L);
         };

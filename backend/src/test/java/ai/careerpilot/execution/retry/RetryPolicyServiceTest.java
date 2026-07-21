@@ -75,6 +75,48 @@ class RetryPolicyServiceTest {
         assertThat(policy.decide(null, 1).action()).isEqualTo(ApplicationRetry.ACTION_STOP);
     }
 
+    // ── Phase 7.16.1 — verification-specific failure classes ──
+
+    @Test
+    void confirmationMissingAlwaysPauses() {
+        // Never auto-retried: the submission may have genuinely gone through and retrying risks
+        // a real duplicate — this needs a human, same as CAPTCHA/LOGIN_FAILED.
+        RetryDecision d = policy.decide(ApplicationRetry.CLASS_CONFIRMATION_MISSING, 1);
+        assertThat(d.action()).isEqualTo(ApplicationRetry.ACTION_PAUSE);
+        assertThat(d.shouldRetry()).isFalse();
+    }
+
+    @Test
+    void atsErrorRetriesWhileAttemptsRemainThenStops() {
+        assertThat(policy.decide(ApplicationRetry.CLASS_ATS_ERROR, 1).action()).isEqualTo(ApplicationRetry.ACTION_RETRY);
+        assertThat(policy.decide(ApplicationRetry.CLASS_ATS_ERROR, 3).action()).isEqualTo(ApplicationRetry.ACTION_STOP);
+    }
+
+    @Test
+    void browserFailureRetriesWhileAttemptsRemainThenStops() {
+        assertThat(policy.decide(ApplicationRetry.CLASS_BROWSER_FAILURE, 1).action()).isEqualTo(ApplicationRetry.ACTION_RETRY);
+        assertThat(policy.decide(ApplicationRetry.CLASS_BROWSER_FAILURE, 3).action()).isEqualTo(ApplicationRetry.ACTION_STOP);
+    }
+
+    @Test
+    void providerFailureRetriesWhileAttemptsRemainThenStops() {
+        assertThat(policy.decide(ApplicationRetry.CLASS_PROVIDER_FAILURE, 1).action()).isEqualTo(ApplicationRetry.ACTION_RETRY);
+        assertThat(policy.decide(ApplicationRetry.CLASS_PROVIDER_FAILURE, 3).action()).isEqualTo(ApplicationRetry.ACTION_STOP);
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+            "no post-submit page content was captured,CONFIRMATION_MISSING",
+            "unable to verify submission,CONFIRMATION_MISSING",
+            "ATS error during verification,ATS_ERROR",
+            "playwright crashed unexpectedly,BROWSER_FAILURE",
+            "browser context closed unexpectedly,BROWSER_FAILURE",
+            "connector failed during verifySubmission,PROVIDER_FAILURE"
+    })
+    void classifiesVerificationFailureReasonsByKeyword(String reason, String expectedClass) {
+        assertThat(policy.classify(reason)).isEqualTo(expectedClass);
+    }
+
     // ── max-attempts cap: a would-be RETRY becomes STOP once attempts are exhausted ──
 
     @ParameterizedTest

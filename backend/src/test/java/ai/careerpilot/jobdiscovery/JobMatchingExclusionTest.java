@@ -35,6 +35,7 @@ class JobMatchingExclusionTest {
             new ai.careerpilot.jobdiscovery.priority.PriorityEngine(false), new MustApplyEvaluator(),
             mock(ai.careerpilot.learning.recommendation.LearningRecommendationBooster.class),
                 mock(ai.careerpilot.companyintel.CompanyKnowledgeBooster.class),
+                mock(ai.careerpilot.memory.CareerMemoryBooster.class),
             true, 70, 3, true, false, false, 40, false);
 
     private static Job job(String title, String description) {

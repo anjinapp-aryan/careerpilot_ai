@@ -7,6 +7,7 @@ import {
   ShieldCheck,
   BookOpen,
   Banknote,
+  Brain,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -91,6 +92,13 @@ export const NAV_GROUPS: NavGroup[] = [
         icon: BookOpen,
         keywords: ['star', 'behavioral', 'interview', 'stories', 'competency'],
         description: 'STAR stories & behavioral interview prep',
+      },
+      {
+        to: '/ai-memory',
+        label: 'AI Learned About You',
+        icon: Brain,
+        keywords: ['memory', 'preferences', 'confidence', 'timeline', 'trust', 'learned'],
+        description: 'What the AI knows, why, and how confident it is',
       },
     ],
   },

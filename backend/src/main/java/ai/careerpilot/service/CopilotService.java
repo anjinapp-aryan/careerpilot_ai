@@ -9,8 +9,10 @@ import ai.careerpilot.security.AuthenticatedUser;
 import ai.careerpilot.service.copilot.CopilotSkillHandler;
 import ai.careerpilot.service.copilot.CopilotSkillRouter;
 import ai.careerpilot.service.copilot.SkillContext;
+import ai.careerpilot.service.copilot.event.CopilotUserMessageEvent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 import reactor.core.scheduler.Schedulers;
@@ -24,9 +26,9 @@ import java.util.UUID;
  * Routes requests to specialized skill handlers, assembles RAG context,
  * and streams responses with source attribution via the AI Gateway.
  *
- * Supports 10 career intelligence skills: Resume Analysis, ATS Analysis,
- * Job Match, Application Strategy, Interview Prep, Career Guidance,
- * Workflow Explanation, Salary Guidance, Skills Gap, and Recommendations.
+ * Every skill also receives the candidate's canonical profile automatically here (not in any
+ * individual handler) via {@code contextRetriever.getCandidateProfileContext}, gated by
+ * {@code copilot.candidate-profile-context.enabled} — see {@link SkillContext#candidateProfileBlock()}.
  */
 @Service
 public class CopilotService {
@@ -37,13 +39,31 @@ public class CopilotService {
     private final ConversationMemory memory;
     private final CopilotSkillRouter skillRouter;
     private final AgentOrchestrator orchestrator;
+    private final CareerContextRetriever contextRetriever;
+    private final ApplicationEventPublisher events;
+    private final boolean candidateProfileContextEnabled;
+    private final boolean careerMemoryContextEnabled;
+    private final int careerMemoryContextLimit;
 
     public CopilotService(AiGatewayService ai, ConversationMemory memory,
-                          CopilotSkillRouter skillRouter, AgentOrchestrator orchestrator) {
+                          CopilotSkillRouter skillRouter, AgentOrchestrator orchestrator,
+                          CareerContextRetriever contextRetriever,
+                          ApplicationEventPublisher events,
+                          @org.springframework.beans.factory.annotation.Value(
+                                  "${copilot.candidate-profile-context.enabled:false}") boolean candidateProfileContextEnabled,
+                          @org.springframework.beans.factory.annotation.Value(
+                                  "${copilot.career-memory-context.enabled:false}") boolean careerMemoryContextEnabled,
+                          @org.springframework.beans.factory.annotation.Value(
+                                  "${copilot.career-memory-context.limit:5}") int careerMemoryContextLimit) {
         this.ai = ai;
         this.memory = memory;
         this.skillRouter = skillRouter;
         this.orchestrator = orchestrator;
+        this.contextRetriever = contextRetriever;
+        this.events = events;
+        this.candidateProfileContextEnabled = candidateProfileContextEnabled;
+        this.careerMemoryContextEnabled = careerMemoryContextEnabled;
+        this.careerMemoryContextLimit = careerMemoryContextLimit;
     }
 
     /** The live result of a turn: the conversation id + token stream + sources + provider reference. */
@@ -57,6 +77,13 @@ public class CopilotService {
                 ? req.message().strip()
                 : orchestrator.defaultMessage(req.action());
         memory.append(conv.getId(), "USER", userMessage, req.action());
+
+        // Phase 7.15.2 — purely additive: ConversationIntelligenceWorker is the only listener,
+        // and it never blocks or affects this turn (async, its own executor, never throws).
+        // Published unconditionally; the listener itself checks
+        // career.memory.conversation.enabled, same "publisher never checks flags" convention as
+        // LearningEventBridge/CareerMemoryEventBridge.
+        events.publishEvent(new CopilotUserMessageEvent(conv.getId(), user.userId(), userMessage, req.page(), req.action()));
 
         log.info("Copilot turn started: action={}, page={}, contextId={}", req.action(), req.page(), req.contextId());
 
@@ -72,8 +99,31 @@ public class CopilotService {
             // Continue with partial context — graceful degradation
         }
 
+        // Every skill automatically gets the candidate's known profile (career goals,
+        // preferences, excluded-roles memory) without any handler having to ask for it —
+        // dark-shipped behind copilot.candidate-profile-context.enabled for instant rollback.
+        if (candidateProfileContextEnabled) {
+            try {
+                skillCtx.candidateProfile(contextRetriever.getCandidateProfileContext(user));
+            } catch (Exception e) {
+                log.debug("No candidate profile context available: {}", e.getMessage());
+            }
+        }
+
+        // Same centralized, no-handler-touches-it pattern for Career Decision Memory (Phase
+        // 7.15.1) — ranked top-N only, never the full ledger. Separate flag from
+        // career.memory.enabled (which gates writing) so extraction and Copilot exposure can be
+        // canaried independently — a bad extraction is contained until this is also flipped on.
+        if (careerMemoryContextEnabled) {
+            try {
+                skillCtx.memories(contextRetriever.getRelevantMemories(user, careerMemoryContextLimit));
+            } catch (Exception e) {
+                log.debug("No career memory context available: {}", e.getMessage());
+            }
+        }
+
         String system = handler.systemPrompt(skillCtx);
-        String contextBlock = handler.contextBlock(skillCtx);
+        String contextBlock = handler.contextBlock(skillCtx) + skillCtx.candidateProfileBlock() + skillCtx.memoriesBlock();
         String sourcesBlock = skillCtx.sourcesBlock();
 
         List<ChatMessage> turns = buildTurns(conv.getId(), contextBlock);

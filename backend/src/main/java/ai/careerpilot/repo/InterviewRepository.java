@@ -10,5 +10,8 @@ public interface InterviewRepository extends JpaRepository<Interview, UUID> {
 
     List<Interview> findByUserIdAndJobIdOrderByCreatedAtDesc(UUID userId, UUID jobId);
 
+    /** Phase 7.15.3A — every interview round for a user, newest first, for the dashboard's Interview Insights section. */
+    List<Interview> findByUserIdOrderByCreatedAtDesc(UUID userId);
+
     long countByUserId(UUID userId);
 }

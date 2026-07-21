@@ -1,5 +1,6 @@
 package ai.careerpilot.offer;
 
+import ai.careerpilot.memory.CareerMemoryService;
 import ai.careerpilot.repo.OfferRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
@@ -28,12 +29,14 @@ public class OfferAnalysisService {
     private static final Logger log = LoggerFactory.getLogger(OfferAnalysisService.class);
 
     private final OfferRepository offers;
+    private final CareerMemoryService careerMemory;
     private final ObjectMapper mapper = new ObjectMapper();
     private final boolean enabled;
 
-    public OfferAnalysisService(OfferRepository offers,
+    public OfferAnalysisService(OfferRepository offers, CareerMemoryService careerMemory,
                                 @Value("${offer.intelligence.enabled:false}") boolean enabled) {
         this.offers = offers;
+        this.careerMemory = careerMemory;
         this.enabled = enabled;
     }
 
@@ -78,6 +81,17 @@ public class OfferAnalysisService {
 
             Offer saved = offers.save(offer);
             log.info("OFFER_INTEL captured user={} thread={} offerId={}", userId, threadId, saved.getId());
+            // Additive Phase 7.15.1 side effect — never blocks or fails the offer capture.
+            try {
+                String value = saved.getCompanyName() != null ? saved.getCompanyName()
+                        : (saved.getMarketP50() != null
+                                ? saved.getMarketP50() + (saved.getCurrency() != null ? " " + saved.getCurrency() : "")
+                                : null);
+                careerMemory.record(userId, "OFFER_ANALYZED", "SALARY", value, saved.getNegotiationStrategy(),
+                        BigDecimal.ONE, "OFFER_INTELLIGENCE", 5, false, null, null, threadId, null);
+            } catch (Exception e) {
+                log.debug("Career memory capture failed for offer {}: {}", saved.getId(), e.toString());
+            }
             return saved;
         } catch (Exception e) {
             log.warn("OFFER_INTEL capture failed user={} thread={}: {}", userId, threadId, e.toString());

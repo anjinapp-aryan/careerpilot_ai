@@ -12,6 +12,7 @@ import CareerIntelligence from '@/pages/CareerIntelligence';
 import Recommendations from '@/pages/Recommendations';
 import StoryLibrary from '@/pages/StoryLibrary';
 import Offers from '@/pages/Offers';
+import AiMemory from '@/pages/AiMemory';
 import AdminDashboard from '@/pages/AdminDashboard';
 import AppShell from '@/components/app-shell/AppShell';
 
@@ -51,6 +52,7 @@ export default function App() {
         <Route path="recommendations" element={<Recommendations />} />
         <Route path="stories" element={<StoryLibrary />} />
         <Route path="offers" element={<Offers />} />
+        <Route path="ai-memory" element={<AiMemory />} />
         <Route
           path="admin"
           element={

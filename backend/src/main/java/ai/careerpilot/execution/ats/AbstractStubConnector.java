@@ -1,6 +1,7 @@
 package ai.careerpilot.execution.ats;
 
 import ai.careerpilot.domain.Job;
+import ai.careerpilot.execution.verification.VerificationResult;
 
 import java.util.Locale;
 import java.util.Map;
@@ -37,6 +38,15 @@ public abstract class AbstractStubConnector implements ATSConnector {
     @Override public Map<String, String> extractForm(Job job) { throw stub(); }
     @Override public String submit(Job job, Map<String, String> answers) { throw stub(); }
     @Override public String track(String confirmationReference) { throw stub(); }
+
+    /**
+     * Honest default: a connector that can't really submit anything has no basis to claim
+     * verification either. Real connectors (Greenhouse/Lever) override this with an actual check.
+     */
+    @Override
+    public VerificationResult verifySubmission(String confirmationReference) {
+        return VerificationResult.unableToVerify("STUB_CONNECTOR", "connector '" + name() + "' is not wired for real submission");
+    }
 
     private static UnsupportedOperationException stub() {
         return new UnsupportedOperationException(STUB);

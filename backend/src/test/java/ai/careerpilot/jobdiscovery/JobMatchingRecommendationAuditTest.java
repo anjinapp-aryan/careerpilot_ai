@@ -57,6 +57,7 @@ class JobMatchingRecommendationAuditTest {
                 new ai.careerpilot.jobdiscovery.priority.PriorityEngine(false), new MustApplyEvaluator(),
                 mock(ai.careerpilot.learning.recommendation.LearningRecommendationBooster.class),
                 mock(ai.careerpilot.companyintel.CompanyKnowledgeBooster.class),
+                mock(ai.careerpilot.memory.CareerMemoryBooster.class),
                 false, 0, 0, false, auditEnabled, false, 0, false);   // strict gate off + no relevance pre-gate so seeded job always qualifies
     }
 

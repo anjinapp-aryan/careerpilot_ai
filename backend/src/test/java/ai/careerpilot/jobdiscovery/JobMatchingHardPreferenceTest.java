@@ -60,6 +60,7 @@ class JobMatchingHardPreferenceTest {
                 new ai.careerpilot.jobdiscovery.priority.PriorityEngine(false), new MustApplyEvaluator(),
                 mock(ai.careerpilot.learning.recommendation.LearningRecommendationBooster.class),
                 mock(ai.careerpilot.companyintel.CompanyKnowledgeBooster.class),
+                mock(ai.careerpilot.memory.CareerMemoryBooster.class),
                 false, 0, 0, false, false, false, 0, hardPreference);   // strict gate off so scoring alone wouldn't drop the job
     }
 

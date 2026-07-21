@@ -1,6 +1,7 @@
 package ai.careerpilot.execution.ats;
 
 import ai.careerpilot.domain.Job;
+import ai.careerpilot.execution.verification.VerificationResult;
 
 import java.util.Map;
 
@@ -33,4 +34,13 @@ public interface ATSConnector {
 
     /** Fetch the current ATS-side status for a previously submitted application. */
     String track(String confirmationReference);
+
+    /**
+     * Phase 7.16.1 — verify a previously-"submitted" application actually reached the ATS. Never
+     * assumes success: implementations must return {@link ai.careerpilot.execution.verification.VerificationStatus#UNABLE_TO_VERIFY}
+     * (not fabricate {@code VERIFIED}) whenever they lack real evidence to check. See
+     * {@link ai.careerpilot.execution.ats.AbstractStubConnector#verifySubmission} for the honest
+     * default every unconfigured connector inherits.
+     */
+    VerificationResult verifySubmission(String confirmationReference);
 }

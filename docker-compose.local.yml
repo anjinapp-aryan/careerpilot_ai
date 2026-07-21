@@ -4,8 +4,15 @@
 #
 # Restores local-dev conveniences (direct host access to internal services,
 # verbose logging, Swagger UI) that were intentionally stripped from
-# docker-compose.yml when it was hardened for the Oracle Cloud VM deploy (no
-# ports beyond frontend/backend published, SPRING_PROFILES_ACTIVE=prod).
+# docker-compose.yml when it was hardened for the Oracle Cloud VM deploy
+# (SPRING_PROFILES_ACTIVE=prod, and no host ports for redis/kafka/minio).
+#
+# Note: agent-service does NOT need a ports: entry here — docker-compose.yml
+# already publishes it loopback-only (127.0.0.1:8088:8088, for the VM's Nginx
+# reverse proxy), which is equally usable from the host for local dev. Adding
+# a second "8088:8088" publish here used to collide with that existing bind
+# (0.0.0.0:8088 and 127.0.0.1:8088 for the same container port fight over the
+# socket) and made `docker compose up` flaky/order-dependent — don't re-add it.
 #
 # On the VM: don't copy this file over, and don't pass the -f flag above —
 # docker-compose.yml alone gives you the hardened production behavior.
@@ -21,9 +28,6 @@ services:
     ports:
       - "9000:9000"
       - "9001:9001"
-  agent-service:
-    ports:
-      - "8088:8088"
   backend:
     environment:
       # Empty = no active profile, i.e. application.yml's own dev-friendly

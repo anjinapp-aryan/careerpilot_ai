@@ -41,8 +41,13 @@ docker compose --env-file .env -f docker-compose.yml -f docker-compose.local.yml
 Brings up `redis`, `zookeeper`, `kafka`, `minio`, `agent-service`, `backend`, `frontend`.
 Postgres is **not** in compose — backend talks directly to Neon. The `-f docker-compose.local.yml`
 overlay is required for this local/agent path — without it, `docker-compose.yml` alone applies
-its Oracle-VM-hardened form (no host ports for redis/kafka/minio/agent-service, `SPRING_PROFILES_ACTIVE=prod`),
-and the health poll below plus every `localhost:8088`/`:9001` reference will fail.
+its Oracle-VM-hardened form (no host ports for redis/kafka/minio, `SPRING_PROFILES_ACTIVE=prod`
+on the backend), and every `localhost:9001`/`:6379`/`:9092` reference will fail. **Note:**
+`agent-service` is the one exception — `docker-compose.yml` itself already publishes it
+loopback-only (`127.0.0.1:8088:8088`, for the VM's Nginx reverse proxy), so the overlay does
+**not** add a second publish for it (it used to — duplicating the `8088` publish as a bare
+`0.0.0.0:8088` alongside the existing `127.0.0.1:8088` bind made `docker compose up` flaky/
+order-dependent with "address already in use"; fixed by deleting the redundant overlay entry).
 
 ### 2. Wait for health (backend is slowest — ~20s)
 
@@ -79,7 +84,7 @@ Exit codes: `0` all checks passed, `1` a target failed (see the FAIL list), `2` 
 
 ### 4. Screenshot the frontend (GUI verification)
 
-`chromium-cli` is not installed; drive Edge headless instead. This wrote a 214 KB PNG of the
+`chromium-cli` is not installed; drive Edge headless instead. This wrote a ~200 KB PNG of the
 live login page:
 
 ```powershell
@@ -174,6 +179,10 @@ cd frontend && npm install && npm run dev                      # this gives real
   `POST /api/workflows/run` instead.
 - **`backend=000` in the health poll is not an error** — Spring Boot takes ~15–20s; the agent
   and frontend are ready almost immediately.
+- **A stray `docker compose up` failure right after starting Docker Desktop can be a transient
+  Windows networking race, not a real conflict** — `netstat -ano` showing only a `TIME_WAIT`
+  entry (not `LISTENING`) on the port compose complains about means it'll clear itself in
+  seconds; retry once. If it keeps failing, it's a real conflict — see Troubleshooting.
 
 ## Troubleshooting
 
@@ -187,3 +196,12 @@ cd frontend && npm install && npm run dev                      # this gives real
   manually.
 - **Ports already bound** → a previous stack is still running:
   `docker compose --env-file .env -f docker-compose.yml -f docker-compose.local.yml down` then retry.
+- **`docker compose up` fails with `bind: An attempt was made to access a socket in a way
+  forbidden by its access permissions` on port 8080 (or `address already in use` with no
+  matching `LISTENING` row in `netstat -ano`)** → an unrelated Windows service already owns
+  that port on this host (observed: a local `httpd.exe` / `PEMHTTPD-x64` service holding 8080).
+  Find the owner: `netstat -ano | grep ':8080'` for the PID, then
+  `powershell -Command "Get-CimInstance Win32_Service | Where-Object { \$_.ProcessId -eq <PID> } | Select Name"`.
+  Stopping it requires an **elevated** shell (`Stop-Service -Name '<Name>' -Force` from an
+  admin PowerShell — a non-admin shell gets `Access is denied` from both `Stop-Service` and
+  `taskkill`). This is a host-machine conflict, not something the stack or this skill can fix.

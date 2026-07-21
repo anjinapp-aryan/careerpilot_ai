@@ -34,7 +34,11 @@ public class ApplicationSubmissionSession {
     public static final String STATUS_WAITING_APPROVAL = "WAITING_APPROVAL";
     public static final String STATUS_SUBMITTING = "SUBMITTING";
     public static final String STATUS_SUBMITTED = "SUBMITTED";
+    /** Phase 7.16.1 — real verification (evidence check) in progress; inserted between SUBMITTED and VERIFIED/VERIFICATION_FAILED. */
+    public static final String STATUS_VERIFYING = "VERIFYING";
     public static final String STATUS_VERIFIED = "VERIFIED";
+    /** Phase 7.16.1 — verification ran but produced no usable evidence (NOT_VERIFIED/UNABLE_TO_VERIFY/UNKNOWN). NOT the same as FAILED: the application likely was submitted, we simply can't prove it — tracking still proceeds. */
+    public static final String STATUS_VERIFICATION_FAILED = "VERIFICATION_FAILED";
     public static final String STATUS_TRACKING = "TRACKING";
     public static final String STATUS_COMPLETED = "COMPLETED";
     public static final String STATUS_FAILED = "FAILED";

@@ -8,6 +8,7 @@ import ai.careerpilot.execution.ats.ATSConnector;
 import ai.careerpilot.execution.ats.ATSConnectorRegistry;
 import ai.careerpilot.execution.browser.BrowserAutomationProvider;
 import ai.careerpilot.execution.browser.GuestApplyAutomationService;
+import ai.careerpilot.execution.verification.SubmissionVerificationService;
 import ai.careerpilot.repo.ApplicationExecutionAuditRepository;
 import ai.careerpilot.repo.ApplicationExecutionRepository;
 import ai.careerpilot.repo.ApplicationPackageRepository;
@@ -59,6 +60,7 @@ public class ApplicationExecutionService {
     private final ATSConnectorRegistry connectors;
     private final BrowserAutomationProvider browser;
     private final GuestApplyAutomationService guestApply;
+    private final SubmissionVerificationService verification;
     private final ApplicationExecutionMetrics metrics;
     private final boolean enabled;
 
@@ -69,6 +71,7 @@ public class ApplicationExecutionService {
                                        ATSConnectorRegistry connectors,
                                        BrowserAutomationProvider browser,
                                        GuestApplyAutomationService guestApply,
+                                       SubmissionVerificationService verification,
                                        ApplicationExecutionMetrics metrics,
                                        @Value("${application.execution.enabled:false}") boolean enabled) {
         this.executions = executions;
@@ -78,6 +81,7 @@ public class ApplicationExecutionService {
         this.connectors = connectors;
         this.browser = browser;
         this.guestApply = guestApply;
+        this.verification = verification;
         this.metrics = metrics;
         this.enabled = enabled;
     }
@@ -215,7 +219,19 @@ public class ApplicationExecutionService {
         }
         GuestApplyAutomationService.AttemptOutcome outcome = guestApply.finalizeSubmit(exec, job, connector);
         switch (outcome.kind()) {
-            case SUBMITTED -> terminal(exec, ApplicationExecution.STATUS_SUBMITTED, null, start);
+            case SUBMITTED -> {
+                // Phase 7.16.1 — verify BEFORE reaching the terminal SUBMITTED state, so the
+                // execution's own evidence columns (confirmationNumber/verificationStatus/...)
+                // are already populated by the time any caller (e.g. the submission pipeline)
+                // reads this row back. Never blocks/fails the SUBMITTED outcome itself — the
+                // click already happened; verification only records what we can prove about it.
+                try {
+                    verification.verify(exec, connector, outcome.confirmationReference());
+                } catch (Exception e) {
+                    log.warn("APP_EXECUTION verification call failed execution={}: {}", exec.getId(), e.toString());
+                }
+                terminal(exec, ApplicationExecution.STATUS_SUBMITTED, null, start);
+            }
             case ABORTED -> terminal(exec, ApplicationExecution.STATUS_ABORTED, outcome.reason(), start);
             default -> terminal(exec, ApplicationExecution.STATUS_FAILED, outcome.reason(), start);
         }

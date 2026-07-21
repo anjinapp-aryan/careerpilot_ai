@@ -28,8 +28,14 @@ public final class SubmissionStateMachine {
             Map.entry(STATUS_READY_FOR_SUBMISSION, Set.of(STATUS_WAITING_APPROVAL, STATUS_SUBMITTING)),
             Map.entry(STATUS_WAITING_APPROVAL, Set.of(STATUS_SUBMITTING)),
             Map.entry(STATUS_SUBMITTING, Set.of(STATUS_SUBMITTED)),
-            Map.entry(STATUS_SUBMITTED, Set.of(STATUS_VERIFIED)),
+            // Phase 7.16.1 — VERIFYING inserted so VERIFIED is never a bare transition; it can
+            // only be reached after a real evidence check. VERIFICATION_FAILED is deliberately
+            // NOT terminal — it still proceeds to TRACKING (the application likely was
+            // submitted; we simply couldn't prove it), it's a different label, not an abort.
+            Map.entry(STATUS_SUBMITTED, Set.of(STATUS_VERIFYING)),
+            Map.entry(STATUS_VERIFYING, Set.of(STATUS_VERIFIED, STATUS_VERIFICATION_FAILED)),
             Map.entry(STATUS_VERIFIED, Set.of(STATUS_TRACKING)),
+            Map.entry(STATUS_VERIFICATION_FAILED, Set.of(STATUS_TRACKING)),
             Map.entry(STATUS_TRACKING, Set.of(STATUS_COMPLETED)));
 
     public static boolean isTerminal(String status) {

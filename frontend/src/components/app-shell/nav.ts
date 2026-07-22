@@ -8,6 +8,8 @@ import {
   BookOpen,
   Banknote,
   Brain,
+  Radar,
+  Building2,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -100,6 +102,13 @@ export const NAV_GROUPS: NavGroup[] = [
         keywords: ['memory', 'preferences', 'confidence', 'timeline', 'trust', 'learned'],
         description: 'What the AI knows, why, and how confident it is',
       },
+      {
+        to: '/companies',
+        label: 'Company Intelligence',
+        icon: Building2,
+        keywords: ['hiring', 'interview', 'technology', 'compare', 'company', 'knowledge graph'],
+        description: 'Hiring, interview, and technology intelligence per company',
+      },
     ],
   },
   {
@@ -111,6 +120,14 @@ export const NAV_GROUPS: NavGroup[] = [
         icon: ShieldCheck,
         keywords: ['provider health', 'discovery', 'skills', 'salary', 'enrichment'],
         description: 'Job discovery & AI enrichment ops',
+        adminOnly: true,
+      },
+      {
+        to: '/operations',
+        label: 'Operations Center',
+        icon: Radar,
+        keywords: ['execution', 'retry', 'recovery', 'verification', 'fleet', 'queue', 'automation'],
+        description: 'Automation execution, recovery & verification observability',
         adminOnly: true,
       },
     ],

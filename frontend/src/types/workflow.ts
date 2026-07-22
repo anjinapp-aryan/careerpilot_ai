@@ -484,6 +484,13 @@ export interface CareerStrategySnapshot {
   roadmap6Month?: string | null;
   roadmap12Month?: string | null;
   skillGapsJson?: string | null;
+  // Phase 7.19 — Career Goal Intelligence (V66). Absent/null until POST /career-goal/recompute or
+  // /career-goal/plan has run with the corresponding career.* flag on. Raw JSON, parsed client-side.
+  skillGapIntelligenceJson?: string | null;
+  promotionReadinessJson?: string | null;
+  careerGoalJson?: string | null;
+  computedRoadmapJson?: string | null;
+  careerGoalComputedAt?: string | null;
 }
 
 /** `GET /api/workflow/career-learning` response (Phase 6.5). Absent/empty fields when
@@ -495,6 +502,26 @@ export interface CareerLearningView {
   topIndustries: CareerLearningRow[];
   topLocations: CareerLearningRow[];
   topSalaryBands: CareerLearningRow[];
+}
+
+/** Phase 7.19.5 — one item from `GET /api/workflow/executive/decisions`. Every field is traceable
+ *  to an existing intelligence module; nothing here is a newly-computed score. */
+export interface ExecutiveDecision {
+  type: string;
+  recommendation: string;
+  evidence: Record<string, unknown>;
+  confidence: 'HIGH' | 'MEDIUM' | 'LOW' | string;
+  modulesUsed: string[];
+  timestamp: string;
+}
+
+/** `GET /api/workflow/executive/decisions` response. Empty object when `executive.decision.enabled` is off. */
+export interface ExecutiveDecisionsResponse {
+  careerHealth?: { value: number | string; source?: string; evidence?: string; reason?: string } | null;
+  decisions?: ExecutiveDecision[];
+  omittedDecisionTypes?: string[];
+  sourceModules?: string[];
+  computedAt?: string;
 }
 
 /** One row of `GET /api/recommendations/audit`. Mirrors the `recommendation_audit` entity. */
@@ -881,6 +908,18 @@ export interface ApplicationCard {
 
   /** Phase 3A lifecycle status (one of the 16 real statuses), or null when tracking has no row yet. */
   lifecycleStatus?: string | null;
+
+  /**
+   * Phase 7.16.3/7.16.4 — Automation Recovery Center visibility. All null unless
+   * application.execution.enabled and an ApplicationExecution row exists for this (user, job).
+   * automationHealth is a derived display label (RUNNING/WAITING/RETRYING/MANUAL_REVIEW/RECOVERED/
+   * COMPLETED/VERIFICATION_FAILED/FAILED), not a persisted status.
+   */
+  executionId?: string | null;
+  executionStatus?: string | null;
+  automationHealth?: string | null;
+  retryCount?: number | null;
+  verificationStatus?: string | null;
 }
 
 export type ApplicationBulkAction = 'STATUS' | 'ARCHIVE' | 'NOTES' | 'NEXT_ACTION' | 'RESUME' | 'EXPORT';

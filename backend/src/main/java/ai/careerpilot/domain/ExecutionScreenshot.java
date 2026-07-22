@@ -29,5 +29,8 @@ public class ExecutionScreenshot {
     @Column(name = "storage_key", nullable = false) private String storageKey;
     @Column(name = "approval_queue_entry_id") private UUID approvalQueueEntryId;
 
+    /** Phase 7.16.3 — which moment this screenshot captures: BEFORE_SUBMIT, AFTER_SUBMIT, or FAILURE. */
+    @Column(name = "phase") private String phase;
+
     @CreationTimestamp @Column(name = "captured_at", updatable = false) private Instant capturedAt;
 }

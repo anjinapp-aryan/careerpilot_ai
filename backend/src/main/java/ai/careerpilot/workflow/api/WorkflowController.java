@@ -9,6 +9,9 @@ import ai.careerpilot.domain.CareerLearning;
 import ai.careerpilot.domain.CareerStrategy;
 import ai.careerpilot.domain.Interview;
 import ai.careerpilot.learning.career.CareerLearningFacade;
+import ai.careerpilot.learning.career.executive.ExecutiveDecisionEngine;
+import ai.careerpilot.learning.career.goal.CareerGoalEngine;
+import ai.careerpilot.learning.career.goal.CareerGoalPlannerService;
 import ai.careerpilot.security.AuthenticatedUser;
 import ai.careerpilot.workflow.analytics.ApplicationAnalyticsService;
 import ai.careerpilot.workflow.career.CareerIntelligenceService;
@@ -55,11 +58,15 @@ public class WorkflowController {
     private final CareerIntelligenceService career;
     private final WorkflowEntryBridge entry;
     private final CareerLearningFacade careerLearning;
+    private final CareerGoalEngine careerGoalEngine;
+    private final CareerGoalPlannerService careerGoalPlanner;
+    private final ExecutiveDecisionEngine executiveDecisionEngine;
 
     public WorkflowController(ApplicationLifecycleService lifecycle, TimelineService timeline,
                               InterviewService interviews, ApplicationAnalyticsService analytics,
                               CareerIntelligenceService career, WorkflowEntryBridge entry,
-                              CareerLearningFacade careerLearning) {
+                              CareerLearningFacade careerLearning, CareerGoalEngine careerGoalEngine,
+                              CareerGoalPlannerService careerGoalPlanner, ExecutiveDecisionEngine executiveDecisionEngine) {
         this.lifecycle = lifecycle;
         this.timeline = timeline;
         this.interviews = interviews;
@@ -67,6 +74,9 @@ public class WorkflowController {
         this.career = career;
         this.entry = entry;
         this.careerLearning = careerLearning;
+        this.careerGoalEngine = careerGoalEngine;
+        this.careerGoalPlanner = careerGoalPlanner;
+        this.executiveDecisionEngine = executiveDecisionEngine;
     }
 
     /** Lifecycle row + append-only status history for one (user, job). 404 when no lifecycle exists. */
@@ -123,6 +133,41 @@ public class WorkflowController {
     public record CareerLearningView(CareerStrategy strategy, List<CareerLearning> topCompanies,
                                      List<CareerLearning> topSkills, List<CareerLearning> topIndustries,
                                      List<CareerLearning> topLocations, List<CareerLearning> topSalaryBands) {}
+
+    /**
+     * Phase 7.19 — recomputes and persists whichever of Skill Gap Intelligence / Promotion
+     * Readiness / the computed Roadmap are enabled (each independently flagged), onto the SAME
+     * {@code CareerStrategy} row {@code /career-learning} above reads. The raw JSON fields on the
+     * returned entity are parsed client-side, same convention as the existing {@code
+     * skillGapsJson}/roadmap fields.
+     */
+    @PostMapping("/career-goal/recompute")
+    public CareerStrategy recomputeCareerGoal(AuthenticatedUser user) {
+        return careerGoalEngine.recompute(user.userId());
+    }
+
+    /** The named goals {@code CareerGoalPlannerService} recognizes (e.g. "Staff Engineer", "Tech Lead"). */
+    @GetMapping("/career-goal/supported-goals")
+    public List<String> supportedCareerGoals() {
+        return careerGoalPlanner.supportedGoals();
+    }
+
+    /** Plans one named career goal (current → target → gap → plan) and persists it onto the same row. */
+    @PostMapping("/career-goal/plan")
+    public Map<String, Object> planCareerGoal(AuthenticatedUser user, @RequestBody Map<String, String> body) {
+        return careerGoalEngine.planGoal(user.userId(), body.get("goal"));
+    }
+
+    /**
+     * Phase 7.19.5 — the Executive Decision Engine's evidence-backed decision list (Apply Now / Wait
+     * Before Applying / Study Next / Prepare Interview / Switch Goal) plus career health, computed
+     * live from existing intelligence modules — never a new score. Empty when
+     * {@code executive.decision.enabled} is off (the dark default).
+     */
+    @GetMapping("/executive/decisions")
+    public Map<String, Object> executiveDecisions(AuthenticatedUser user) {
+        return executiveDecisionEngine.decide(user.userId());
+    }
 
     /**
      * Gated manual status advance. Validated by the state machine; a no-op (empty) when tracking is

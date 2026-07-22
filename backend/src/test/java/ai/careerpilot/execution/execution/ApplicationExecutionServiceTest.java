@@ -7,6 +7,7 @@ import ai.careerpilot.execution.ats.ATSConnector;
 import ai.careerpilot.execution.ats.ATSConnectorRegistry;
 import ai.careerpilot.execution.browser.BrowserAutomationProvider;
 import ai.careerpilot.execution.browser.GuestApplyAutomationService;
+import ai.careerpilot.execution.recovery.AutomationRecoveryService;
 import ai.careerpilot.execution.verification.SubmissionVerificationService;
 import ai.careerpilot.repo.ApplicationExecutionAuditRepository;
 import ai.careerpilot.repo.ApplicationExecutionRepository;
@@ -47,6 +48,7 @@ class ApplicationExecutionServiceTest {
     private BrowserAutomationProvider browser;
     private GuestApplyAutomationService guestApply;
     private SubmissionVerificationService verification;
+    private AutomationRecoveryService recovery;
 
     @BeforeEach
     void setUp() {
@@ -58,6 +60,11 @@ class ApplicationExecutionServiceTest {
         browser = mock(BrowserAutomationProvider.class);
         guestApply = mock(GuestApplyAutomationService.class);
         verification = mock(SubmissionVerificationService.class);
+        recovery = mock(AutomationRecoveryService.class);
+        // Phase 7.16.3 — no default stub here: `recovery.attemptRecovery` is only ever invoked from
+        // the STATUS_FAILED branch of terminal(), which none of the pre-existing (pre-7.16.3) tests
+        // exercise — tests that need it stub it locally, and tests that assert
+        // verifyNoInteractions(recovery) rely on this method staying genuinely untouched.
         when(executions.save(any(ApplicationExecution.class))).thenAnswer(inv -> {
             ApplicationExecution e = inv.getArgument(0);
             if (e.getId() == null) e.setId(UUID.randomUUID());
@@ -74,7 +81,7 @@ class ApplicationExecutionServiceTest {
 
     private ApplicationExecutionService service(boolean enabled) {
         return new ApplicationExecutionService(executions, audit, packages, jobs, connectors, browser,
-                guestApply, verification, new ApplicationExecutionMetrics(), enabled);
+                guestApply, verification, recovery, new ApplicationExecutionMetrics(), enabled);
     }
 
     @Test
@@ -259,5 +266,192 @@ class ApplicationExecutionServiceTest {
         service(true).status(execId, userId);
         // no exception; delegates
         assertThat(List.of()).isEmpty();
+    }
+
+    // ── Phase 7.16.3 — Automation Recovery Center wiring ──
+
+    @Test
+    void failedOutcomeOffersRecoveryBeforeGoingTerminal() {
+        when(recovery.attemptRecovery(any(), any())).thenReturn(Optional.empty());
+        ATSConnector connector = mock(ATSConnector.class);
+        when(connector.isConfigured()).thenReturn(true);
+        when(connector.name()).thenReturn("greenhouse");
+        when(connectors.detect(any())).thenReturn(connector);
+        when(guestApply.isEligible(connector)).thenReturn(true);
+        when(guestApply.attemptFill(any(), any(), any()))
+                .thenReturn(GuestApplyAutomationService.AttemptOutcome.error("connector threw"));
+
+        ApplicationExecution e = service(true).execute(userId, jobId, pkgId).orElseThrow();
+
+        org.mockito.Mockito.verify(recovery).attemptRecovery(e, "connector threw");
+        assertThat(e.getExecutionStatus()).isEqualTo(ApplicationExecution.STATUS_FAILED);
+    }
+
+    @Test
+    void recoveryRetryDecisionLeavesExecutionAtRetryNotFailed() {
+        when(recovery.attemptRecovery(any(), any())).thenReturn(Optional.of(
+                new ai.careerpilot.execution.retry.RetryDecision(
+                        ai.careerpilot.domain.ApplicationRetry.CLASS_NETWORK,
+                        ai.careerpilot.domain.ApplicationRetry.ACTION_RETRY, 0L)));
+        ATSConnector connector = mock(ATSConnector.class);
+        when(connector.isConfigured()).thenReturn(true);
+        when(connector.name()).thenReturn("greenhouse");
+        when(connectors.detect(any())).thenReturn(connector);
+        when(guestApply.isEligible(connector)).thenReturn(true);
+        when(guestApply.attemptFill(any(), any(), any()))
+                .thenReturn(GuestApplyAutomationService.AttemptOutcome.error("timeout"));
+
+        ApplicationExecution e = service(true).execute(userId, jobId, pkgId).orElseThrow();
+
+        // recovery mock does NOT itself mutate e (that's AutomationRecoveryService's own real job,
+        // covered by AutomationRecoveryServiceTest) — this test only proves terminal() honors the
+        // decision by NOT overwriting whatever recovery already decided with STATUS_FAILED.
+        assertThat(e.getExecutionStatus()).isNotEqualTo(ApplicationExecution.STATUS_FAILED);
+    }
+
+    @Test
+    void recoveryStopDecisionFallsThroughToFailed() {
+        when(recovery.attemptRecovery(any(), any())).thenReturn(Optional.of(
+                new ai.careerpilot.execution.retry.RetryDecision(
+                        ai.careerpilot.domain.ApplicationRetry.CLASS_UNKNOWN,
+                        ai.careerpilot.domain.ApplicationRetry.ACTION_STOP, 0L)));
+        ATSConnector connector = mock(ATSConnector.class);
+        when(connector.isConfigured()).thenReturn(true);
+        when(connector.name()).thenReturn("greenhouse");
+        when(connectors.detect(any())).thenReturn(connector);
+        when(guestApply.isEligible(connector)).thenReturn(true);
+        when(guestApply.attemptFill(any(), any(), any()))
+                .thenReturn(GuestApplyAutomationService.AttemptOutcome.error("weird error"));
+
+        ApplicationExecution e = service(true).execute(userId, jobId, pkgId).orElseThrow();
+
+        assertThat(e.getExecutionStatus()).isEqualTo(ApplicationExecution.STATUS_FAILED);
+        assertThat(e.getCompletedAt()).isNotNull();
+    }
+
+    @Test
+    void abortedOutcomeNeverOffersRecovery() {
+        // ABORTED means "not applicable" (e.g. no execution backend), not a transient failure.
+        ApplicationExecution e = service(true).execute(userId, jobId, pkgId).orElseThrow();
+        assertThat(e.getExecutionStatus()).isEqualTo(ApplicationExecution.STATUS_ABORTED);
+        org.mockito.Mockito.verifyNoInteractions(recovery);
+    }
+
+    @Test
+    void retryExecutionRefusesNonRetryNonManualReviewStatus() {
+        UUID execId = UUID.randomUUID();
+        ApplicationExecution submitted = ApplicationExecution.builder()
+                .id(execId).userId(userId).jobId(jobId).applicationPackageId(pkgId)
+                .executionStatus(ApplicationExecution.STATUS_SUBMITTED).attemptCount(1)
+                .build();
+        when(executions.findById(execId)).thenReturn(Optional.of(submitted));
+
+        assertThat(service(true).retryExecution(execId)).isEmpty();
+        org.mockito.Mockito.verify(packages, org.mockito.Mockito.never()).findById(any());
+    }
+
+    @Test
+    void retryExecutionSpawnsNewAttemptAndMarksOldRowRetried() {
+        UUID execId = UUID.randomUUID();
+        ApplicationExecution previous = ApplicationExecution.builder()
+                .id(execId).userId(userId).jobId(jobId).applicationPackageId(pkgId)
+                .executionStatus(ApplicationExecution.STATUS_RETRY).attemptCount(1)
+                .checkpoint(ai.careerpilot.execution.recovery.ExecutionCheckpoint.FORM_FILLED)
+                .build();
+        when(executions.findById(execId)).thenReturn(Optional.of(previous));
+        // baseline setUp() already wires packages/jobs/connectors for a plain ABORTED execute() path
+
+        Optional<ApplicationExecution> result = service(true).retryExecution(execId);
+
+        assertThat(result).isPresent();
+        ApplicationExecution newAttempt = result.get();
+        assertThat(newAttempt.getRetryOfExecutionId()).isEqualTo(execId);
+        assertThat(newAttempt.getAttemptCount()).isEqualTo(2);
+        assertThat(newAttempt.getCheckpoint()).isEqualTo(ai.careerpilot.execution.recovery.ExecutionCheckpoint.FORM_FILLED);
+        assertThat(previous.getExecutionStatus()).isEqualTo(ApplicationExecution.STATUS_RETRIED);
+        assertThat(previous.getCompletedAt()).isNotNull();
+        org.mockito.Mockito.verify(recovery).recordRecoveryOutcome(previous, newAttempt);
+    }
+
+    @Test
+    void cancelAbortsANonTerminalExecution() {
+        UUID execId = UUID.randomUUID();
+        ApplicationExecution running = ApplicationExecution.builder()
+                .id(execId).userId(userId).jobId(jobId).applicationPackageId(pkgId)
+                .executionStatus(ApplicationExecution.STATUS_EXECUTING).attemptCount(1)
+                .build();
+        when(executions.findByIdAndUserId(execId, userId)).thenReturn(Optional.of(running));
+
+        boolean cancelled = service(true).cancel(execId, userId, "user changed their mind");
+
+        assertThat(cancelled).isTrue();
+        assertThat(running.getExecutionStatus()).isEqualTo(ApplicationExecution.STATUS_ABORTED);
+        assertThat(running.getCompletedAt()).isNotNull();
+        org.mockito.Mockito.verify(recovery).recordCancellation(running, "user changed their mind");
+    }
+
+    @Test
+    void cancelRefusesAnAlreadyTerminalExecution() {
+        UUID execId = UUID.randomUUID();
+        ApplicationExecution submitted = ApplicationExecution.builder()
+                .id(execId).userId(userId).jobId(jobId).applicationPackageId(pkgId)
+                .executionStatus(ApplicationExecution.STATUS_SUBMITTED).attemptCount(1)
+                .build();
+        when(executions.findByIdAndUserId(execId, userId)).thenReturn(Optional.of(submitted));
+
+        boolean cancelled = service(true).cancel(execId, userId, "too late");
+
+        assertThat(cancelled).isFalse();
+        assertThat(submitted.getExecutionStatus()).isEqualTo(ApplicationExecution.STATUS_SUBMITTED);
+        org.mockito.Mockito.verifyNoInteractions(recovery);
+    }
+
+    @Test
+    void cancelReturnsFalseWhenExecutionNotFoundOrNotOwned() {
+        when(executions.findByIdAndUserId(any(), any())).thenReturn(Optional.empty());
+        assertThat(service(true).cancel(UUID.randomUUID(), userId, "n/a")).isFalse();
+    }
+
+    // ── Phase 7.16.4 — user-initiated manual review escalation ──
+
+    @Test
+    void requestManualReviewEscalatesANonTerminalExecution() {
+        UUID execId = UUID.randomUUID();
+        ApplicationExecution running = ApplicationExecution.builder()
+                .id(execId).userId(userId).jobId(jobId).applicationPackageId(pkgId)
+                .executionStatus(ApplicationExecution.STATUS_EXECUTING).attemptCount(1)
+                .build();
+        when(executions.findByIdAndUserId(execId, userId)).thenReturn(Optional.of(running));
+
+        boolean requested = service(true).requestManualReview(execId, userId, "looks stuck");
+
+        assertThat(requested).isTrue();
+        assertThat(running.getExecutionStatus()).isEqualTo(ApplicationExecution.STATUS_MANUAL_REVIEW);
+        assertThat(running.getFailureReason()).isEqualTo("looks stuck");
+    }
+
+    @Test
+    void requestManualReviewRefusesAnAlreadyTerminalExecution() {
+        UUID execId = UUID.randomUUID();
+        ApplicationExecution submitted = ApplicationExecution.builder()
+                .id(execId).userId(userId).jobId(jobId).applicationPackageId(pkgId)
+                .executionStatus(ApplicationExecution.STATUS_SUBMITTED).attemptCount(1)
+                .build();
+        when(executions.findByIdAndUserId(execId, userId)).thenReturn(Optional.of(submitted));
+
+        assertThat(service(true).requestManualReview(execId, userId, "too late")).isFalse();
+        assertThat(submitted.getExecutionStatus()).isEqualTo(ApplicationExecution.STATUS_SUBMITTED);
+    }
+
+    @Test
+    void requestManualReviewRefusesWhenAlreadyInManualReview() {
+        UUID execId = UUID.randomUUID();
+        ApplicationExecution paused = ApplicationExecution.builder()
+                .id(execId).userId(userId).jobId(jobId).applicationPackageId(pkgId)
+                .executionStatus(ApplicationExecution.STATUS_MANUAL_REVIEW).attemptCount(1)
+                .build();
+        when(executions.findByIdAndUserId(execId, userId)).thenReturn(Optional.of(paused));
+
+        assertThat(service(true).requestManualReview(execId, userId, "again")).isFalse();
     }
 }

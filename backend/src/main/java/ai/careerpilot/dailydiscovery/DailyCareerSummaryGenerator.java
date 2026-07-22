@@ -5,8 +5,10 @@ import ai.careerpilot.ai.ChatMessage;
 import ai.careerpilot.domain.CareerIntelligence;
 import ai.careerpilot.domain.DailyCareerSummary;
 import ai.careerpilot.domain.User;
+import ai.careerpilot.learning.career.executive.ExecutiveDecisionEngine;
 import ai.careerpilot.repo.CareerIntelligenceRepository;
 import ai.careerpilot.repo.DailyCareerSummaryRepository;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -14,6 +16,7 @@ import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -32,15 +35,19 @@ public class DailyCareerSummaryGenerator {
     private final AiGatewayService ai;
     private final DailyCareerSummaryRepository summaries;
     private final CareerIntelligenceRepository careerIntelligence;
+    private final ExecutiveDecisionEngine executiveDecisionEngine;
     private final boolean enabled;
+    private final ObjectMapper mapper = new ObjectMapper();
 
     public DailyCareerSummaryGenerator(AiGatewayService ai,
                                        DailyCareerSummaryRepository summaries,
                                        CareerIntelligenceRepository careerIntelligence,
+                                       ExecutiveDecisionEngine executiveDecisionEngine,
                                        @Value("${career.discovery.summary.enabled:false}") boolean enabled) {
         this.ai = ai;
         this.summaries = summaries;
         this.careerIntelligence = careerIntelligence;
+        this.executiveDecisionEngine = executiveDecisionEngine;
         this.enabled = enabled;
     }
 
@@ -53,6 +60,7 @@ public class DailyCareerSummaryGenerator {
             BigDecimal interviewDelta = probabilityDelta(user.getId(), CareerIntelligence.DIM_INTERVIEW_PROBABILITY);
             BigDecimal offerDelta = probabilityDelta(user.getId(), CareerIntelligence.DIM_OFFER_PROBABILITY);
             String text = renderText(user, s, interviewDelta, offerDelta);
+            Map<String, Object> decisions = executiveDecisionEngine.isEnabled() ? executiveDecisionEngine.decide(user.getId()) : null;
 
             summaries.save(DailyCareerSummary.builder()
                     .runId(runId).userId(user.getId())
@@ -66,6 +74,8 @@ public class DailyCareerSummaryGenerator {
                     .topSkills(String.join(",", s.topSkills()))
                     .interviewProbabilityDelta(interviewDelta)
                     .offerProbabilityDelta(offerDelta)
+                    .executiveDecisionsJson(executiveDecisionsJson(decisions))
+                    .careerHealthScore(careerHealthScore(decisions))
                     .build());
         } catch (Exception e) {
             log.warn("Daily career summary generation failed for user={}: {}", user.getId(), e.toString());
@@ -104,6 +114,28 @@ public class DailyCareerSummaryGenerator {
         if (interviewDelta != null) sb.append("Interview probability change: ").append(interviewDelta).append("%\n");
         if (offerDelta != null) sb.append("Offer probability change: ").append(offerDelta).append("%\n");
         return sb.toString();
+    }
+
+    /**
+     * Phase 7.19.5 — attaches the Executive Decision Engine's decision list to the daily brief,
+     * per explicit scope choice (extend this generator rather than build a rival brief pipeline).
+     * Null-safe: returns null when the engine is disabled, so the column stays empty (dark-ship).
+     */
+    private String executiveDecisionsJson(Map<String, Object> decisions) {
+        if (decisions == null) return null;
+        try {
+            return mapper.writeValueAsString(decisions);
+        } catch (Exception e) {
+            log.warn("Failed to serialize executive decisions: {}", e.toString());
+            return null;
+        }
+    }
+
+    private static BigDecimal careerHealthScore(Map<String, Object> decisions) {
+        if (decisions == null) return null;
+        Object health = decisions.get("careerHealth");
+        if (health instanceof Map<?, ?> m && m.get("value") instanceof BigDecimal bd) return bd;
+        return null;
     }
 
     /** Delta vs. the prior stored probability for this dimension, or null if fewer than 2 samples exist. */

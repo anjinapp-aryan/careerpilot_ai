@@ -71,4 +71,73 @@ class InterviewServiceTest {
         svc(true).markDetected();
         assertThat(metrics.snapshot().get("interviewDetected")).isEqualTo(1L);
     }
+
+    // ── Phase 7.17.2 — closes the "result is permanently uncomputable" data gap ──
+
+    @Test
+    void highRatingFeedbackInfersPassedResult() {
+        UUID interviewId = UUID.randomUUID();
+        Interview interview = Interview.builder().id(interviewId).userId(userId).jobId(jobId)
+                .interviewType("TECHNICAL").result(Interview.RESULT_SCHEDULED).build();
+        when(interviews.findById(interviewId)).thenReturn(java.util.Optional.of(interview));
+        when(feedback.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        svc(true).addFeedback(interviewId, "went great", 5);
+
+        assertThat(interview.getResult()).isEqualTo(Interview.RESULT_PASSED);
+        verify(interviews).save(interview);
+    }
+
+    @Test
+    void lowRatingFeedbackInfersFailedResult() {
+        UUID interviewId = UUID.randomUUID();
+        Interview interview = Interview.builder().id(interviewId).userId(userId).jobId(jobId)
+                .interviewType("TECHNICAL").result(Interview.RESULT_SCHEDULED).build();
+        when(interviews.findById(interviewId)).thenReturn(java.util.Optional.of(interview));
+        when(feedback.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        svc(true).addFeedback(interviewId, "bombed it", 1);
+
+        assertThat(interview.getResult()).isEqualTo(Interview.RESULT_FAILED);
+    }
+
+    @Test
+    void ambiguousMidRatingNeverGuessesAResult() {
+        UUID interviewId = UUID.randomUUID();
+        Interview interview = Interview.builder().id(interviewId).userId(userId).jobId(jobId)
+                .interviewType("TECHNICAL").result(Interview.RESULT_SCHEDULED).build();
+        when(interviews.findById(interviewId)).thenReturn(java.util.Optional.of(interview));
+        when(feedback.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        svc(true).addFeedback(interviewId, "mixed bag", 3);
+
+        assertThat(interview.getResult()).isEqualTo(Interview.RESULT_SCHEDULED);
+        verify(interviews, never()).save(interview);
+    }
+
+    @Test
+    void nullRatingNeverInfersAResult() {
+        UUID interviewId = UUID.randomUUID();
+        Interview interview = Interview.builder().id(interviewId).userId(userId).jobId(jobId)
+                .interviewType("TECHNICAL").result(Interview.RESULT_SCHEDULED).build();
+        when(interviews.findById(interviewId)).thenReturn(java.util.Optional.of(interview));
+        when(feedback.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        svc(true).addFeedback(interviewId, "no rating given", null);
+
+        assertThat(interview.getResult()).isEqualTo(Interview.RESULT_SCHEDULED);
+    }
+
+    @Test
+    void cancelledResultIsNeverOverwrittenByFeedback() {
+        UUID interviewId = UUID.randomUUID();
+        Interview interview = Interview.builder().id(interviewId).userId(userId).jobId(jobId)
+                .interviewType("TECHNICAL").result(Interview.RESULT_CANCELLED).build();
+        when(interviews.findById(interviewId)).thenReturn(java.util.Optional.of(interview));
+        when(feedback.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        svc(true).addFeedback(interviewId, "n/a", 5);
+
+        assertThat(interview.getResult()).isEqualTo(Interview.RESULT_CANCELLED);
+    }
 }

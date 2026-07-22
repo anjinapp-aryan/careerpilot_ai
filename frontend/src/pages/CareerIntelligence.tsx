@@ -1,5 +1,5 @@
-import { useMemo } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useMemo, useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Bar,
   BarChart,
@@ -9,15 +9,17 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
-import { Brain, Briefcase, Building2, GraduationCap, Globe2, Map as MapIcon, Sparkles, Target, TrendingUp } from 'lucide-react';
+import { Brain, Briefcase, Building2, Compass, Gauge, GraduationCap, Globe2, Map as MapIcon, RefreshCw, Sparkles, Target, TrendingUp } from 'lucide-react';
 import { api } from '@/lib/api';
 import { PageHeader } from '@/components/common/PageHeader';
 import { CompanyIntelligenceWidget } from '@/components/dashboard/CompanyIntelligenceWidget';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { EmptyState } from '@/components/ui/empty-state';
-import type { ApplicationAnalyticsRow, CareerIntelligenceRow, CareerLearningView } from '@/types/workflow';
+import { useToast } from '@/components/ui/toast';
+import type { ApplicationAnalyticsRow, CareerIntelligenceRow, CareerLearningView, ExecutiveDecisionsResponse } from '@/types/workflow';
 
 const PROBABILITY_DIMENSIONS: { key: string; label: string; icon: typeof Brain }[] = [
   { key: 'CAREER_SUCCESS', label: 'Career Success Probability', icon: Brain },
@@ -34,6 +36,220 @@ const GROUPED_DIMENSIONS: { key: string; label: string; icon: typeof Globe2 }[] 
 
 function pct(v?: number | null): number {
   return Math.round((v ?? 0) * 100);
+}
+
+function parseJsonSafe<T>(raw?: string | null): T | null {
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return null;
+  }
+}
+
+interface CareerGoalIntelligenceSectionProps {
+  strategy?: import('@/types/workflow').CareerStrategySnapshot | null;
+  loading: boolean;
+}
+
+/** Phase 7.19 — see the render-site comment for scope. Self-contained so its mutations don't affect the parent's queries. */
+function CareerGoalIntelligenceSection({ strategy, loading }: CareerGoalIntelligenceSectionProps) {
+  const qc = useQueryClient();
+  const { toast } = useToast();
+  const [selectedGoal, setSelectedGoal] = useState('');
+
+  const goals = useQuery<string[]>({
+    queryKey: ['career-goal', 'supported-goals'],
+    queryFn: async () => {
+      try {
+        return (await api.get('/api/workflow/career-goal/supported-goals')).data;
+      } catch {
+        return [];
+      }
+    },
+    retry: false,
+  });
+
+  const recompute = useMutation({
+    mutationFn: async () => (await api.post('/api/workflow/career-goal/recompute')).data,
+    onSuccess: () => {
+      toast({ variant: 'success', title: 'Career goal intelligence recomputed' });
+      qc.invalidateQueries({ queryKey: ['career-intelligence', 'learning'] });
+    },
+    onError: () => toast({ variant: 'default', title: 'Nothing to recompute', description: 'Enable career.skill-gap.enabled / career.promotion-readiness.enabled / career.roadmap-generator.enabled to turn this on.' }),
+  });
+
+  const planGoal = useMutation({
+    mutationFn: async (goal: string) => (await api.post('/api/workflow/career-goal/plan', { goal })).data,
+    onSuccess: () => {
+      toast({ variant: 'success', title: 'Career goal planned' });
+      qc.invalidateQueries({ queryKey: ['career-intelligence', 'learning'] });
+    },
+    onError: () => toast({ variant: 'default', title: 'Could not plan this goal', description: 'Enable career.goal-planner.enabled.' }),
+  });
+
+  const skillGap = parseJsonSafe<Record<string, unknown>>(strategy?.skillGapIntelligenceJson);
+  const readiness = parseJsonSafe<{ readinessByLevel?: Record<string, { readiness?: string; readinessScore?: number }> }>(strategy?.promotionReadinessJson);
+  const goalPlan = parseJsonSafe<Record<string, unknown>>(strategy?.careerGoalJson);
+  const computedRoadmap = parseJsonSafe<{ today?: string[]; nextMonth?: string[] }>(strategy?.computedRoadmapJson);
+  const hasAny = !!skillGap || !!readiness || !!goalPlan || !!computedRoadmap;
+
+  return (
+    <Card>
+      <CardHeader className="flex-row items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <Compass className="h-4 w-4 text-muted-foreground" />
+          <CardTitle className="text-base">Career goal intelligence</CardTitle>
+        </div>
+        <Button size="sm" variant="outline" onClick={() => recompute.mutate()} loading={recompute.isPending}>
+          <RefreshCw className="h-3.5 w-3.5" /> Recompute
+        </Button>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {loading ? (
+          <Skeleton className="h-24 w-full" />
+        ) : !hasAny ? (
+          <p className="text-sm text-muted-foreground">
+            No skill-gap, promotion-readiness, or roadmap data computed yet — click Recompute once the
+            corresponding career.* flags are enabled.
+          </p>
+        ) : (
+          <>
+            {skillGap && (
+              <div>
+                <p className="mb-1.5 text-xs font-medium text-muted-foreground">Priority skills to learn</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {(skillGap.learningPriority as string[] | undefined)?.length
+                    ? (skillGap.learningPriority as string[]).map((s) => <Badge key={s} tone="warning">{s}</Badge>)
+                    : <span className="text-sm text-muted-foreground">No priority gaps identified yet</span>}
+                </div>
+              </div>
+            )}
+            {readiness?.readinessByLevel && (
+              <div>
+                <p className="mb-1.5 text-xs font-medium text-muted-foreground">Promotion readiness</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {Object.entries(readiness.readinessByLevel).map(([level, r]) => (
+                    <Badge key={level} tone={r.readinessScore != null ? (r.readinessScore >= 60 ? 'success' : 'warning') : 'neutral'}>
+                      {level.replaceAll('_', ' ')}: {r.readinessScore != null ? `${r.readinessScore}/100` : (r.readiness ?? 'NOT_COMPUTED')}
+                    </Badge>
+                  ))}
+                </div>
+              </div>
+            )}
+            {computedRoadmap?.today && (
+              <div>
+                <p className="mb-1.5 text-xs font-medium text-muted-foreground">Today</p>
+                <ul className="list-inside list-disc text-sm text-muted-foreground">
+                  {computedRoadmap.today.map((item, i) => <li key={i}>{item}</li>)}
+                </ul>
+              </div>
+            )}
+          </>
+        )}
+
+        <div className="flex flex-wrap items-center gap-2 border-t border-border pt-3">
+          <span className="text-xs font-medium text-muted-foreground">Plan a goal:</span>
+          {(goals.data ?? []).map((g) => (
+            <button key={g} onClick={() => { setSelectedGoal(g); planGoal.mutate(g); }} className="focus:outline-none">
+              <Badge tone={selectedGoal === g ? 'primary' : 'neutral'} className="cursor-pointer">{g}</Badge>
+            </button>
+          ))}
+        </div>
+        {goalPlan && (
+          <div className="rounded-lg border border-border bg-muted/20 p-3 text-xs text-muted-foreground">
+            <p><span className="font-medium text-foreground">{goalPlan.currentPosition as string ?? 'Unknown'}</span> → <span className="font-medium text-foreground">{goalPlan.targetPosition as string}</span></p>
+            <p className="mt-1">Estimated timeline: {goalPlan.estimatedTimeline as string}</p>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+const CONFIDENCE_TONE: Record<string, 'success' | 'warning' | 'neutral'> = {
+  HIGH: 'success',
+  MEDIUM: 'warning',
+  LOW: 'neutral',
+};
+
+/**
+ * Phase 7.19.5 — Executive Coach. Orchestration-only: every field here is read straight from
+ * `GET /api/workflow/executive/decisions`, which itself computes nothing new — it only reads
+ * PromotionReadinessService/SkillGapIntelligenceService/JobMatchingService/InterviewRepository/
+ * CareerStrategyEngine output. Self-contained query so it degrades independently of the rest of
+ * this page when `executive.decision.enabled` is off (the dark default).
+ */
+function ExecutiveCoachSection() {
+  const decisions = useQuery<ExecutiveDecisionsResponse>({
+    queryKey: ['career-intelligence', 'executive-decisions'],
+    queryFn: async () => {
+      try {
+        return (await api.get('/api/workflow/executive/decisions')).data;
+      } catch {
+        return {};
+      }
+    },
+    retry: false,
+  });
+
+  const data = decisions.data;
+  const health = data?.careerHealth;
+  const items = data?.decisions ?? [];
+  const hasAny = !!health || items.length > 0;
+
+  return (
+    <Card>
+      <CardHeader className="flex-row items-center gap-2">
+        <Gauge className="h-4 w-4 text-muted-foreground" />
+        <CardTitle className="text-base">Executive coach</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {decisions.isLoading ? (
+          <Skeleton className="h-24 w-full" />
+        ) : !hasAny ? (
+          <p className="text-sm text-muted-foreground">
+            No evidence-backed decisions yet — this orchestrates Promotion Readiness, Skill Gap
+            Intelligence, Job Matching, and Interview history, so it populates once those engines
+            have data (enable executive.decision.enabled).
+          </p>
+        ) : (
+          <>
+            {health && (
+              <div>
+                <p className="mb-1 text-xs font-medium text-muted-foreground">Career health</p>
+                {typeof health.value === 'number' ? (
+                  <p className="text-2xl font-semibold tabular-nums text-foreground">{pct(health.value)}%</p>
+                ) : (
+                  <p className="text-sm text-muted-foreground">{health.reason ?? 'NOT_COMPUTED'}</p>
+                )}
+              </div>
+            )}
+            {items.length > 0 && (
+              <div className="space-y-3">
+                {items.map((d, i) => (
+                  <div key={`${d.type}-${i}`} className="rounded-lg border border-border bg-muted/20 p-3">
+                    <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
+                      <span className="text-sm font-medium text-foreground">{d.recommendation}</span>
+                      <Badge tone={CONFIDENCE_TONE[d.confidence] ?? 'neutral'}>{d.confidence}</Badge>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      {d.type.replaceAll('_', ' ')} · sources: {d.modulesUsed.join(', ')}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            )}
+            {(data?.omittedDecisionTypes?.length ?? 0) > 0 && (
+              <p className="text-xs text-muted-foreground">
+                {data!.omittedDecisionTypes!.length} other decision type(s) have no evidence yet.
+              </p>
+            )}
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
 }
 
 /**
@@ -361,6 +577,16 @@ export default function CareerIntelligence() {
           </Card>
         );
       })()}
+
+      {/* Phase 7.19 — Career Goal Intelligence: skill gaps / promotion readiness / computed roadmap
+          / goal planner, all reusing the SAME career-learning query + CareerStrategy row above.
+          Independent flags (career.skill-gap.enabled etc.) — each sub-section degrades to its own
+          empty state rather than the page erroring. */}
+      <CareerGoalIntelligenceSection strategy={learningView?.strategy} loading={learning.isLoading} />
+
+      {/* Phase 7.19.5 — Executive Coach: orchestrates the above engines into a small decision list.
+          Self-contained query; degrades independently when executive.decision.enabled is off. */}
+      <ExecutiveCoachSection />
 
       {/* Phase 7.13 — Company / Technology / Industry map from the knowledge graph (dark-safe). */}
       <CompanyIntelligenceWidget />

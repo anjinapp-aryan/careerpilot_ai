@@ -67,6 +67,70 @@ export interface CompanyStatistics {
   industryDistribution: Record<string, number>;
 }
 
+/**
+ * Phase 7.17 — Candidate Fit unification. Every `*Fit`/`memoryInfluence`/`overallFit` value is
+ * `null` (never a guessed number) when its backing source is missing. leadership/architecture/
+ * domain/cloudFit are ALWAYS null — no data source for those exists anywhere in the platform yet.
+ */
+export interface CandidateFit {
+  overallFit?: number | null; overallFitExplanation: string;
+  skillFit?: number | null; skillFitExplanation: string;
+  experienceFit?: number | null; experienceFitExplanation: string;
+  locationFit?: number | null; locationFitExplanation: string;
+  salaryFit?: number | null; salaryFitExplanation: string;
+  visaFit?: number | null; visaFitExplanation: string;
+  technologyFit?: number | null; technologyFitExplanation: string;
+  careerGoalFit?: number | null; careerGoalFitExplanation: string;
+  leadershipFit?: number | null; leadershipFitExplanation: string;
+  architectureFit?: number | null; architectureFitExplanation: string;
+  domainFit?: number | null; domainFitExplanation: string;
+  cloudFit?: number | null; cloudFitExplanation: string;
+  memoryInfluence?: number | null; memoryInfluenceExplanation: string;
+  sources: { jobRecommendation: boolean; companyKnowledge: boolean };
+}
+
+/** Phase 7.17.2 — real Interview/InterviewFeedback data aggregated per company. Every honesty note applies verbatim. */
+export interface CompanyInterviewIntelligence {
+  companyName: string;
+  interviewRounds: number;
+  roundsByType?: Record<string, number>;
+  behavioralRoundsNote?: string;
+  codingRoundsNote?: string;
+  passRate?: number | null;
+  passRateEvidence?: string;
+  passRateNote?: string;
+  avgDurationMinutes?: number | null;
+  avgDurationEvidence?: string;
+  avgFeedbackRating?: number | null;
+  positiveFeedbackCount?: number;
+  negativeFeedbackCount?: number;
+  feedbackEvidence?: string;
+  frequentlyMentionedTechnologies?: string[];
+  frequentlyMentionedTechnologiesEvidence?: string;
+  confidence: 'NONE' | 'LOW' | 'MEDIUM' | 'HIGH';
+  confidenceEvidence?: string;
+  sampleSize?: number;
+}
+
+/** Phase 7.17.3 — extends existing HiringPatternAnalyzer/CompanyTrendAnalyzer output with time-to-hire. */
+export interface CompanyHiringIntelligence {
+  avgTimeToHireDays?: number | null;
+  avgTimeToHireEvidence?: string;
+  departmentHiring?: null;
+  departmentHiringNote?: string;
+  seasonalHiring?: null;
+  seasonalHiringNote?: string;
+  hiringProbability?: number | null;
+  insights: CompanyInsight[];
+}
+
+/** Phase 7.17.4 — deterministic keyword-taxonomy bucketing of existing tech/skill graph edges. */
+export interface CompanyTechnologyTaxonomy {
+  byCategory: Record<string, { target: string; weight: number }[]>;
+  totalEdges: number;
+  growthDeclineNote: string;
+}
+
 async function nullOn404<T>(req: Promise<{ data: T }>): Promise<T | null> {
   try {
     return (await req).data;
@@ -83,6 +147,18 @@ export const companyIntel = {
   get: (id: string) => nullOn404<CompanyResponse>(api.get(`/api/company/${id}`)),
   timeline: (id: string) => nullOn404<CompanyTimelineEvent[]>(api.get(`/api/company/${id}/timeline`)),
   statistics: () => nullOn404<CompanyStatistics>(api.get('/api/company/statistics')),
+  /** Phase 7.17 — unified job+company fit explanation. Null when dark or the job doesn't exist. */
+  fit: (jobId: string) => nullOn404<CandidateFit>(api.get('/api/company/fit', { params: { jobId } })),
+  interviewIntelligence: (id: string) =>
+    nullOn404<CompanyInterviewIntelligence>(api.get(`/api/company/${id}/interview-intelligence`)),
+  hiringIntelligence: (id: string) =>
+    nullOn404<CompanyHiringIntelligence>(api.get(`/api/company/${id}/hiring-intelligence`)),
+  technologyTaxonomy: (id: string) =>
+    nullOn404<CompanyTechnologyTaxonomy>(api.get(`/api/company/${id}/technology-taxonomy`)),
+  compare: (a: string, b: string) =>
+    nullOn404<{ a: CompanySummary; b: CompanySummary; similarity: number; knowledgeDiff: Record<string, (string | null)[]> }>(
+      api.get('/api/company/compare', { params: { a, b } }),
+    ),
   /** Resolve a company by display name via search; null when dark or unknown. */
   findByName: async (name?: string | null): Promise<CompanySummary | null> => {
     if (!name?.trim()) return null;

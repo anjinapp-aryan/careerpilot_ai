@@ -24,7 +24,12 @@ public class ApplicationExecution {
     public static final String STATUS_EXECUTING = "EXECUTING";
     public static final String STATUS_SUBMITTED = "SUBMITTED";
     public static final String STATUS_FAILED = "FAILED";
+    /** Phase 7.16.3 — recoverable failure, parked for {@code RecoveryScheduler} to re-attempt at {@code nextRetryAt}. */
     public static final String STATUS_RETRY = "RETRY";
+    /** Phase 7.16.3 — a RETRY row that has already spawned its successor attempt (see {@code retryOfExecutionId} on the new row). Terminal for this row only; the chain continues on the new row. */
+    public static final String STATUS_RETRIED = "RETRIED";
+    /** Phase 7.16.3 — {@code RetryPolicyService} decided PAUSE (e.g. CAPTCHA, confirmation missing): needs a human decision, never auto-retried. */
+    public static final String STATUS_MANUAL_REVIEW = "MANUAL_REVIEW";
     public static final String STATUS_ABORTED = "ABORTED";
     /**
      * Gap D — a NEW non-terminal status: the guest-apply form has been filled and a screenshot is
@@ -63,6 +68,16 @@ public class ApplicationExecution {
     @Column(name = "verification_status") private String verificationStatus;
     @Column(name = "verification_method") private String verificationMethod;
     @Column(name = "verified_at") private Instant verifiedAt;
+
+    // ── Phase 7.16.3 — Automation Recovery & Retry Center. `checkpoint` is observability of the
+    // last execution phase reached (see execution.recovery.ExecutionCheckpoint), NOT a literal
+    // browser-state resume point: a retry always re-runs execute() from scratch (new browser
+    // context/page), it never resumes mid-page. `retryOfExecutionId` links a recovered attempt
+    // back to the failed row it recovered from (append-only chain, matching the class's existing
+    // "a retry creates a new row" convention). `nextRetryAt` is null unless executionStatus=RETRY. ──
+    @Column(name = "checkpoint") private String checkpoint;
+    @Column(name = "retry_of_execution_id") private UUID retryOfExecutionId;
+    @Column(name = "next_retry_at") private Instant nextRetryAt;
 
     @CreationTimestamp @Column(name = "created_at", updatable = false) private Instant createdAt;
 }

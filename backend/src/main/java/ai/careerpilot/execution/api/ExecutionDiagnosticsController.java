@@ -8,6 +8,9 @@ import ai.careerpilot.execution.browser.BrowserAutomationMetrics;
 import ai.careerpilot.execution.browser.GuestApplyAutomationService;
 import ai.careerpilot.execution.config.ExecutionExecutorsConfig;
 import ai.careerpilot.execution.execution.ApplicationExecutionMetrics;
+import ai.careerpilot.execution.operations.OperationsService;
+import ai.careerpilot.execution.recovery.RecoveryMetrics;
+import ai.careerpilot.execution.retry.RetryMetrics;
 import ai.careerpilot.execution.tracking.TrackingMetrics;
 import ai.careerpilot.execution.verification.VerificationMetrics;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -37,8 +40,11 @@ public class ExecutionDiagnosticsController {
     private final TrackingMetrics trackingMetrics;
     private final AnalyticsMetrics analyticsMetrics;
     private final VerificationMetrics verificationMetrics;
+    private final RetryMetrics retryMetrics;
+    private final RecoveryMetrics recoveryMetrics;
     private final ATSConnectorRegistry atsRegistry;
     private final GuestApplyAutomationService guestApply;
+    private final OperationsService operations;
 
     private final ThreadPoolTaskExecutor executionExecutor;
     private final ThreadPoolTaskExecutor browserExecutor;
@@ -54,13 +60,18 @@ public class ExecutionDiagnosticsController {
     @Value("${application.tracking.trigger.enabled:false}") private boolean trackingTriggerEnabled;
     @Value("${application.analytics.enabled:false}") private boolean analyticsEnabled;
     @Value("${application.analytics.trigger.enabled:false}") private boolean analyticsTriggerEnabled;
+    @Value("${application.recovery.enabled:false}") private boolean recoveryEnabled;
+    @Value("${application.recovery.trigger.enabled:false}") private boolean recoveryTriggerEnabled;
+    @Value("${application.operations.enabled:false}") private boolean operationsEnabled;
 
     public ExecutionDiagnosticsController(
             ApplicationExecutionMetrics executionMetrics, BrowserAutomationMetrics browserMetrics,
             AtsConnectorMetrics atsMetrics, TrackingMetrics trackingMetrics,
             AnalyticsMetrics analyticsMetrics, VerificationMetrics verificationMetrics,
+            RetryMetrics retryMetrics, RecoveryMetrics recoveryMetrics,
             ATSConnectorRegistry atsRegistry,
             GuestApplyAutomationService guestApply,
+            OperationsService operations,
             @Qualifier(ExecutionExecutorsConfig.APPLICATION_EXECUTION_EXECUTOR) ThreadPoolTaskExecutor executionExecutor,
             @Qualifier(ExecutionExecutorsConfig.BROWSER_AUTOMATION_EXECUTOR) ThreadPoolTaskExecutor browserExecutor,
             @Qualifier(ExecutionExecutorsConfig.ATS_CONNECTOR_EXECUTOR) ThreadPoolTaskExecutor atsExecutor,
@@ -72,8 +83,11 @@ public class ExecutionDiagnosticsController {
         this.trackingMetrics = trackingMetrics;
         this.analyticsMetrics = analyticsMetrics;
         this.verificationMetrics = verificationMetrics;
+        this.retryMetrics = retryMetrics;
+        this.recoveryMetrics = recoveryMetrics;
         this.atsRegistry = atsRegistry;
         this.guestApply = guestApply;
+        this.operations = operations;
         this.executionExecutor = executionExecutor;
         this.browserExecutor = browserExecutor;
         this.atsExecutor = atsExecutor;
@@ -149,6 +163,63 @@ public class ExecutionDiagnosticsController {
         else if (verified * 100 < total * 30) health = "DEGRADED"; // fewer than 30% of attempts actually verified
         else health = "UP";
         out.put("health", health);
+        return out;
+    }
+
+    /**
+     * Phase 7.16.3 — Automation Recovery Center diagnostics. No dedicated executor (recovery
+     * decisions run inline within {@code ApplicationExecutionService}'s existing transaction; the
+     * scheduler that spawns new attempts reuses {@code applicationExecutionExecutor} indirectly via
+     * {@code execute()}), so — like {@code /submission-verification} — this doesn't reuse {@link
+     * #stage}. Also surfaces the untouched {@code RetryMetrics} (Phase 2E.6 — built, tested, but
+     * never wired into a diagnostics endpoint until now) since recovery decisions are RetryPolicyService
+     * decisions.
+     */
+    @GetMapping("/automation-recovery")
+    public Map<String, Object> automationRecovery() {
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("enabled", recoveryEnabled);
+        out.put("triggerEnabled", recoveryTriggerEnabled);
+        Map<String, Object> snapshot = recoveryMetrics.snapshot();
+        out.putAll(snapshot);
+        out.put("retryPolicy", retryMetrics.snapshot());
+        long attempts = (long) snapshot.get("recoveryAttempts");
+        double successRate = (double) snapshot.get("recoverySuccessRate");
+        String health;
+        if (!recoveryEnabled) health = "NOT_CONFIGURED";
+        else if (attempts == 0) health = "UP";
+        else if (successRate < 30.0) health = "DEGRADED";
+        else health = "UP";
+        out.put("health", health);
+        return out;
+    }
+
+    // ── Phase 7.16.4 — Application Operations Center: global, no-PII aggregates over the existing
+    // execution/retry/verification/recovery data, gated by application.operations.enabled. Per-
+    // application detail (which DOES contain PII) lives on the authenticated ExecutionController
+    // instead — never here. ──
+
+    @GetMapping("/operations/summary")
+    public Map<String, Object> operationsSummary() {
+        if (!operationsEnabled) return Map.of("enabled", false);
+        Map<String, Object> out = new LinkedHashMap<>(operations.summary());
+        out.put("enabled", true);
+        return out;
+    }
+
+    @GetMapping("/operations/fleet")
+    public Map<String, Object> operationsFleet() {
+        if (!operationsEnabled) return Map.of("enabled", false);
+        Map<String, Object> out = new LinkedHashMap<>(operations.fleet());
+        out.put("enabled", true);
+        return out;
+    }
+
+    @GetMapping("/operations/queues")
+    public Map<String, Object> operationsQueues() {
+        if (!operationsEnabled) return Map.of("enabled", false);
+        Map<String, Object> out = new LinkedHashMap<>(operations.queues());
+        out.put("enabled", true);
         return out;
     }
 

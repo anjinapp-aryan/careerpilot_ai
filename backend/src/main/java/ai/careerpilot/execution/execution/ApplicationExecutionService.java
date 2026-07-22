@@ -8,6 +8,10 @@ import ai.careerpilot.execution.ats.ATSConnector;
 import ai.careerpilot.execution.ats.ATSConnectorRegistry;
 import ai.careerpilot.execution.browser.BrowserAutomationProvider;
 import ai.careerpilot.execution.browser.GuestApplyAutomationService;
+import ai.careerpilot.execution.recovery.AutomationRecoveryService;
+import ai.careerpilot.execution.recovery.ExecutionCheckpoint;
+import ai.careerpilot.domain.ApplicationRetry;
+import ai.careerpilot.execution.retry.RetryDecision;
 import ai.careerpilot.execution.verification.SubmissionVerificationService;
 import ai.careerpilot.repo.ApplicationExecutionAuditRepository;
 import ai.careerpilot.repo.ApplicationExecutionRepository;
@@ -61,6 +65,7 @@ public class ApplicationExecutionService {
     private final BrowserAutomationProvider browser;
     private final GuestApplyAutomationService guestApply;
     private final SubmissionVerificationService verification;
+    private final AutomationRecoveryService recovery;
     private final ApplicationExecutionMetrics metrics;
     private final boolean enabled;
 
@@ -72,6 +77,7 @@ public class ApplicationExecutionService {
                                        BrowserAutomationProvider browser,
                                        GuestApplyAutomationService guestApply,
                                        SubmissionVerificationService verification,
+                                       AutomationRecoveryService recovery,
                                        ApplicationExecutionMetrics metrics,
                                        @Value("${application.execution.enabled:false}") boolean enabled) {
         this.executions = executions;
@@ -82,6 +88,7 @@ public class ApplicationExecutionService {
         this.browser = browser;
         this.guestApply = guestApply;
         this.verification = verification;
+        this.recovery = recovery;
         this.metrics = metrics;
         this.enabled = enabled;
     }
@@ -129,6 +136,7 @@ public class ApplicationExecutionService {
                 .executionStatus(ApplicationExecution.STATUS_QUEUED)
                 .executionType(ApplicationExecution.TYPE_MANUAL)
                 .attemptCount(1)
+                .checkpoint(ExecutionCheckpoint.QUEUED)
                 .build());
         record(userId, jobId, exec.getId(), ApplicationExecution.STATUS_QUEUED, "execution queued");
 
@@ -225,11 +233,13 @@ public class ApplicationExecutionService {
                 // are already populated by the time any caller (e.g. the submission pipeline)
                 // reads this row back. Never blocks/fails the SUBMITTED outcome itself — the
                 // click already happened; verification only records what we can prove about it.
+                exec.setCheckpoint(ExecutionCheckpoint.SUBMIT_CLICKED);
                 try {
                     verification.verify(exec, connector, outcome.confirmationReference());
                 } catch (Exception e) {
                     log.warn("APP_EXECUTION verification call failed execution={}: {}", exec.getId(), e.toString());
                 }
+                exec.setCheckpoint(ExecutionCheckpoint.VERIFICATION_COMPLETE);
                 terminal(exec, ApplicationExecution.STATUS_SUBMITTED, null, start);
             }
             case ABORTED -> terminal(exec, ApplicationExecution.STATUS_ABORTED, outcome.reason(), start);
@@ -241,6 +251,99 @@ public class ApplicationExecutionService {
         return executions.findByIdAndUserId(executionId, userId);
     }
 
+    /**
+     * Phase 7.16.3 — spawns a NEW attempt for an execution parked at {@code STATUS_RETRY} or
+     * {@code STATUS_MANUAL_REVIEW} (the latter only via an explicit human "retry now" action, never
+     * automatically). Called by {@code RecoveryScheduler} for due RETRY rows, and by {@code
+     * ExecutionController}'s manual retry-now endpoint for either status. Reuses {@link #execute}
+     * verbatim — a retry always re-runs from scratch (new browser context), it never resumes a
+     * literal browser session mid-page; only the {@code checkpoint} value is carried forward for
+     * observability. The old row is marked {@code STATUS_RETRIED} (terminal for that row; the chain
+     * continues on the new row via {@code retryOfExecutionId}). Never throws.
+     */
+    @Transactional
+    public Optional<ApplicationExecution> retryExecution(UUID executionId) {
+        ApplicationExecution previous = executions.findById(executionId).orElse(null);
+        if (previous == null) {
+            return Optional.empty();
+        }
+        if (!ApplicationExecution.STATUS_RETRY.equals(previous.getExecutionStatus())
+                && !ApplicationExecution.STATUS_MANUAL_REVIEW.equals(previous.getExecutionStatus())) {
+            log.warn("APP_EXECUTION retryExecution refused: execution {} not RETRY/MANUAL_REVIEW (status={})",
+                    executionId, previous.getExecutionStatus());
+            return Optional.empty();
+        }
+        Optional<ApplicationExecution> result = execute(previous.getUserId(), previous.getJobId(),
+                previous.getApplicationPackageId());
+        result.ifPresent(newAttempt -> {
+            newAttempt.setRetryOfExecutionId(previous.getId());
+            newAttempt.setAttemptCount((previous.getAttemptCount() == null ? 1 : previous.getAttemptCount()) + 1);
+            newAttempt.setCheckpoint(previous.getCheckpoint());
+            executions.save(newAttempt);
+            try {
+                recovery.recordRecoveryOutcome(previous, newAttempt);
+            } catch (Exception e) {
+                log.warn("APP_EXECUTION recovery outcome recording failed execution={}: {}", newAttempt.getId(), e.toString());
+            }
+        });
+        previous.setExecutionStatus(ApplicationExecution.STATUS_RETRIED);
+        previous.setCompletedAt(Instant.now());
+        executions.save(previous);
+        return result;
+    }
+
+    /**
+     * Phase 7.16.3 — human-initiated cancellation of a non-terminal execution (Recovery Center
+     * "Cancel Execution" action). Refuses on an already-terminal row (SUBMITTED/ABORTED/FAILED/
+     * RETRIED) so a stale cancel click can never corrupt a finished outcome. Never throws.
+     */
+    @Transactional
+    public boolean cancel(UUID executionId, UUID userId, String reason) {
+        ApplicationExecution exec = executions.findByIdAndUserId(executionId, userId).orElse(null);
+        if (exec == null || isTerminal(exec.getExecutionStatus())) {
+            return false;
+        }
+        exec.setExecutionStatus(ApplicationExecution.STATUS_ABORTED);
+        exec.setFailureReason("cancelled by user: " + reason);
+        exec.setCompletedAt(Instant.now());
+        executions.save(exec);
+        record(exec.getUserId(), exec.getJobId(), exec.getId(), ApplicationExecution.STATUS_ABORTED, "cancelled: " + reason);
+        try {
+            recovery.recordCancellation(exec, reason);
+        } catch (Exception e) {
+            log.warn("APP_EXECUTION cancellation recording failed execution={}: {}", exec.getId(), e.toString());
+        }
+        return true;
+    }
+
+    /**
+     * Phase 7.16.4 — user action "Request Manual Review": a human-initiated escalation of a
+     * still-running execution straight to {@code STATUS_MANUAL_REVIEW}, distinct from the automatic
+     * PAUSE decision {@link AutomationRecoveryService} makes on a CAPTCHA/confirmation-missing
+     * failure. Refuses on an already-terminal row. Never throws.
+     */
+    @Transactional
+    public boolean requestManualReview(UUID executionId, UUID userId, String reason) {
+        ApplicationExecution exec = executions.findByIdAndUserId(executionId, userId).orElse(null);
+        if (exec == null || isTerminal(exec.getExecutionStatus())
+                || ApplicationExecution.STATUS_MANUAL_REVIEW.equals(exec.getExecutionStatus())) {
+            return false;
+        }
+        exec.setExecutionStatus(ApplicationExecution.STATUS_MANUAL_REVIEW);
+        exec.setFailureReason(reason);
+        executions.save(exec);
+        record(exec.getUserId(), exec.getJobId(), exec.getId(), ApplicationExecution.STATUS_MANUAL_REVIEW,
+                "manual review requested: " + reason);
+        return true;
+    }
+
+    private static boolean isTerminal(String status) {
+        return ApplicationExecution.STATUS_SUBMITTED.equals(status)
+                || ApplicationExecution.STATUS_ABORTED.equals(status)
+                || ApplicationExecution.STATUS_FAILED.equals(status)
+                || ApplicationExecution.STATUS_RETRIED.equals(status);
+    }
+
     // ── state-machine helpers ──
 
     private void transition(ApplicationExecution exec, String status, String reason) {
@@ -248,6 +351,11 @@ public class ApplicationExecutionService {
             exec.setStartedAt(Instant.now());
         }
         exec.setExecutionStatus(status);
+        exec.setCheckpoint(switch (status) {
+            case ApplicationExecution.STATUS_VALIDATING -> ExecutionCheckpoint.VALIDATING;
+            case ApplicationExecution.STATUS_EXECUTING -> ExecutionCheckpoint.JOB_LOADED;
+            default -> exec.getCheckpoint();
+        });
         executions.save(exec);
         record(exec.getUserId(), exec.getJobId(), exec.getId(), status, reason);
     }
@@ -255,6 +363,7 @@ public class ApplicationExecutionService {
     /** Gap D — parks the execution at the new non-terminal AWAITING_APPROVAL status (not a terminal()). */
     private Optional<ApplicationExecution> awaitingApproval(ApplicationExecution exec, long start) {
         exec.setExecutionStatus(ApplicationExecution.STATUS_AWAITING_APPROVAL);
+        exec.setCheckpoint(ExecutionCheckpoint.FORM_FILLED);
         executions.save(exec);
         metrics.recordAwaitingApproval();
         metrics.recordLatency(System.currentTimeMillis() - start);
@@ -267,6 +376,21 @@ public class ApplicationExecutionService {
 
     private Optional<ApplicationExecution> terminal(ApplicationExecution exec, String status,
                                                     String reason, long start) {
+        // Phase 7.16.3 — a transient FAILED (never ABORTED, which means "not applicable") is first
+        // offered to the Automation Recovery Center. When recovery is enabled and decides to
+        // RETRY/RETRY_BACKOFF/PAUSE, it has already mutated + saved `exec` itself (STATUS_RETRY or
+        // STATUS_MANUAL_REVIEW) — this method must NOT then overwrite that with STATUS_FAILED. A
+        // STOP decision (or recovery disabled) falls through to the unchanged pre-7.16.3 behavior.
+        if (ApplicationExecution.STATUS_FAILED.equals(status)) {
+            Optional<RetryDecision> decision = recovery.attemptRecovery(exec, reason);
+            if (decision.isPresent()) {
+                String action = decision.get().action();
+                if (decision.get().shouldRetry() || ApplicationRetry.ACTION_PAUSE.equals(action)) {
+                    metrics.recordLatency(System.currentTimeMillis() - start);
+                    return Optional.of(exec);
+                }
+            }
+        }
         exec.setExecutionStatus(status);
         exec.setFailureReason(ApplicationExecution.STATUS_SUBMITTED.equals(status) ? null : reason);
         exec.setCompletedAt(Instant.now());

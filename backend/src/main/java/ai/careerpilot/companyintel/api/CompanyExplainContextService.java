@@ -1,6 +1,7 @@
 package ai.careerpilot.companyintel.api;
 
 import ai.careerpilot.companyintel.CompanyInsightGenerator;
+import ai.careerpilot.companyintel.CompanyInterviewIntelligenceService;
 import ai.careerpilot.companyintel.CompanyKnowledgeService;
 import ai.careerpilot.companyintel.CompanySimilarityService;
 import ai.careerpilot.companyintel.analyzer.CompanyInsight;
@@ -25,15 +26,18 @@ public class CompanyExplainContextService {
     private final CompanyKnowledgeService knowledge;
     private final CompanyInsightGenerator insights;
     private final CompanySimilarityService similarity;
+    private final CompanyInterviewIntelligenceService interviewIntelligence;
     private final boolean copilotEnabled;
 
     public CompanyExplainContextService(CompanyKnowledgeService knowledge,
                                         CompanyInsightGenerator insights,
                                         CompanySimilarityService similarity,
+                                        CompanyInterviewIntelligenceService interviewIntelligence,
                                         @Value("${company.copilot.enabled:false}") boolean copilotEnabled) {
         this.knowledge = knowledge;
         this.insights = insights;
         this.similarity = similarity;
+        this.interviewIntelligence = interviewIntelligence;
         this.copilotEnabled = copilotEnabled;
     }
 
@@ -43,7 +47,9 @@ public class CompanyExplainContextService {
 
     public record CompanyDetail(CompanyKnowledge company, Map<String, String> sections,
                                 List<CompanyInsight> insights,
-                                List<CompanySimilarityService.SimilarCompany> similar) {}
+                                List<CompanySimilarityService.SimilarCompany> similar,
+                                /** Phase 7.17.2 — real interview data for this company, when observed. Null when never enabled/no data. */
+                                Map<String, Object> interviewIntelligence) {}
 
     public record CompanyExplainContext(boolean enabled, List<CompanyKnowledge> knownCompanies,
                                         List<CompanyDetail> mentioned) {
@@ -60,7 +66,8 @@ public class CompanyExplainContextService {
                 .filter(c -> isMentioned(message, c))
                 .limit(3)
                 .map(c -> new CompanyDetail(c, knowledge.sections(c), insights.generate(c),
-                        similarity.isEnabled() ? similarity.similarTo(userId, c.getId(), 5) : List.of()))
+                        similarity.isEnabled() ? similarity.similarTo(userId, c.getId(), 5) : List.of(),
+                        interviewIntelligence.forCompany(userId, c.getCompanyName()).orElse(null)))
                 .toList();
         return new CompanyExplainContext(true, known.stream().limit(25).toList(), mentioned);
     }

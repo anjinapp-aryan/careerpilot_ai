@@ -281,7 +281,7 @@ export function RelevanceDrawer({ jobId, jobTitle, onClose, rec, company }: Rele
         )}
 
         {/* Phase 7.13 — Company Knowledge Graph panel (renders nothing while the feature is dark). */}
-        <CompanyIntelPanel companyName={company ?? rec?.job.company} />
+        <CompanyIntelPanel companyName={company ?? rec?.job.company} jobId={jobId} />
       </DialogBody>
     </Dialog>
   );

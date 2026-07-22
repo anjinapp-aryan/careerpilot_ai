@@ -1,8 +1,8 @@
 import { useQuery } from '@tanstack/react-query';
-import { Building2, Clock } from 'lucide-react';
+import { Building2, Clock, Target } from 'lucide-react';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { Badge, type BadgeTone } from '@/components/ui/badge';
-import { companyIntel } from '@/lib/companyIntel';
+import { companyIntel, type CandidateFit } from '@/lib/companyIntel';
 
 /**
  * Phase 7.13 — reusable Company Intelligence panel for a company name (used in the Jobs flow and
@@ -44,7 +44,31 @@ const SECTION_LABELS: Record<string, string> = {
   learningHistory: 'Learning history',
 };
 
-export function CompanyIntelPanel({ companyName, showTimeline = false }: { companyName?: string | null; showTimeline?: boolean }) {
+const FIT_LABELS: { key: keyof CandidateFit; label: string }[] = [
+  { key: 'overallFit', label: 'Overall fit' },
+  { key: 'skillFit', label: 'Skill fit' },
+  { key: 'experienceFit', label: 'Experience fit' },
+  { key: 'technologyFit', label: 'Technology fit' },
+  { key: 'locationFit', label: 'Location fit' },
+  { key: 'salaryFit', label: 'Salary fit' },
+  { key: 'visaFit', label: 'Visa fit' },
+  { key: 'careerGoalFit', label: 'Career growth fit' },
+  { key: 'leadershipFit', label: 'Leadership fit' },
+  { key: 'architectureFit', label: 'Architecture fit' },
+  { key: 'domainFit', label: 'Domain fit' },
+  { key: 'cloudFit', label: 'Cloud fit' },
+];
+
+export function CompanyIntelPanel({
+  companyName,
+  jobId,
+  showTimeline = false,
+}: {
+  companyName?: string | null;
+  /** Phase 7.17 — when provided, also fetches and renders the unified Candidate Fit breakdown. */
+  jobId?: string | null;
+  showTimeline?: boolean;
+}) {
   const summary = useQuery({
     queryKey: ['company-intel', 'by-name', companyName],
     queryFn: () => companyIntel.findByName(companyName),
@@ -65,6 +89,14 @@ export function CompanyIntelPanel({ companyName, showTimeline = false }: { compa
     queryKey: ['company-intel', 'timeline', summary.data?.id],
     queryFn: () => companyIntel.timeline(summary.data!.id),
     enabled: showTimeline && !!summary.data?.id,
+    staleTime: 60_000,
+    retry: false,
+  });
+
+  const fit = useQuery({
+    queryKey: ['company-intel', 'fit', jobId],
+    queryFn: () => companyIntel.fit(jobId!),
+    enabled: !!jobId,
     staleTime: 60_000,
     retry: false,
   });
@@ -94,6 +126,30 @@ export function CompanyIntelPanel({ companyName, showTimeline = false }: { compa
             ),
           )}
         </div>
+
+        {fit.data && (
+          <div>
+            <p className="mb-1.5 flex items-center gap-1 text-xs font-semibold text-foreground">
+              <Target className="h-3 w-3" /> Candidate fit for this role
+            </p>
+            <div className="flex flex-wrap gap-2">
+              {FIT_LABELS.map(({ key, label }) => {
+                const value = fit.data![key] as number | null | undefined;
+                const explanation = fit.data![`${key}Explanation` as keyof CandidateFit] as string | undefined;
+                return value == null ? null : (
+                  <Badge key={key} tone={scoreTone(value)} title={explanation}>
+                    {label}: {value}
+                  </Badge>
+                );
+              })}
+              {fit.data.memoryInfluence != null && fit.data.memoryInfluence !== 0 && (
+                <Badge tone={fit.data.memoryInfluence > 0 ? 'success' : 'danger'} title={fit.data.memoryInfluenceExplanation}>
+                  Memory influence: {fit.data.memoryInfluence > 0 ? '+' : ''}{fit.data.memoryInfluence}
+                </Badge>
+              )}
+            </div>
+          </div>
+        )}
 
         {company.insights.length > 0 && (
           <ul className="space-y-1">

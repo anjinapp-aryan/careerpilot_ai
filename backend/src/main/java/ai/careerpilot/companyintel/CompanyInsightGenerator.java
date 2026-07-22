@@ -29,6 +29,7 @@ public class CompanyInsightGenerator {
     private final GrowthAnalyzer growth;
     private final SkillDemandAnalyzer skillDemand;
     private final CompanyTrendAnalyzer trend;
+    private final HiringVelocityAnalyzer hiringVelocity;
 
     public CompanyInsightGenerator(CompanyRelationshipRepository relationships,
                                    CompanyTimelineEventRepository events,
@@ -38,7 +39,8 @@ public class CompanyInsightGenerator {
                                    CultureAnalyzer culture,
                                    GrowthAnalyzer growth,
                                    SkillDemandAnalyzer skillDemand,
-                                   CompanyTrendAnalyzer trend) {
+                                   CompanyTrendAnalyzer trend,
+                                   HiringVelocityAnalyzer hiringVelocity) {
         this.relationships = relationships;
         this.events = events;
         this.aggregator = aggregator;
@@ -48,6 +50,7 @@ public class CompanyInsightGenerator {
         this.growth = growth;
         this.skillDemand = skillDemand;
         this.trend = trend;
+        this.hiringVelocity = hiringVelocity;
     }
 
     public List<CompanyInsight> generate(CompanyKnowledge company) {
@@ -62,6 +65,7 @@ public class CompanyInsightGenerator {
         growth.analyze(sections, edges).ifPresent(insights::add);
         skillDemand.analyze(edges).ifPresent(insights::add);
         trend.analyze(timeline).ifPresent(insights::add);
+        hiringVelocity.analyze(timeline).ifPresent(insights::add);
         return insights;
     }
 }

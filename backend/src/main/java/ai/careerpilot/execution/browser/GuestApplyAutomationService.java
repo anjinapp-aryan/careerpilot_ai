@@ -51,6 +51,13 @@ public class GuestApplyAutomationService {
 
     private static final Logger log = LoggerFactory.getLogger(GuestApplyAutomationService.class);
 
+    // ── Phase 7.16.3 — Screenshot Timeline. BEFORE_SUBMIT is the pre-existing approval screenshot;
+    // AFTER_SUBMIT/FAILURE are new, best-effort captures that never block or fail the outcome they
+    // annotate (screenshot capture errors are swallowed, logged, and otherwise ignored). ──
+    private static final String SCREENSHOT_PHASE_BEFORE_SUBMIT = "BEFORE_SUBMIT";
+    private static final String SCREENSHOT_PHASE_AFTER_SUBMIT = "AFTER_SUBMIT";
+    private static final String SCREENSHOT_PHASE_FAILURE = "FAILURE";
+
     private final PlaywrightAutomationProvider browser;
     private final BrowserAutomationMetrics metrics;
     private final S3StorageService storage;
@@ -127,6 +134,7 @@ public class GuestApplyAutomationService {
                 ExecutionScreenshot shot = screenshots.save(ExecutionScreenshot.builder()
                         .executionId(exec.getId()).userId(exec.getUserId()).jobId(exec.getJobId())
                         .storageKey(key)
+                        .phase(SCREENSHOT_PHASE_BEFORE_SUBMIT)
                         .build());
                 Optional<ApprovalQueueEntry> entry = approvalService.enqueueFormScreenshot(
                         exec.getUserId(), exec.getJobId(), exec.getApplicationPackageId(),
@@ -146,6 +154,7 @@ public class GuestApplyAutomationService {
         } catch (Exception e) {
             metrics.recordFailure();
             log.warn("GUEST_APPLY attemptFill error execution={}: {}", exec.getId(), e.toString());
+            captureFailureScreenshot(exec);
             return AttemptOutcome.error(e.toString());
         } finally {
             safeLogout();
@@ -174,15 +183,52 @@ public class GuestApplyAutomationService {
             String reference = connector.submit(job, Map.of());
             metrics.recordRealSubmission();
             log.info("GUEST_APPLY real submit execution={} connector={}", exec.getId(), connector.name());
+            captureScreenshot(exec, SCREENSHOT_PHASE_AFTER_SUBMIT);
             return AttemptOutcome.submitted(reference);
         } catch (Exception e) {
             metrics.recordFailure();
             log.warn("GUEST_APPLY finalizeSubmit error execution={}: {}", exec.getId(), e.toString());
+            captureFailureScreenshot(exec);
             return AttemptOutcome.error(e.toString());
         } finally {
             safeLogout();
             metrics.recordFormScreenshotApprovalResolved();
             metrics.recordLatency(System.currentTimeMillis() - start);
+        }
+    }
+
+    /** Phase 7.16.3 — best-effort screenshot capture on the FAILURE path; never throws, never blocks the outcome. */
+    private void captureFailureScreenshot(ApplicationExecution exec) {
+        try {
+            captureScreenshot(exec, SCREENSHOT_PHASE_FAILURE);
+        } catch (Exception e) {
+            log.warn("GUEST_APPLY failure screenshot capture failed execution={}: {}", exec.getId(), e.toString());
+        }
+    }
+
+    /**
+     * Phase 7.16.3 — captures + uploads one screenshot for the given phase, reusing the same
+     * storage convention as the existing pre-submit approval screenshot (no new storage layer).
+     * Never throws to the caller — a failed capture is logged and otherwise ignored, since it is
+     * always ancillary evidence, never load-bearing for the execution's own outcome.
+     */
+    private void captureScreenshot(ApplicationExecution exec, String phase) {
+        try {
+            Path tmp = Files.createTempFile("exec-screenshot-", ".png");
+            try {
+                browser.captureScreenshot(tmp);
+                byte[] bytes = Files.readAllBytes(tmp);
+                String key = storage.uploadBytes(bytes, "execution-screenshots/" + exec.getId(),
+                        phase.toLowerCase(Locale.ROOT) + ".png", "image/png");
+                screenshots.save(ExecutionScreenshot.builder()
+                        .executionId(exec.getId()).userId(exec.getUserId()).jobId(exec.getJobId())
+                        .storageKey(key).phase(phase)
+                        .build());
+            } finally {
+                Files.deleteIfExists(tmp);
+            }
+        } catch (Exception e) {
+            log.warn("GUEST_APPLY screenshot capture failed execution={} phase={}: {}", exec.getId(), phase, e.toString());
         }
     }
 

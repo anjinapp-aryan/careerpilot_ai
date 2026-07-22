@@ -85,6 +85,19 @@ public abstract class AbstractCompanyIntelHandler extends AbstractSkillHandler {
                         .append(" (").append(sim.similarity()).append("%) "));
                 sb.append('\n');
             }
+            // Phase 7.17.2 — real interview data only; absent entirely when no rounds are on file
+            // (never fabricate an interview history that wasn't observed).
+            Map<String, Object> interview = d.interviewIntelligence();
+            Object roundCount = interview == null ? null : interview.get("interviewRounds");
+            if (roundCount instanceof Integer rc && rc > 0) {
+                Object passRate = interview.get("passRate");
+                Object avgRating = interview.get("avgFeedbackRating");
+                sb.append("Interview data (").append(rc).append(" real rounds observed): ")
+                        .append("passRate=").append(passRate == null ? "N/A" : passRate)
+                        .append(" (self-assessed, not employer-confirmed), ")
+                        .append("avgFeedbackRating=").append(avgRating == null ? "N/A" : avgRating)
+                        .append(", confidence=").append(interview.get("confidence")).append('\n');
+            }
         }
         if (cc.mentioned().isEmpty()) {
             sb.append("\nNo specific company was recognized in the question — answer from the list above ")

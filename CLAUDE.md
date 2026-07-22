@@ -4,23 +4,33 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project shape
 
-CareerPilot AI is a three-service monorepo: a **Spring Boot 4 / Java 25 backend** (`backend/`) acts as the control plane, a **Python FastAPI + LangGraph 0.2 agent service** (`agent-service/`) hosts the multi-agent workflow, and a **React 18 + Vite + TS frontend** (`frontend/`) is the UI. They share **one PostgreSQL** database (currently a **Neon serverless** instance, external to docker-compose — see `.env`) with the pgvector extension — backend persists domain data, agent-service persists LangGraph checkpoints into the same DB. Redis, Kafka, and MinIO/S3 are provisioned locally in `docker-compose.yml`.
+CareerPilot AI is a three-service monorepo: a **Spring Boot 4 / Java 25 backend** (`backend/`) acts as the control plane, a **Python FastAPI + LangGraph 0.2 agent service** (`agent-service/`) hosts the multi-agent workflow, and a **React 18 + Vite + TS frontend** (`frontend/`) is the UI. They share **one PostgreSQL** database (currently a **Neon serverless** instance, external to docker-compose — see `.env`) with the pgvector extension — backend persists domain data, agent-service persists LangGraph checkpoints into the same DB. Redis, Kafka, and MinIO/S3 run in `docker-compose.yml`.
 
-This is a phase-1 vertical slice. The skeleton runs end-to-end, but several tables and beans are intentionally provisioned-but-unwired (see "Provisioned-but-unused" below) — do not treat their presence as evidence they are integrated.
+The backend has grown well past its original vertical slice into ~30 role-based packages (job discovery, resume tailoring, execution/browser automation, workflow tracking, learning, autopilot, company intelligence, career-goal intelligence, etc. — see "Architecture" below for the ones with non-obvious cross-file shape). The great majority of that surface still ships **dark by default** behind independent `*.enabled` feature flags — a package existing, or even having a REST controller, is not evidence it's live in production. Several tables and beans are also intentionally provisioned-but-unwired (see "Provisioned-but-unused" below).
+
+**This is a live production system** at https://careerpilot-ai.duckdns.org/ (backend on an Oracle Cloud VM, frontend on Vercel) — treat backend/infra changes with the caution that implies; see "Deployment" below before touching `docker-compose.yml`, the `Dockerfile`, or anything under `deployment/`.
 
 To **launch and smoke-test the whole stack from scratch**, use the `run-careerpilot-ai` skill ([.claude/skills/run-careerpilot-ai/SKILL.md](.claude/skills/run-careerpilot-ai/SKILL.md)): `docker compose --env-file .env up -d`, then drive it with `node .claude/skills/run-careerpilot-ai/driver.mjs --e2e` — a zero-dependency HTTP harness that probes all three services and runs a real register→login→dashboard→create-job flow against the live backend + Neon.
 
 ## Commands
 
 ### Run the whole stack (preferred)
+`docker-compose.yml` at the repo root is now **hardened for the Oracle Cloud VM production deploy** (`SPRING_PROFILES_ACTIVE=prod`, no host ports published for `redis`/`kafka`/`minio`/`zookeeper` — only the backend can reach them internally). Running it bare on a dev machine works but hides those services from the host and disables Swagger. For local dev, layer the local-dev overlay on top:
 ```bash
 cp .env.example .env
 # Set: JWT_SECRET (>=32 chars), GEMINI_API_KEY, and your Neon DATABASE_URL/DATABASE_URL_PY
-docker compose --env-file .env up --build
+docker compose --env-file .env -f docker-compose.yml -f docker-compose.local.yml up --build
 ```
+[docker-compose.local.yml](docker-compose.local.yml) restores host access to redis/kafka/minio and other local-dev conveniences that were intentionally stripped from the base file for the VM deploy. **Never apply this overlay on the production VM** — the VM runs `docker-compose.yml` alone.
+
 Frontend on http://localhost:5173, backend on http://localhost:8080 (Swagger at `/swagger-ui.html`), agent service on http://localhost:8088 (`/docs`), MinIO console on http://localhost:9001.
 
 **Postgres lives outside docker-compose** (Neon serverless). The two `DATABASE_URL` forms in `.env` must use Neon's **direct** endpoint (no `-pooler` in hostname) — Flyway DDL and the LangGraph `PostgresSaver` both rely on prepared statements that break under Neon's transaction-mode pgBouncer pooler. Going back to a local Postgres container is documented as a comment block at the top of `.env.example`.
+
+### Production deployment
+**[DEPLOYMENT_ORACLE_CLOUD.md](DEPLOYMENT_ORACLE_CLOUD.md) is the authoritative production architecture doc** (single Oracle Cloud VM, `docker-compose.yml` at the repo root, frontend on Vercel separately) — it explains *why* the VM/network/systemd pieces are shaped as they are; the day-to-day *how* (setup, redeploy, rollback, backup, health checks) is the operational runbook at [deployment/README.md](deployment/README.md). [DEPLOYMENT.md](DEPLOYMENT.md) (Render + Vercel + Neon, free-tier demo) and [DEPLOYMENT_CLOUDRUN.md](DEPLOYMENT_CLOUDRUN.md) (Cloud Run, backend-only alternative) are earlier/alternative deploy targets — not what's currently serving production traffic; don't merge their instructions with the Oracle Cloud path.
+
+The backend `Dockerfile`'s `JAVA_OPTS` includes `-XX:MaxMetaspaceSize=320m` — a previous value of `160m` caused a real production crash-loop (Metaspace OOM under sustained uptime) on the Oracle VM's 4GB RAM. Don't lower it without checking VM RAM headroom against the other containers sharing that host.
 
 ### Per-service (no Docker)
 | Service | Command (from service dir) |
@@ -41,7 +51,7 @@ The only real suite today is in **agent-service**: `agent-service/tests/test_rat
 pip install -r requirements-dev.txt   # pytest + pytest-asyncio, on top of requirements.txt
 pytest                                 # single test: pytest tests/test_rate_limiter.py::test_name
 ```
-- Backend: **no tests yet**. `spring-boot-starter-test` + `spring-security-test` are on the classpath ([backend/pom.xml](backend/pom.xml)) — run with `mvn test`, single test with `mvn -Dtest=ClassName#method test`.
+- Backend: a real, large JUnit 5 + Mockito + AssertJ suite (1600+ tests and growing — most new services get a matching `*Test.java` alongside them) using `spring-boot-starter-test` + `spring-security-test` ([backend/pom.xml](backend/pom.xml)). Run with `mvn test`, single test with `mvn -Dtest=ClassName#method test`. Prefer `mvn clean test-compile` over a bare incremental compile when checking for cascading breakage across files you didn't directly touch — Maven's incremental compiler can miss it.
 - Frontend: vitest is wired (`npm test` runs `vitest run`), with at least one real spec ([lib/authError.test.ts](frontend/src/lib/authError.test.ts)) — coverage is still thin, add specs alongside the code you touch. There is still **no lint step configured** — no `lint` script, no eslint config.
 
 ## Architecture — the things you need to read multiple files to see
@@ -163,6 +173,17 @@ Two narrower additions in the same package family: `workflow/email/EmailIntellig
 
 Both offer analysis and roadmap persistence are real implementations, not stubs, but ship dark; `WorkflowService` calls them as try/catch-isolated additive side effects on workflow transitions — same non-throwing convention as everywhere else.
 
+### Package validation, AI review, decision memory, and retention — four more additive layers, don't conflate them
+- `packageintel/ApplicationPackageIntelligenceService` (Phase 7.11) does NOT re-assemble or re-score anything: it delegates package assembly to the existing Phase 2D.6 `ApplicationPackageService`, then binds already-computed signals from other engines (autopilot decision, company research, learning boost, resume match) onto the package, runs `ApplicationPackageValidator`, and records an immutable validation history row. Gated `application.package.validation.enabled`; fail-safe by construction — a failure records a BLOCKED validation, never a fabricated READY.
+- `review/ApplicationReviewPipeline` (Phase 7.12) is the next gate on top of that: it REVIEWS the Phase 7.11 package (never mutates it) by running each enabled reviewer (`review/reviewer/` — resume/ATS/company-fit/learning/consistency/quality) and persists an `ApplicationReview` head + immutable history row. Gated `application.review.enabled`; same BLOCKED-not-fabricated fail-safety.
+- `memory/CareerMemoryService` (Phase 7.15.1, "Career Decision Memory") is deliberately **not** a rebuild of `learning_event` (Phase 6, pattern-computation) or `recommendation_feedback` (Phase 2C, raw reaction log) — it normalizes both of those plus five Phase 3A workflow events (via `CareerMemoryEventBridge`) into one durable, ranked, append-only "why the candidate decided X" record the Copilot can read instead of re-asking. Gated `career.memory.enabled`. Copilot-conversation extraction is deliberately NOT wired (would need LLM-based parsing with no existing infra, and a bad extraction silently poisoning future recommendations is a correctness risk left for its own review).
+- `retention/RetentionService` is a pure delete-by-age maintenance job (no LLM, no events) for the append-only ledgers that grow unbounded — workflow dead-letter/correlation tables plus the recommendation/execution/resume-tailoring audit trails. Each target has its own configurable retention window and its own `REQUIRES_NEW` transaction, so one target failing never aborts the others. Gated `retention.enabled`, default `false` (no-op with stock flags).
+
+### Career Goal Intelligence and the Executive Decision Engine both upsert into the SAME `CareerStrategy` row
+`learning/career/goal/` (Phase 7.19) adds four independently-flagged, deterministic services — `SkillGapIntelligenceService`, `PromotionReadinessService`, `CareerGoalPlannerService`, `CareerRoadmapGeneratorService` — each of which computes nothing that isn't already sitting in `job_recommendations`/`CandidateProfile`/`Interview` rows; ungrounded dimensions (of the 12 the original spec wanted, only 5 have any real data source) return `NOT_COMPUTED` with a reason rather than a guessed value. `CareerGoalEngine` is the co-writer that upserts whichever of the four are enabled onto the **existing single-row-per-user** `domain/CareerStrategy` entity (the same row Phase 6.6's `CareerStrategyEngine` and Gap C's `CareerRoadmapPersistenceService` already write into) — never a parallel "strategy" table.
+
+`learning/career/executive/ExecutiveDecisionEngine` (Phase 7.19.5) sits one layer up and **computes nothing at all** — it only reads the four services above plus `JobRecommendation`/`InterviewRepository`/`CareerStrategy.careerSuccessProbability` and turns them into a small evidence-backed decision list (Apply Now / Wait Before Applying / Study Next / Prepare Interview / Switch Goal). Every decision type without a real evidence chain in this platform (negotiate offer, request referral, geography focus, etc.) is explicitly listed as omitted with a reason, never fabricated. `DailyCareerSummaryGenerator` (see Daily Brief below) attaches this engine's output onto the *same* `daily_career_summary` row rather than a rival brief pipeline. Gated `career.skill-gap.enabled` / `career.promotion-readiness.enabled` / `career.goal-planner.enabled` / `career.roadmap-generator.enabled` / `executive.decision.enabled`, all default `false`, all inline `@Value` (no `application.yml` entries).
+
 ### Daily Brief already exists, dark by default — don't re-build it
 `dailydiscovery/DailyJobDiscoveryScheduler` runs a separate 02:00 cron from the existing 06:00 `jobs.discovery.*` scheduler, driving `DailyJobDiscoveryCoordinator` → `DailyJobDiscoveryService` (computes a per-user snapshot: recommended/must-apply/high-priority/human-review counts, top companies/skills) → `DailyCareerSummaryGenerator` (rewrites the deterministic snapshot into a 4–6 sentence summary via `AiGatewayService`, falling back to the raw template on any AI failure — every number is computed, never invented). REST surface: `dailydiscovery/api/DailyDiscoveryController` (`GET /api/daily-discovery/summary`, `GET /api/daily-discovery/analytics`, `POST /api/daily-discovery/run` manual trigger). Gated by `career.discovery.scheduler.enabled` / `career.discovery.summary.enabled`, both `false`.
 
@@ -234,6 +255,8 @@ When in doubt, grep for the symbol — if it has no callers, it is scaffolding.
 - **`GET /api/diagnostics/workflow`** — Workflow engine diagnostics: workflowEngine/jsonSerialization/agentService status, plus provider chain health. Used to validate that all three services and the provider chain are operational after deployment.
 
 These endpoints are **not guarded by auth** (anyone can call them) to enable uptime monitoring without needing credentials.
+
+Most later phases ship their own narrower diagnostics controller rather than extending `DiagnosticsController` — e.g. `ExecutionDiagnosticsController` (execution/recovery/operations), `PipelineDiagnosticsController` (gap-analysis/ATS-explainability/cover-letter/application-package/auto-apply-package). Before adding a new admin/ops surface, check whether it belongs on one of these existing controllers instead of a new one — `frontend/src/pages/OperationsCenter.tsx` (admin-only route) already aggregates execution/retry/recovery data this way and is the pattern to extend, not duplicate, for any future ops dashboard work.
 
 ## Conventions
 

@@ -236,8 +236,14 @@ security:
     access-token-ttl-minutes: 60
     refresh-token-ttl-days: 30
   rate-limit:
+    # Phase 8.1 — these two values existed unenforced since the original scaffold; RateLimitFilter
+    # now reads them. Dark-shipped: flip enabled to true to activate (in-memory, single-VM only).
+    enabled: ${SECURITY_RATE_LIMIT_ENABLED:false}
     auth-per-minute: 10
     api-per-minute: 120
+  # Phase 8.1 — AuditService now writes to the previously-dead audit_logs table when enabled.
+  audit:
+    enabled: ${SECURITY_AUDIT_ENABLED:false}
   # Comma-separated exact origins — no wildcards. Set to your Vercel URL(s),
   # e.g. https://careerpilot-ai.vercel.app,https://careerpilot-ai-git-main.vercel.app
   cors:
@@ -645,6 +651,32 @@ application.safety:
 application.retry:
   max-attempts: ${APPLICATION_RETRY_MAX_ATTEMPTS:3}
   base-backoff-ms: ${APPLICATION_RETRY_BASE_BACKOFF_MS:1000}
+# ---- Phase 7.16.3: Automation Recovery & Retry Center (ships DARK) ----
+# Glue over the existing RetryPolicyService/ApplicationRetry (Phase 2E.6, built but never invoked
+# until now) and SubmissionVerificationService (7.16.1) — no new retry engine, no new workflow, no
+# new browser layer. `enabled` gates AutomationRecoveryService#attemptRecovery: with it false,
+# ApplicationExecutionService's failure paths are byte-for-byte unchanged (every FAILED stays
+# FAILED, nothing is ever classified/parked). `trigger.enabled` gates RecoveryScheduler's poll of
+# due RETRY rows — separate from `enabled` so recovery decisions can be recorded/observed before
+# the auto-requeue poller is trusted to fire.
+application.recovery:
+  enabled: ${APPLICATION_RECOVERY_ENABLED:false}
+  trigger:
+    enabled: ${APPLICATION_RECOVERY_TRIGGER_ENABLED:false}
+  poll-interval-ms: ${APPLICATION_RECOVERY_POLL_INTERVAL_MS:30000}
+browser.recovery:
+  session-restart:
+    # Gates AutomationRecoveryService's zombie-triggered BrowserSessionManager#restartIfZombie()
+    # call on a BROWSER_FAILURE classification. Independent of application.recovery.enabled so the
+    # (higher-risk) browser-process restart can stay off even after recovery decisions are trusted.
+    enabled: ${BROWSER_RECOVERY_SESSION_RESTART_ENABLED:false}
+# Phase 7.16.4 — Application Operations Center. Purely a read-only aggregation over existing
+# execution/retry/verification/recovery data (OperationsService) — no new persistence. Gates both
+# the global diagnostics/operations/* endpoints and the per-application executions/{id}/detail|
+# explain|evidence|timeline-export|manual-review endpoints. Independent of application.recovery.*
+# since observability should be toggleable without touching the recovery engine itself.
+application.operations:
+  enabled: ${APPLICATION_OPERATIONS_ENABLED:false}
 application.tracking:
   enabled: ${APPLICATION_TRACKING_ENABLED:false}
   trigger:

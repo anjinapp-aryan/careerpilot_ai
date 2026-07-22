@@ -1,15 +1,22 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+  Bot,
   Building2,
+  Camera,
   ClipboardCheck,
+  Download,
   ExternalLink,
+  FileJson,
   Info,
   ListTree,
   MapPin,
   PackageCheck,
+  Pause,
+  RotateCcw,
   Save,
   Sparkles,
+  XCircle,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { Drawer, DrawerHeader, DrawerBody, DrawerTitle, DrawerDescription } from '@/components/ui/drawer';
@@ -41,8 +48,14 @@ const TABS = [
   { value: 'notes', label: 'Notes' },
   { value: 'documents', label: 'Documents' },
   { value: 'aiInsights', label: 'AI Insights' },
+  { value: 'automation', label: 'Automation' },
   { value: 'history', label: 'History' },
 ];
+
+const AUTOMATION_HEALTH_TONE: Record<string, 'success' | 'warning' | 'danger' | 'neutral' | 'primary'> = {
+  RUNNING: 'primary', WAITING: 'warning', RETRYING: 'warning', MANUAL_REVIEW: 'danger',
+  RECOVERED: 'success', COMPLETED: 'success', VERIFICATION_FAILED: 'danger', FAILED: 'danger',
+};
 
 const SUGGESTED_PROMPTS = [
   'Why is this application stuck?',
@@ -141,6 +154,76 @@ export function ApplicationDrawer({
       toast({ variant: 'default', title: 'AI review not available', description: 'Enable application.review.enabled to run reviews.' }),
   });
 
+  // ── Phase 7.16.4 — Application Detail Workspace (Automation tab) ──
+  const executionId = card?.executionId ?? null;
+  const executionDetail = useQuery({
+    queryKey: ['execution', 'detail', executionId],
+    queryFn: async () => {
+      try {
+        return (await api.get(`/api/execution/executions/${executionId}/detail`)).data;
+      } catch {
+        return null;
+      }
+    },
+    enabled: tab === 'automation' && !!executionId,
+    retry: false,
+  });
+  const executionExplain = useQuery({
+    queryKey: ['execution', 'explain', executionId],
+    queryFn: async () => {
+      try {
+        return (await api.get(`/api/execution/executions/${executionId}/explain`)).data;
+      } catch {
+        return null;
+      }
+    },
+    enabled: tab === 'automation' && !!executionId,
+    retry: false,
+  });
+
+  const retryNowMut = useMutation({
+    mutationFn: async () => (await api.post(`/api/execution/executions/${executionId}/retry-now`)).data,
+    onSuccess: () => {
+      toast({ variant: 'success', title: 'Retry started' });
+      qc.invalidateQueries({ queryKey: ['execution'] });
+      qc.invalidateQueries({ queryKey: ['applications'] });
+    },
+    onError: () => toast({ variant: 'error', title: 'Could not retry', description: 'The execution may not be in a retryable state.' }),
+  });
+  const cancelExecutionMut = useMutation({
+    mutationFn: async () => (await api.post(`/api/execution/executions/${executionId}/cancel`, { reason: 'cancelled from Application Detail Workspace' })).data,
+    onSuccess: () => {
+      toast({ variant: 'success', title: 'Execution cancelled' });
+      qc.invalidateQueries({ queryKey: ['execution'] });
+      qc.invalidateQueries({ queryKey: ['applications'] });
+    },
+    onError: () => toast({ variant: 'error', title: 'Could not cancel' }),
+  });
+  const manualReviewMut = useMutation({
+    mutationFn: async () => (await api.post(`/api/execution/executions/${executionId}/manual-review`, { reason: 'requested from Application Detail Workspace' })).data,
+    onSuccess: () => {
+      toast({ variant: 'success', title: 'Manual review requested' });
+      qc.invalidateQueries({ queryKey: ['execution'] });
+      qc.invalidateQueries({ queryKey: ['applications'] });
+    },
+    onError: () => toast({ variant: 'error', title: 'Could not request manual review' }),
+  });
+
+  const downloadJson = async (path: string, filename: string) => {
+    try {
+      const res = await api.get(path);
+      const blob = new Blob([JSON.stringify(res.data, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      toast({ variant: 'error', title: 'Download not available' });
+    }
+  };
+
   return (
     <Drawer open={!!applicationId} onOpenChange={(o) => !o && onClose()} size="xl">
       <DrawerHeader onClose={onClose}>
@@ -192,7 +275,7 @@ export function ApplicationDrawer({
                   <h4 className="mb-2 text-sm font-semibold text-foreground">Workflow pipeline</h4>
                   <WorkflowStageChecklist card={card} onNavigate={setTab} />
                 </div>
-                <CompanyIntelPanel companyName={card.company} />
+                <CompanyIntelPanel companyName={card.company} jobId={card.jobId} />
               </div>
             )}
 
@@ -296,6 +379,124 @@ export function ApplicationDrawer({
                     recommendation, and pipeline data in context.
                   </p>
                 </div>
+              </div>
+            )}
+
+            {tab === 'automation' && (
+              <div className="space-y-4">
+                {!executionId ? (
+                  <p className="rounded-lg border border-dashed border-border bg-muted/20 p-4 text-sm text-muted-foreground">
+                    <Bot className="mb-1 h-4 w-4" /> No automation execution has run for this application yet.
+                  </p>
+                ) : executionDetail.isLoading ? (
+                  <Skeleton className="h-40 rounded-lg" />
+                ) : !executionDetail.data ? (
+                  <p className="rounded-lg border border-dashed border-border bg-muted/20 p-4 text-sm text-muted-foreground">
+                    Automation detail isn't available — the Operations Center may not be enabled (application.operations.enabled).
+                  </p>
+                ) : (
+                  <>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge tone={AUTOMATION_HEALTH_TONE[card.automationHealth ?? ''] ?? 'neutral'}>
+                        {card.automationHealth ?? card.executionStatus ?? 'UNKNOWN'}
+                      </Badge>
+                      {card.verificationStatus && <Badge tone="neutral">Verification: {card.verificationStatus}</Badge>}
+                      {typeof card.retryCount === 'number' && card.retryCount > 0 && (
+                        <Badge tone="warning">{card.retryCount} retry attempt{card.retryCount === 1 ? '' : 's'} logged</Badge>
+                      )}
+                    </div>
+
+                    <div className="flex flex-wrap gap-2">
+                      <Button size="sm" variant="outline" onClick={() => retryNowMut.mutate()} loading={retryNowMut.isPending}>
+                        <RotateCcw className="h-3.5 w-3.5" /> Retry now
+                      </Button>
+                      <Button size="sm" variant="outline" onClick={() => manualReviewMut.mutate()} loading={manualReviewMut.isPending}>
+                        <Pause className="h-3.5 w-3.5" /> Request manual review
+                      </Button>
+                      <Button size="sm" variant="outline" onClick={() => cancelExecutionMut.mutate()} loading={cancelExecutionMut.isPending}>
+                        <XCircle className="h-3.5 w-3.5" /> Cancel
+                      </Button>
+                      <Button size="sm" variant="ghost" onClick={() => downloadJson(`/api/execution/executions/${executionId}/evidence`, `evidence-${executionId}.json`)}>
+                        <Download className="h-3.5 w-3.5" /> Evidence (JSON)
+                      </Button>
+                      <Button size="sm" variant="ghost" onClick={() => downloadJson(`/api/execution/executions/${executionId}/timeline-export`, `timeline-${executionId}.json`)}>
+                        <FileJson className="h-3.5 w-3.5" /> Timeline (JSON)
+                      </Button>
+                    </div>
+
+                    <div className="rounded-lg border border-border bg-muted/20 p-3">
+                      <h4 className="mb-2 text-sm font-semibold text-foreground">Evidence</h4>
+                      <dl className="grid grid-cols-2 gap-x-6 gap-y-2 text-xs text-muted-foreground">
+                        <div><dt className="font-medium text-foreground">Confirmation number</dt><dd>{executionDetail.data.evidence?.confirmationNumber ?? '—'}</dd></div>
+                        <div><dt className="font-medium text-foreground">Verification method</dt><dd>{executionDetail.data.evidence?.verificationMethod ?? '—'}</dd></div>
+                        <div><dt className="font-medium text-foreground">Verified at</dt><dd>{executionDetail.data.evidence?.verifiedAt ? new Date(executionDetail.data.evidence.verifiedAt).toLocaleString() : '—'}</dd></div>
+                        <div><dt className="font-medium text-foreground">Evidence age</dt><dd>{executionDetail.data.evidence?.evidenceAgeMs != null ? `${Math.round(executionDetail.data.evidence.evidenceAgeMs / 1000)}s` : '—'}</dd></div>
+                      </dl>
+                    </div>
+
+                    {(executionDetail.data.screenshots ?? []).length > 0 && (
+                      <div>
+                        <h4 className="mb-2 flex items-center gap-1.5 text-sm font-semibold text-foreground">
+                          <Camera className="h-4 w-4" /> Screenshot timeline
+                        </h4>
+                        <div className="space-y-1.5">
+                          {executionDetail.data.screenshots.map((s: { id: string; phase?: string; capturedAt?: string }) => (
+                            <div key={s.id} className="flex items-center justify-between rounded-lg border border-border px-3 py-2 text-xs">
+                              <Badge tone="neutral">{s.phase ?? 'UNKNOWN'}</Badge>
+                              <span className="text-muted-foreground">{s.capturedAt ? new Date(s.capturedAt).toLocaleString() : '—'}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {(executionDetail.data.retryHistory ?? []).length > 0 && (
+                      <div>
+                        <h4 className="mb-2 text-sm font-semibold text-foreground">Recovery / retry history</h4>
+                        <div className="space-y-1.5">
+                          {executionDetail.data.retryHistory.map((r: { attempt: number; failureClass: string; action: string; backoffMs?: number; createdAt?: string }, i: number) => (
+                            <div key={i} className="flex items-center gap-2 text-xs text-muted-foreground">
+                              <span className="font-medium text-foreground">Attempt {r.attempt}</span>
+                              <Badge tone="neutral">{r.failureClass}</Badge>
+                              <Badge tone={r.action === 'STOP' ? 'danger' : r.action === 'PAUSE' ? 'warning' : 'info'}>{r.action}</Badge>
+                              {r.createdAt && <span className="ml-auto">{new Date(r.createdAt).toLocaleString()}</span>}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {executionExplain.data && (
+                      <div className="rounded-lg border border-border bg-muted/20 p-3">
+                        <h4 className="mb-2 text-sm font-semibold text-foreground">Explainability</h4>
+                        <dl className="space-y-1.5 text-xs">
+                          {[
+                            ['Why retried?', executionExplain.data.whyRetried],
+                            ['Why paused?', executionExplain.data.whyPaused],
+                            ['Why cancelled?', executionExplain.data.whyCancelled],
+                            ['Why verification failed?', executionExplain.data.whyVerificationFailed],
+                            ['Why recovery succeeded?', executionExplain.data.whyRecoverySucceeded],
+                            ['Why manual review required?', executionExplain.data.whyManualReviewRequired],
+                          ]
+                            .filter(([, v]) => v)
+                            .map(([q, a]) => (
+                              <div key={q as string}>
+                                <dt className="font-medium text-foreground">{q}</dt>
+                                <dd className="text-muted-foreground">{a as string}</dd>
+                              </div>
+                            ))}
+                          {[
+                            executionExplain.data.whyRetried, executionExplain.data.whyPaused, executionExplain.data.whyCancelled,
+                            executionExplain.data.whyVerificationFailed, executionExplain.data.whyRecoverySucceeded,
+                            executionExplain.data.whyManualReviewRequired,
+                          ].every((v) => !v) && (
+                            <p className="text-muted-foreground">Nothing to explain yet — no retry, pause, cancellation, or verification failure has been recorded.</p>
+                          )}
+                        </dl>
+                      </div>
+                    )}
+                  </>
+                )}
               </div>
             )}
 

@@ -14,6 +14,8 @@ import StoryLibrary from '@/pages/StoryLibrary';
 import Offers from '@/pages/Offers';
 import AiMemory from '@/pages/AiMemory';
 import AdminDashboard from '@/pages/AdminDashboard';
+import OperationsCenter from '@/pages/OperationsCenter';
+import CompanyIntelligenceDashboard from '@/pages/CompanyIntelligenceDashboard';
 import AppShell from '@/components/app-shell/AppShell';
 
 const ADMIN_ROLES = new Set(['OWNER', 'ADMIN']);
@@ -53,11 +55,20 @@ export default function App() {
         <Route path="stories" element={<StoryLibrary />} />
         <Route path="offers" element={<Offers />} />
         <Route path="ai-memory" element={<AiMemory />} />
+        <Route path="companies" element={<CompanyIntelligenceDashboard />} />
         <Route
           path="admin"
           element={
             <AdminOnly>
               <AdminDashboard />
+            </AdminOnly>
+          }
+        />
+        <Route
+          path="operations"
+          element={
+            <AdminOnly>
+              <OperationsCenter />
             </AdminOnly>
           }
         />

@@ -11,8 +11,10 @@
     { "name": "security.jwt.secret", "type": "java.lang.String", "description": "HMAC signing secret for JWT access tokens; must be >= 32 chars." },
     { "name": "security.jwt.access-token-ttl-minutes", "type": "java.lang.Long", "description": "Access token time-to-live in minutes." },
     { "name": "security.jwt.refresh-token-ttl-days", "type": "java.lang.Long", "description": "Refresh token time-to-live in days." },
-    { "name": "security.rate-limit.auth-per-minute", "type": "java.lang.Integer", "description": "Configured auth-endpoint rate limit per minute (not yet enforced)." },
-    { "name": "security.rate-limit.api-per-minute", "type": "java.lang.Integer", "description": "Configured API rate limit per minute (not yet enforced)." },
+    { "name": "security.rate-limit.enabled", "type": "java.lang.Boolean", "description": "Phase 8.1 — enables RateLimitFilter (in-memory, per-IP, single-VM). Default false." },
+    { "name": "security.rate-limit.auth-per-minute", "type": "java.lang.Integer", "description": "Auth-endpoint (/api/auth/**) rate limit per minute per IP, enforced by RateLimitFilter when security.rate-limit.enabled=true." },
+    { "name": "security.rate-limit.api-per-minute", "type": "java.lang.Integer", "description": "General API rate limit per minute per IP, enforced by RateLimitFilter when security.rate-limit.enabled=true." },
+    { "name": "security.audit.enabled", "type": "java.lang.Boolean", "description": "Phase 8.1 — enables AuditService writes to the audit_logs table (login/register events). Default false." },
     { "name": "security.cors.allowed-origins", "type": "java.lang.String", "description": "Comma-separated list of exact allowed CORS origins (no wildcards)." },
 
     { "name": "storage.s3.endpoint", "type": "java.lang.String", "description": "S3/MinIO endpoint URL." },

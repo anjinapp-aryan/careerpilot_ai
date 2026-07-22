@@ -23,14 +23,17 @@ import java.util.List;
 public class SecurityConfig {
 
     private final JwtAuthFilter jwtAuthFilter;
+    private final RateLimitFilter rateLimitFilter;
     private final RestAuthenticationEntryPoint authenticationEntryPoint;
     private final String allowedOrigins;
 
     public SecurityConfig(
             JwtAuthFilter jwtAuthFilter,
+            RateLimitFilter rateLimitFilter,
             RestAuthenticationEntryPoint authenticationEntryPoint,
             @Value("${security.cors.allowed-origins}") String allowedOrigins) {
         this.jwtAuthFilter = jwtAuthFilter;
+        this.rateLimitFilter = rateLimitFilter;
         this.authenticationEntryPoint = authenticationEntryPoint;
         this.allowedOrigins = allowedOrigins;
     }
@@ -70,7 +73,8 @@ public class SecurityConfig {
                 ).permitAll()
                 .anyRequest().authenticated()
             )
-            .addFilterBefore(jwtAuthFilter, UsernamePasswordAuthenticationFilter.class);
+            .addFilterBefore(jwtAuthFilter, UsernamePasswordAuthenticationFilter.class)
+            .addFilterBefore(rateLimitFilter, JwtAuthFilter.class);
         return http.build();
     }
 

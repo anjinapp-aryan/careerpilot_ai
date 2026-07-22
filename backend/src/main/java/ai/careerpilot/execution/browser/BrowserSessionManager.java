@@ -10,6 +10,10 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
+import java.time.Duration;
+import java.time.Instant;
+import java.util.concurrent.atomic.AtomicInteger;
+
 /**
  * Gap D — owns the process-wide Playwright/Chromium lifecycle. One shared {@link Playwright} and
  * headless {@link Browser} instance at the Spring bean level (expensive to start; safe to share),
@@ -24,11 +28,21 @@ public class BrowserSessionManager {
 
     private static final Logger log = LoggerFactory.getLogger(BrowserSessionManager.class);
 
+    private static final int ZOMBIE_CONTEXT_THRESHOLD = 5;
+    private static final Duration ZOMBIE_AGE_THRESHOLD = Duration.ofMinutes(5);
+
     private final boolean enabled;
 
     private volatile Playwright playwright;
     private volatile Browser browser;
     private final Object lock = new Object();
+
+    // ── Phase 7.16.3 — zombie detection. Deliberately coarse: a process-wide open-context counter
+    // and the timestamp of the last-opened context, not a per-context registry — sufficient to
+    // detect "something is leaking contexts" or "a context has been open far longer than any real
+    // guest-apply attempt should take" without the bookkeeping cost of tracking every context. ──
+    private final AtomicInteger openContextCount = new AtomicInteger();
+    private volatile Instant lastContextOpenedAt;
 
     public BrowserSessionManager(@Value("${browser.automation.enabled:false}") boolean enabled) {
         this.enabled = enabled;
@@ -60,7 +74,49 @@ public class BrowserSessionManager {
 
     /** A brand-new, isolated browser context — no shared cookies/storage with any other execution. */
     public BrowserContext newContext() {
-        return browser().newContext();
+        BrowserContext ctx = browser().newContext();
+        openContextCount.incrementAndGet();
+        lastContextOpenedAt = Instant.now();
+        return ctx;
+    }
+
+    /** Phase 7.16.3 — called by {@code PlaywrightAutomationProvider#logout} once its context is closed. */
+    public void contextClosed() {
+        openContextCount.updateAndGet(c -> Math.max(0, c - 1));
+    }
+
+    /**
+     * Phase 7.16.3 — a coarse health signal: too many contexts open at once, or a context open far
+     * longer than any real guest-apply attempt should take, suggests the shared {@link Browser} is
+     * stuck/leaking rather than that any single execution is just slow.
+     */
+    public boolean isZombie() {
+        int open = openContextCount.get();
+        if (open >= ZOMBIE_CONTEXT_THRESHOLD) return true;
+        Instant last = lastContextOpenedAt;
+        return open > 0 && last != null && Duration.between(last, Instant.now()).compareTo(ZOMBIE_AGE_THRESHOLD) > 0;
+    }
+
+    /** Restarts the shared browser+playwright process only if {@link #isZombie()}. Returns whether it restarted. */
+    public boolean restartIfZombie() {
+        if (!isZombie()) return false;
+        synchronized (lock) {
+            try {
+                if (browser != null) browser.close();
+            } catch (Exception e) {
+                log.warn("BROWSER_SESSION_MANAGER zombie-restart browser close failed: {}", e.toString());
+            }
+            try {
+                if (playwright != null) playwright.close();
+            } catch (Exception e) {
+                log.warn("BROWSER_SESSION_MANAGER zombie-restart playwright close failed: {}", e.toString());
+            }
+            browser = null;
+            playwright = null;
+            openContextCount.set(0);
+        }
+        log.warn("BROWSER_SESSION_MANAGER restarted due to zombie detection (stuck/leaking contexts)");
+        return true;
     }
 
     @PreDestroy
@@ -78,6 +134,7 @@ public class BrowserSessionManager {
             }
             browser = null;
             playwright = null;
+            openContextCount.set(0);
         }
     }
 }

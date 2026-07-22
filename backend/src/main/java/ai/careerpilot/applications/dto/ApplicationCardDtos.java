@@ -72,7 +72,17 @@ public final class ApplicationCardDtos {
             Instant suggestedNextActionAt,
 
             // Phase 3A lifecycle status, when workflow.tracking.enabled and a lifecycle row exists
-            String lifecycleStatus
+            String lifecycleStatus,
+
+            // Phase 7.16.3 — Automation Recovery Center visibility, when application.execution.enabled
+            // and an ApplicationExecution row exists for this (user, job). All null otherwise —
+            // never fabricated. automationHealth is a derived display label (see ApplicationCardService),
+            // not a persisted status, mirroring the WorkflowService#deriveDisplayStatus convention.
+            UUID executionId,
+            String executionStatus,
+            String automationHealth,
+            Integer retryCount,
+            String verificationStatus
     ) {}
 
     public record BulkActionRequest(List<UUID> ids, String action, java.util.Map<String, String> payload) {}

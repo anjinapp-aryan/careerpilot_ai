@@ -31,5 +31,10 @@ public class DailyCareerSummary {
     @Column(name = "interview_probability_delta") private BigDecimal interviewProbabilityDelta;
     @Column(name = "offer_probability_delta") private BigDecimal offerProbabilityDelta;
 
+    // ── Phase 7.19.5 — Executive Decision Engine (V67, additive). Populated only when
+    // executive.decision.enabled is on; null otherwise, same dark-ship convention as everywhere else. ──
+    @Column(name = "executive_decisions_json", columnDefinition = "text") private String executiveDecisionsJson;
+    @Column(name = "career_health_score") private BigDecimal careerHealthScore;
+
     @CreationTimestamp @Column(name = "created_at", updatable = false) private Instant createdAt;
 }

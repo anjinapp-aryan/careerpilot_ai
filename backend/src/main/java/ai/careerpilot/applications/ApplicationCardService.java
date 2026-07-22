@@ -8,8 +8,11 @@ import ai.careerpilot.domain.Application;
 import ai.careerpilot.domain.ApplicationLifecycle;
 import ai.careerpilot.domain.ApplicationPackage;
 import ai.careerpilot.domain.ApplicationStatusHistory;
+import ai.careerpilot.domain.ApplicationExecution;
 import ai.careerpilot.domain.CandidateProfile;
 import ai.careerpilot.domain.Job;
+import ai.careerpilot.repo.ApplicationExecutionRepository;
+import ai.careerpilot.repo.ApplicationRetryRepository;
 import ai.careerpilot.repo.ApplicationLifecycleRepository;
 import ai.careerpilot.repo.ApplicationPackageRepository;
 import ai.careerpilot.repo.ApplicationReviewRepository;
@@ -51,6 +54,8 @@ public class ApplicationCardService {
     private final ApplicationHealthService healthService;
     private final ApplicationRecommendationService recommendationService;
     private final ApplicationNextActionService nextActionService;
+    private final ApplicationExecutionRepository executions;
+    private final ApplicationRetryRepository retries;
 
     public ApplicationCardService(JobRepository jobs,
                                   JobRecommendationRepository jobRecommendations,
@@ -64,7 +69,9 @@ public class ApplicationCardService {
                                   ApplicationStatusHistoryRepository statusHistory,
                                   ApplicationHealthService healthService,
                                   ApplicationRecommendationService recommendationService,
-                                  ApplicationNextActionService nextActionService) {
+                                  ApplicationNextActionService nextActionService,
+                                  ApplicationExecutionRepository executions,
+                                  ApplicationRetryRepository retries) {
         this.jobs = jobs;
         this.jobRecommendations = jobRecommendations;
         this.resumeTailorings = resumeTailorings;
@@ -78,6 +85,8 @@ public class ApplicationCardService {
         this.healthService = healthService;
         this.recommendationService = recommendationService;
         this.nextActionService = nextActionService;
+        this.executions = executions;
+        this.retries = retries;
     }
 
     public List<ApplicationCardResponse> assembleAll(UUID userId, List<Application> applications) {
@@ -131,6 +140,19 @@ public class ApplicationCardService {
         RecommendationResult recommendation = recommendationService.recommend(scored, health, lastStatusChangeAt);
         NextAction nextAction = nextActionService.suggest(lifecycleStatus, app.getStatus());
 
+        // Phase 7.16.3 — Automation Recovery Center visibility. Dark unless application.execution.enabled
+        // (findFirstByUserIdAndJobIdOrderByCreatedAtDesc then returns empty); retryCount counts only
+        // against the LATEST attempt row, not the cumulative retry chain, since each retry creates a
+        // new ApplicationExecution row (see ApplicationExecution's class javadoc).
+        ApplicationExecution latestExecution = executions
+                .findFirstByUserIdAndJobIdOrderByCreatedAtDesc(userId, app.getJobId())
+                .orElse(null);
+        String executionStatus = latestExecution == null ? null : latestExecution.getExecutionStatus();
+        String automationHealth = deriveAutomationHealth(latestExecution);
+        Integer retryCount = latestExecution == null ? null
+                : (int) retries.countByApplicationExecutionId(latestExecution.getId());
+        String verificationStatus = latestExecution == null ? null : latestExecution.getVerificationStatus();
+
         return new ApplicationCardResponse(
                 app.getId(), app.getJobId(), app.getResumeId(), app.getStatus(), matchScore, atsScore,
                 app.getNextAction(), app.getNextActionAt(), app.getNotes(),
@@ -149,7 +171,32 @@ public class ApplicationCardService {
                 health.status(), health.score(), health.reasoning(),
                 recommendation.action(), recommendation.reasoning(),
                 nextAction.action(), nextAction.suggestedAt(),
-                lifecycleStatus
+                lifecycleStatus,
+                latestExecution == null ? null : latestExecution.getId(),
+                executionStatus, automationHealth, retryCount, verificationStatus
         );
+    }
+
+    /**
+     * Phase 7.16.3 — a derived display label for the Recovery Dashboard, computed from {@code
+     * ApplicationExecution} fields rather than persisted, mirroring {@code
+     * WorkflowService#deriveDisplayStatus}'s "derive, don't trust a lagging column" convention.
+     */
+    private static String deriveAutomationHealth(ApplicationExecution exec) {
+        if (exec == null) return null;
+        return switch (exec.getExecutionStatus()) {
+            case ApplicationExecution.STATUS_QUEUED, ApplicationExecution.STATUS_VALIDATING,
+                    ApplicationExecution.STATUS_EXECUTING -> "RUNNING";
+            case ApplicationExecution.STATUS_AWAITING_APPROVAL -> "WAITING";
+            case ApplicationExecution.STATUS_RETRY -> "RETRYING";
+            case ApplicationExecution.STATUS_MANUAL_REVIEW -> "MANUAL_REVIEW";
+            case ApplicationExecution.STATUS_RETRIED -> "RETRYING";
+            case ApplicationExecution.STATUS_SUBMITTED -> exec.getRetryOfExecutionId() != null
+                    ? "RECOVERED"
+                    : (exec.getVerificationStatus() == null || "VERIFIED".equals(exec.getVerificationStatus())
+                            ? "COMPLETED" : "VERIFICATION_FAILED");
+            case ApplicationExecution.STATUS_ABORTED, ApplicationExecution.STATUS_FAILED -> "FAILED";
+            default -> null;
+        };
     }
 }

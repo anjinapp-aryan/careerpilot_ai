@@ -166,6 +166,8 @@ public class PlaywrightAutomationProvider implements BrowserAutomationProvider {
             if (ctx != null) ctx.close();
         } catch (Exception e) {
             log.warn("PLAYWRIGHT_PROVIDER context close failed: {}", e.toString());
+        } finally {
+            if (ctx != null) sessionManager.contextClosed();
         }
         pageHolder.remove();
         contextHolder.remove();

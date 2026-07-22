@@ -3,15 +3,20 @@ package ai.careerpilot.service;
 import ai.careerpilot.api.dto.JobRecommendationDtos.CandidateProfileSummary;
 import ai.careerpilot.api.dto.JobRecommendationDtos.RecommendedJob;
 import ai.careerpilot.api.dto.JobRecommendationDtos.RecommendedJobsResponse;
+import ai.careerpilot.domain.CandidateProfile;
 import ai.careerpilot.domain.Job;
 import ai.careerpilot.domain.JobRecommendation;
+import ai.careerpilot.domain.Resume;
 import ai.careerpilot.domain.WorkflowRun;
 import ai.careerpilot.jobdiscovery.JobMatchingService;
 import ai.careerpilot.jobdiscovery.JobScoring;
 import ai.careerpilot.jobdiscovery.JobScoring.ScoreBreakdown;
+import ai.careerpilot.repo.CandidateProfileRepository;
 import ai.careerpilot.repo.JobRecommendationRepository;
 import ai.careerpilot.repo.JobRepository;
+import ai.careerpilot.repo.ResumeRepository;
 import ai.careerpilot.repo.WorkflowRunRepository;
+import ai.careerpilot.service.profile.JsonLists;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -43,6 +48,8 @@ public class JobRecommendationService {
     private final JobRecommendationRepository recommendations;
     private final JobMatchingService matching;
     private final JobScoring scoring;
+    private final CandidateProfileRepository candidateProfiles;
+    private final ResumeRepository resumes;
     private final ObjectMapper mapper = new ObjectMapper();
 
     /** When true, Recommended is gated to score >= threshold AND confidence >= MEDIUM. */
@@ -54,6 +61,8 @@ public class JobRecommendationService {
                                     JobRecommendationRepository recommendations,
                                     JobMatchingService matching,
                                     JobScoring scoring,
+                                    CandidateProfileRepository candidateProfiles,
+                                    ResumeRepository resumes,
                                     @Value("${jobs.recommendation.v2-enabled:true}") boolean v2Enabled,
                                     @Value("${jobs.recommendation.threshold:75}") int threshold) {
         this.runs = runs;
@@ -61,6 +70,8 @@ public class JobRecommendationService {
         this.recommendations = recommendations;
         this.matching = matching;
         this.scoring = scoring;
+        this.candidateProfiles = candidateProfiles;
+        this.resumes = resumes;
         this.v2Enabled = v2Enabled;
         this.threshold = threshold;
     }
@@ -94,21 +105,50 @@ public class JobRecommendationService {
 
         WorkflowRun latest = runs.findTop20ByUserIdOrderByCreatedAtDesc(userId).stream()
                 .findFirst().orElse(null);
-        if (latest == null) {
+
+        // Phase 1 fallback: a canonical CandidateProfile (built from an uploaded Resume, via
+        // CandidateProfileService.onResumeChanged) is a fully valid signal source on its own — the
+        // matcher (CandidateSignalResolver) has resolved signals this way since Phase 1. Before this
+        // fallback, a user with a CandidateProfile but no WorkflowRun got profile=null forever (read
+        // by the frontend as "workflow never ran"), and matching.refreshForUser() was never even
+        // invoked for them, so job_recommendations never populated either. Only consulted when there
+        // is no WorkflowRun, so existing WorkflowRun-driven behavior is unchanged.
+        CandidateProfile profileRow = latest == null ? candidateProfiles.findByUserId(userId).orElse(null) : null;
+        if (latest == null && profileRow == null) {
             return new RecommendedJobsResponse(null, List.of(), pageNum, pageSize, 0, false);
         }
 
-        Map<String, Object> state = parseState(latest);
-        List<String> extractedSkills = stringList(state.get("extracted_skills"));
-        List<String> targetLocations = stringList(state.get("target_locations"));
-        Map<String, Object> candidateProfile = asMap(state.get("candidate_profile"));
+        List<String> extractedSkills;
+        List<String> targetLocations;
+        String targetRole;
+        CandidateProfileSummary profile;
 
-        CandidateProfileSummary profile = new CandidateProfileSummary(
-                intOrNull(candidateProfile.get("years_experience")),
-                stringOrNull(candidateProfile.get("current_title")),
-                extractedSkills,
-                preferredRoles(latest),
-                latest.getResumeScore());
+        if (latest != null) {
+            Map<String, Object> state = parseState(latest);
+            extractedSkills = stringList(state.get("extracted_skills"));
+            targetLocations = stringList(state.get("target_locations"));
+            Map<String, Object> candidateProfileState = asMap(state.get("candidate_profile"));
+
+            profile = new CandidateProfileSummary(
+                    intOrNull(candidateProfileState.get("years_experience")),
+                    stringOrNull(candidateProfileState.get("current_title")),
+                    extractedSkills,
+                    preferredRoles(latest),
+                    latest.getResumeScore());
+            targetRole = latest.getTargetRole();
+        } else {
+            List<String> targetRoles = JsonLists.toList(profileRow.getTargetRolesJson());
+            extractedSkills = JsonLists.toList(profileRow.getSkillsJson());
+            targetLocations = JsonLists.toList(profileRow.getPreferredCountriesJson());
+            targetRole = String.join(" ", targetRoles);
+
+            profile = new CandidateProfileSummary(
+                    profileRow.getYearsExperience(),
+                    profileRow.getCurrentRole(),
+                    extractedSkills,
+                    targetRoles,
+                    resumeScoreFor(profileRow));
+        }
 
         // Prefer the real discovered pool: refresh + read persisted recommendations. Only recompute
         // on the first page — "Load more" pagination must not re-score the whole pool on every call.
@@ -117,7 +157,7 @@ public class JobRecommendationService {
 
         // Fallback: no discovered recommendations yet → score the org pool on the fly (legacy).
         if (all.isEmpty()) {
-            all = fromOrgPool(orgId, extractedSkills, latest.getTargetRole(), targetLocations, filter);
+            all = fromOrgPool(orgId, extractedSkills, targetRole, targetLocations, filter);
         }
 
         // Paginate in memory (the gated list is small — <= KEEP_TOP).
@@ -216,6 +256,12 @@ public class JobRecommendationService {
                 .filter(rj -> matchesFilter(rj.job(), rj.matchScore(), filter))
                 .sorted(Comparator.comparingInt(RecommendedJob::matchScore).reversed())
                 .toList();
+    }
+
+    /** Resume score for the profile-only path — looked up via the profile's linked resume. */
+    private Integer resumeScoreFor(CandidateProfile profile) {
+        if (profile.getResumeId() == null) return null;
+        return resumes.findById(profile.getResumeId()).map(Resume::getResumeScore).orElse(null);
     }
 
     private List<String> preferredRoles(WorkflowRun run) {

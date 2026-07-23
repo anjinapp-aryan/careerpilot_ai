@@ -198,7 +198,10 @@ export function CopilotPanel() {
       {pageConfig.actions.length > 0 && messages.length > 0 && (
         <div className="flex flex-wrap gap-1.5 border-t border-border px-3 py-2">
           {pageConfig.actions.map((a) => (
-            <QuickActionChip key={a.key} action={a} disabled={streaming} onClick={() => send(a.prompt, a.key)} />
+            // `a.key` is the backend routing action, not unique per action (several prompts
+            // intentionally share one action, e.g. PERSONALIZED_RECOMMENDATIONS) — the label is,
+            // so pair them for a React list key that never collides.
+            <QuickActionChip key={`${a.key}-${a.label}`} action={a} disabled={streaming} onClick={() => send(a.prompt, a.key)} />
           ))}
         </div>
       )}
@@ -384,7 +387,7 @@ function Welcome({
             const Icon = a.icon;
             return (
               <button
-                key={a.key}
+                key={`${a.key}-${a.label}`}
                 onClick={() => onAction(a.prompt, a.key)}
                 className="flex w-full items-center gap-3 rounded-xl border border-border bg-muted/30 px-3 py-2.5 text-left text-sm font-medium text-foreground transition-colors hover:border-primary/40 hover:bg-primary/5"
               >

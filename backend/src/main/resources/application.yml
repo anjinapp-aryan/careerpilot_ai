@@ -478,6 +478,14 @@ resume:
     # cascade was the dominant cost in every sampled tailoring generation (P95 ~117s). Empty list
     # falls back to the default gateway order unchanged.
     preferred-providers: ${RESUME_TAILORING_PREFERRED_PROVIDERS:gemini,groq,deepseek,qwen,openrouter}
+  # ---- Phase 8.2 Resume Intelligence Center ----
+  # Purely an orchestration/status layer over the existing CandidateProfileService extraction
+  # pipeline — no new parsing logic. Ships DARK: enabled=false -> the /api/resumes/{id}/analyze,
+  # /reanalyze, /status, /analysis, /history, and /intelligence/dashboard endpoints all return 404,
+  # zero behavior change to existing resume upload/analysis until explicitly flipped on.
+  intelligence:
+    center:
+      enabled: ${RESUME_INTELLIGENCE_CENTER_ENABLED:false}
 
 # ---- Phase 2D.2 ATS Optimization Engine ----
 # Analyzes the LATEST tailored resume (from 2D.1) against its job: a deterministic ATS score

@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import {
+  BrainCircuit,
   ChevronDown,
   ChevronUp,
   Clock,
@@ -34,7 +35,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { cn } from '@/lib/cn';
-import type { AtsAnalysisRow, Resume, ResumeVersion, TailoredResumeVersion } from '@/types/workflow';
+import type { AtsAnalysisRow, Resume, ResumeAnalysisStatus, ResumeDashboardEntry, ResumeVersion, TailoredResumeVersion } from '@/types/workflow';
 
 type SortKey = 'recent' | 'name' | 'score';
 
@@ -69,6 +70,22 @@ export default function Resumes() {
   const { data = [], isLoading } = useQuery<Resume[]>({
     queryKey: ['resumes'],
     queryFn: async () => (await api.get('/api/resumes')).data,
+  });
+
+  // Phase 8.2 — Resume Intelligence Center. Dark-tolerant: 404 (feature off) resolves to an
+  // empty map, so every card/row below just shows no status pill, matching how ATS "—" already
+  // degrades when a resume has no score.
+  const { data: intelligenceById = {} } = useQuery<Record<string, ResumeAnalysisStatus>>({
+    queryKey: ['resume-intelligence', 'dashboard'],
+    queryFn: async () => {
+      try {
+        const entries = (await api.get<ResumeDashboardEntry[]>('/api/resumes/intelligence/dashboard')).data;
+        return Object.fromEntries(entries.map((e) => [e.resumeId, e.analysis]));
+      } catch {
+        return {};
+      }
+    },
+    retry: false,
   });
 
   const upload = useMutation({
@@ -221,14 +238,14 @@ export default function Resumes() {
       ) : view === 'grid' ? (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {filtered.map((r, i) => (
-            <ResumeCard key={r.id} resume={r} index={i} />
+            <ResumeCard key={r.id} resume={r} index={i} intelligence={intelligenceById[r.id]} />
           ))}
         </div>
       ) : (
         <Card className="overflow-hidden">
           <div className="divide-y divide-border">
             {filtered.map((r) => (
-              <ResumeRow key={r.id} resume={r} />
+              <ResumeRow key={r.id} resume={r} intelligence={intelligenceById[r.id]} />
             ))}
           </div>
         </Card>
@@ -245,6 +262,9 @@ function QuickActions({ resume }: { resume: Resume }) {
         <MoreVertical className="h-4 w-4" />
       </DropdownMenuTrigger>
       <DropdownMenuContent>
+        <DropdownMenuItem onSelect={() => navigate(`/resumes/${resume.id}/intelligence`)}>
+          <BrainCircuit className="h-4 w-4 text-muted-foreground" /> Resume Intelligence
+        </DropdownMenuItem>
         <DropdownMenuItem onSelect={() => navigate(`/resumes/${resume.id}/optimize`)}>
           <Sparkles className="h-4 w-4 text-muted-foreground" /> Optimize with AI
         </DropdownMenuItem>
@@ -259,7 +279,21 @@ function QuickActions({ resume }: { resume: Resume }) {
   );
 }
 
-function ResumeCard({ resume, index }: { resume: Resume; index: number }) {
+const INTELLIGENCE_STATUS_TONE: Record<ResumeAnalysisStatus['status'], 'neutral' | 'success' | 'warning' | 'danger' | 'primary'> = {
+  NOT_ANALYZED: 'neutral',
+  ANALYZING: 'primary',
+  ANALYZED: 'success',
+  OUTDATED: 'warning',
+  FAILED: 'danger',
+  PARTIAL: 'warning',
+};
+
+function IntelligenceStatusBadge({ status }: { status?: ResumeAnalysisStatus }) {
+  if (!status) return null;
+  return <Badge tone={INTELLIGENCE_STATUS_TONE[status.status]}>{status.status.replace('_', ' ')}</Badge>;
+}
+
+function ResumeCard({ resume, index, intelligence }: { resume: Resume; index: number; intelligence?: ResumeAnalysisStatus }) {
   return (
     <motion.div
       initial={{ opacity: 0, y: 10 }}
@@ -281,12 +315,13 @@ function ResumeCard({ resume, index }: { resume: Resume; index: number }) {
           <Clock className="h-3 w-3" /> {new Date(resume.createdAt).toLocaleDateString()} ·{' '}
           {formatBytes(resume.sizeBytes)}
         </p>
-        <div className="mt-4 flex items-center justify-between border-t border-border pt-4">
-          <div className="flex items-center gap-2">
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-border pt-4">
+          <div className="flex flex-wrap items-center gap-2">
             <Badge tone={scoreTone(resume.resumeScore)}>
               ATS {resume.resumeScore ?? '—'}
             </Badge>
-            <Badge tone="neutral">Ready</Badge>
+            <IntelligenceStatusBadge status={intelligence} />
+            {!intelligence && <Badge tone="neutral">Ready</Badge>}
           </div>
         </div>
         <ResumeVersionsStrip resumeId={resume.id} />
@@ -496,7 +531,7 @@ function TailoringRow({ version: v }: { version: TailoredResumeVersion }) {
   );
 }
 
-function ResumeRow({ resume }: { resume: Resume }) {
+function ResumeRow({ resume, intelligence }: { resume: Resume; intelligence?: ResumeAnalysisStatus }) {
   return (
     <div className="flex items-center gap-4 px-4 py-3 transition-colors hover:bg-muted/40">
       <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
@@ -509,6 +544,7 @@ function ResumeRow({ resume }: { resume: Resume }) {
         </p>
       </div>
       <Badge tone={scoreTone(resume.resumeScore)}>ATS {resume.resumeScore ?? '—'}</Badge>
+      <IntelligenceStatusBadge status={intelligence} />
       <QuickActions resume={resume} />
     </div>
   );

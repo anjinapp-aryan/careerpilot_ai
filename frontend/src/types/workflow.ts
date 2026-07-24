@@ -224,6 +224,38 @@ export interface CandidateProfile {
   updatedAt?: string | null;
 }
 
+/**
+ * Phase 8.2 — Resume Intelligence Center. Mirrors `ResumeIntelligenceDtos.ResumeAnalysisStatusDto`.
+ * `atsScore` is only ever set from a real completed AI Workflow run for this exact resume — there
+ * is no honest job-less ATS score for a bare upload, so it's `null` otherwise (never fabricated).
+ */
+export interface ResumeAnalysisStatus {
+  resumeId: string;
+  status: 'NOT_ANALYZED' | 'ANALYZING' | 'ANALYZED' | 'OUTDATED' | 'FAILED' | 'PARTIAL';
+  lastAnalysisDate?: string | null;
+  analysisDurationMs?: number | null;
+  confidenceScore?: number | null;
+  atsScore?: number | null;
+  errorMessage?: string | null;
+}
+
+/** Mirrors `ResumeIntelligenceDtos.ResumeDashboardEntryDto`. */
+export interface ResumeDashboardEntry {
+  resumeId: string;
+  filename: string;
+  sizeBytes?: number | null;
+  uploadDate: string;
+  analysis: ResumeAnalysisStatus;
+}
+
+/** Mirrors `ResumeIntelligenceDtos.ResumeAnalysisHistoryEntryDto`. */
+export interface ResumeAnalysisHistoryEntry {
+  reason: string;
+  createdAt: string;
+  before: CandidateProfile | null;
+  after: CandidateProfile | null;
+}
+
 /** `POST /api/jobs/:id/explain` response. Mirrors `JobMatchExplanationDto`. */
 export interface JobMatchExplanation {
   matchingSkills: string[];

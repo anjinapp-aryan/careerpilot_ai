@@ -20,9 +20,23 @@ public class ProviderHealthTracker {
 
     private final Map<String, ProviderHealth> health = new HashMap<>();
 
+    /**
+     * Timestamp of each provider's most recent successful call — tracked separately from
+     * {@link #health} because that map's 5-minute TTL expires (and a later failure overwrites)
+     * the entry, but "when did this provider last actually work" should survive both. Never
+     * cleared automatically; only ever moves forward on {@link #recordSuccess}.
+     */
+    private final Map<String, Instant> lastSuccessAt = new HashMap<>();
+
     public synchronized void recordSuccess(String providerName) {
         health.put(providerName, new ProviderHealth(Status.HEALTHY, null, Instant.now()));
+        lastSuccessAt.put(providerName, Instant.now());
         log.info("Provider {} marked HEALTHY", providerName);
+    }
+
+    /** Null if this provider has never recorded a successful call since process start. */
+    public synchronized Instant getLastSuccessAt(String providerName) {
+        return lastSuccessAt.get(providerName);
     }
 
     public synchronized void recordFailure(String providerName, String reason) {

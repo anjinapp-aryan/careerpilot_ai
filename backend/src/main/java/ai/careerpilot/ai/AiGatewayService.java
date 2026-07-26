@@ -10,6 +10,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -349,25 +350,57 @@ public class AiGatewayService {
     /**
      * Per-provider status in failover order: name, displayName, configured, model,
      * circuit state, and last-known health. Read-only — backs {@code GET /api/ai/providers}.
+     *
+     * <p>Also includes the extended routing metadata (priority, timeout, retryCount, costTier,
+     * supportsStreaming, supportsReasoning) — {@code priority} is this provider's 1-based
+     * position in {@code ai.gateway.order} (the actual, currently-effective config, not a
+     * duplicated constant); {@code retryCount} is read from the same Resilience4j retry
+     * instance {@link #execute} already decorates calls with, so it can never drift from the
+     * real retry behavior; {@code costTier}/{@code supportsReasoning} are operator-set config
+     * (never guessed) and default to "unknown"/false when unset; {@code supportsStreaming} is
+     * always true because every {@link LlmProvider} implements {@code streamChat} by contract;
+     * {@code avgLatencyMs} is read straight from {@link AiMetrics#avgLatencyMs}, the same running
+     * average {@code /api/ai/stats} already reports (0 if never called); {@code lastSuccessAt} is
+     * an ISO-8601 instant from {@link ProviderHealthTracker#getLastSuccessAt}, or {@code null} if
+     * this provider has never had a successful call since process start.
      */
     public List<Map<String, Object>> providerStatuses() {
         List<Map<String, Object>> out = new ArrayList<>();
+        int priority = 0;
         for (String key : props.getOrder()) {
+            priority++;
             LlmProvider p = providersByName.get(key);
             boolean configured = p != null && p.isConfigured();
             CircuitBreaker.State cbState = cbRegistry.circuitBreaker(key).getState();
             String status = !configured
                     ? "NOT_CONFIGURED"
                     : (cbState == CircuitBreaker.State.OPEN ? "DOWN" : "UP");
+            AiGatewayProperties.Provider cfg = props.provider(key);
 
             Map<String, Object> m = new LinkedHashMap<>();
             m.put("name", key);
             m.put("displayName", p != null ? p.displayName() : key);
             m.put("configured", configured);
-            m.put("model", props.provider(key).getModel());
+            m.put("model", cfg.getModel());
             m.put("status", status);
             m.put("circuitState", cbState.name());
             m.put("health", healthTracker.getStatus(key).name());
+            m.put("priority", priority);
+            m.put("enabled", configured);
+            m.put("timeoutMs", cfg.getTimeoutMs());
+            m.put("retryCount", retryRegistry.retry(key).getRetryConfig().getMaxAttempts());
+            m.put("costTier", cfg.getCostTier() == null ? "unknown" : cfg.getCostTier());
+            m.put("supportsStreaming", true);
+            m.put("supportsReasoning", cfg.isSupportsReasoning());
+            m.put("avgLatencyMs", metrics.avgLatencyMs(key));
+            Instant lastSuccess = healthTracker.getLastSuccessAt(key);
+            m.put("lastSuccessAt", lastSuccess == null ? null : lastSuccess.toString());
+            // Open/Closed: any provider representing a pool of models (currently only
+            // OpenRouterProvider) attaches its own per-model breakdown here without this
+            // class needing to know about that concrete provider type.
+            if (p instanceof ModelPoolProvider pool) {
+                m.put("modelPool", pool.modelPoolStatuses());
+            }
             out.add(m);
         }
         return out;

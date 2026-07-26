@@ -105,15 +105,112 @@ ai:
     api-key: ${GEMINI_API_KEY:}
   # ---- AI Gateway: single entry point for all LLM calls, with failover ----
   gateway:
-    primary: ${PRIMARY_PROVIDER:deepseek}
-    # Failover priority: DeepSeek → Gemini → Groq → Qwen → GLM (provider diversity
-    # is intentional — NVIDIA, Google, Groq, NVIDIA, Zhipu — so one vendor's
-    # outage/quota never takes out two consecutive hops). Unconfigured providers
-    # (no API key) are skipped automatically, so Groq and GLM simply sit idle
-    # until GROQ_API_KEY / GLM_API_KEY are set — the live production order is
-    # DeepSeek → Gemini → Qwen until those keys are supplied.
-    order: ${AI_PROVIDER_ORDER:deepseek,gemini,groq,qwen,openrouter}
+    primary: ${PRIMARY_PROVIDER:deepseek_flash}
+    # Failover priority: [NVIDIA cluster: DeepSeek Flash → DeepSeek pro/reasoning →
+    # Qwen] → Gemini → Groq → [SambaNova cluster: DeepSeek-V3.2 → DeepSeek-V3.1 →
+    # gpt-oss-120b → Llama-3.3-70B → gemma-4-31B → MiniMax-M2.7] → OpenRouter.
+    #
+    # The two remaining NVIDIA models are served by ONE OpenAI-compatible endpoint
+    # via a single NvidiaProvider class (see ai/provider/NvidiaProvider.java +
+    # NvidiaProviderConfig) — not one class per model — even though each has its
+    # own dedicated API key (see `providers` below). Same pattern for the six
+    # SambaNova models via SambaNovaProvider/SambaNovaProviderConfig.
+    #
+    # Kimi and GLM were tried (live-tested: Kimi returned HTTP 404 "not entitled",
+    # GLM never responded within any reasonable timeout) and are now FULLY REMOVED
+    # — not disabled — from this order, ai.gateway.nvidia.models, ai.gateway.providers,
+    # resilience4j instances, NvidiaProviderConfig's @Bean methods, and every doc/test
+    # that referenced them. Their enterprise-grade replacements live in OpenRouter's
+    # model pool below (see `open-router`).
+    #
+    # Qwen isn't part of the current 5-vendor priority list (NVIDIA → Gemini → Groq
+    # → SambaNova → OpenRouter) but is left live, grouped into the NVIDIA cluster
+    # (it's NVIDIA-hosted too) — it's a working, previously-verified provider and
+    # removing it would be a routing regression.
+    #
+    # Unconfigured providers (no API key, or a cluster's models[].enabled=false)
+    # are skipped automatically. This list is the ONLY place provider ORDER is
+    # defined — AiGatewayService has no hardcoded ordering, so re-prioritizing or
+    # adding a provider is a config change, never a Java change. OpenRouter is a
+    # single slot here ("openrouter") — internally it's a dynamic, capability-based
+    # pool of models, not one fixed model (see `open-router` below).
+    order: ${AI_PROVIDER_ORDER:deepseek_flash,deepseek,qwen,gemini,groq,sambanova_deepseek_v3_2,sambanova_deepseek_v3_1,sambanova_gpt_oss_120b,sambanova_llama_3_3_70b,sambanova_gemma_4_31b,sambanova_minimax_m2_7,openrouter}
     default-temperature: 0.4
+    # NVIDIA NIM model-cluster metadata (id/priority/enabled only — credentials/model
+    # id/timeout for each of these keys still live under `providers` below, unchanged
+    # mechanism). `priority` documents each model's intended relative order WITHIN the
+    # NVIDIA cluster; the actual routing order remains `order` above, so there is one
+    # real ordering mechanism, not two competing ones. `enabled` is an explicit kill
+    # switch independent of whether that model's own NVIDIA API key is set.
+    nvidia:
+      models:
+        - id: deepseek_flash
+          priority: 1
+          enabled: true
+        - id: deepseek
+          priority: 2
+          enabled: true
+    # SambaNova model-cluster metadata — same shape/semantics as `nvidia` above.
+    sambanova:
+      models:
+        - id: sambanova_deepseek_v3_2
+          priority: 1
+          enabled: true
+        - id: sambanova_deepseek_v3_1
+          priority: 2
+          enabled: true
+        - id: sambanova_gpt_oss_120b
+          priority: 3
+          enabled: true
+        - id: sambanova_llama_3_3_70b
+          priority: 4
+          enabled: true
+        - id: sambanova_gemma_4_31b
+          priority: 5
+          enabled: true
+        - id: sambanova_minimax_m2_7
+          priority: 6
+          enabled: true
+    # ---- OpenRouter: dynamic, capability-based model pool (last-resort fallback) ----
+    # Unlike `nvidia`/`sambanova` above (a fixed set of models, each its own @Bean and
+    # its own `order` slot), OpenRouter is ONE provider bean ("openrouter" in `order`)
+    # that internally selects from the model pool below, grouped by capability — see
+    # ai/provider/OpenRouterProvider.java + OpenRouterModelRegistry. No model id is
+    # ever hardcoded in Java; every model referenced anywhere in this pool is written
+    # here and nowhere else.
+    open-router:
+      enabled: true
+      # Validates the lists below against OpenRouter's live GET /v1/models catalog once
+      # at startup (ApplicationReadyEvent — strictly after the app has already started,
+      # so a slow/failed/disabled call can never block or fail startup). A model missing
+      # from the live catalog is skipped for routing purposes and logged as a WARNING —
+      # it is never removed from this config and never stops the app from starting.
+      auto-discover-models: ${OPENROUTER_AUTO_DISCOVER_MODELS:true}
+      refresh-models-on-startup: ${OPENROUTER_REFRESH_MODELS_ON_STARTUP:true}
+      validate-configured-models: ${OPENROUTER_VALIDATE_CONFIGURED_MODELS:true}
+      capabilities:
+        # Resume Agent / ATS Agent / Job Discovery → REASONING (DeepSeek V4 Flash first).
+        # Interview Coach / Career Strategy / Company Intelligence also map to REASONING —
+        # Nemotron 3 Ultra/Super are next in line once DeepSeek V4 Flash is unavailable.
+        reasoning:
+          preferred:
+            - deepseek/deepseek-v4-flash
+            - nvidia/nemotron-3-ultra-550b-a55b:free
+            - nvidia/nemotron-3-super-120b-a12b:free
+        # Coding Assistant → CODING.
+        coding:
+          preferred:
+            - cohere/north-mini-code:free
+        # General Chat → CHAT.
+        chat:
+          preferred:
+            - google/gemma-4-26b-a4b-it:free
+        # Low Latency → LIGHTWEIGHT. gpt-oss-20b is also the "additional fallback" model
+        # from the modernization brief, so it's listed here ahead of Nemotron Nano 30B.
+        lightweight:
+          preferred:
+            - openai/gpt-oss-20b:free
+            - nvidia/nemotron-3-nano-30b-a3b:free
     # Phase A Enterprise Smart Router feature flag. false = pure sequential
     # failover over `order` (current production behavior, unchanged). Task-aware
     # routing using `routing` below is wired in a later phase and only takes
@@ -132,43 +229,141 @@ ai:
       careerStrategy: [gemini, deepseek, openrouter]
       salaryIntelligence: [gemini, qwen, openrouter]
     providers:
-      gemini:
-        display-name: Gemini
-        api-key: ${GEMINI_API_KEY:}
-        model: ${GEMINI_MODEL:gemini-2.5-flash}
-        base-url: ${GEMINI_BASE_URL:https://generativelanguage.googleapis.com/v1beta}
+      # ---- NVIDIA NIM cluster (priorities 1-4) — same OpenAI-compatible endpoint,
+      # served by the single NvidiaProvider class (see ai/provider/NvidiaProvider.java).
+      # Each model has its OWN dedicated API key below (they don't have to share one —
+      # AbstractOpenAiChatProvider reads api-key per provider-key config, same mechanism
+      # as every other provider), so one model's key/quota is fully independent of the
+      # others'. ----
+      # Priority 1 — fast/cheap DeepSeek variant. Split into its own provider key
+      # (rather than swapping the "deepseek" key's model) so flash and pro/reasoning
+      # DeepSeek can occupy two different priorities in `order` at the same time.
+      deepseek_flash:
+        display-name: DeepSeek Flash
+        api-key: ${NVIDIA_DEEPSEEK_FLASH_API_KEY:}
+        model: ${NVIDIA_DEEPSEEK_FLASH_MODEL:deepseek-ai/deepseek-v4-flash}
+        base-url: ${NVIDIA_BASE_URL:https://integrate.api.nvidia.com/v1}
         timeout-ms: 15000
+        cost-tier: low
+        supports-reasoning: false
+      # Priority 2 — DeepSeek pro/reasoning variant. Key stays "deepseek" (not
+      # "deepseek_v4") for backward compatibility — resume.tailoring.preferred-providers,
+      # ai.gateway.routing.*, and diagnostics health checks all already name it "deepseek".
+      # NVIDIA NIM IDs are vendor-namespaced; the bare "deepseek-v4-pro" 404s, keep the
+      # "deepseek-ai/" prefix in the default.
       deepseek:
         display-name: DeepSeek
         api-key: ${DEEP_SHEEK_NVIDIA_API_KEY:}
-        # NVIDIA NIM IDs are vendor-namespaced; the bare "deepseek-v4-flash"
-        # 404s. Keep the "deepseek-ai/" prefix in the default.
-        model: ${NVIDIA_DEEPSEEK_MODEL:deepseek-ai/deepseek-v4-flash}
+        model: ${NVIDIA_DEEPSEEK_MODEL:deepseek-ai/deepseek-v4-pro}
         base-url: ${NVIDIA_BASE_URL:https://integrate.api.nvidia.com/v1}
-        timeout-ms: 20000
-      groq:
-        display-name: Groq
-        api-key: ${GROQ_API_KEY:}
-        model: ${GROQ_MODEL:llama-3.3-70b-versatile}
-        base-url: ${GROQ_BASE_URL:https://api.groq.com/openai/v1}
-        timeout-ms: 20000
+        # Live-tested: this model genuinely works but took 74s on a cold start —
+        # the previous 20s timeout would have failed (and failed over) on every
+        # single call. Raised based on real observed latency, not guessed.
+        timeout-ms: 90000
+        cost-tier: medium
+        supports-reasoning: true
+      # Priority 3 — also NVIDIA NIM-hosted (its own dedicated NVIDIA account/key),
+      # but kept as its own top-level QwenProvider class rather than folded into
+      # NvidiaProvider. Not part of the current 5-vendor priority list either, but
+      # left live/grouped with the NVIDIA cluster since it's a working,
+      # previously-verified provider.
       qwen:
         display-name: Qwen
         api-key: ${QWEN3_NVIDIA_API_KEY:}
         model: ${NVIDIA_QWEN_MODEL:qwen/qwen3-next-80b-a3b-instruct}
         base-url: ${NVIDIA_BASE_URL:https://integrate.api.nvidia.com/v1}
         timeout-ms: 25000
-      # OpenRouter — last-resort fallback, OpenAI-compatible. Provides access to
-      # many models (free and paid). api-key is empty by default → provider is
-      # UNAVAILABLE and skipped. Supply OPENROUTER_API_KEY to activate (it then
-      # joins the chain after Qwen automatically). Model can be any OpenRouter-
-      # supported model (e.g., qwen/qwen3-next-80b-a3b-instruct:free for free tier).
+        cost-tier: medium
+      # Priority 4.
+      gemini:
+        display-name: Gemini
+        api-key: ${GEMINI_API_KEY:}
+        model: ${GEMINI_MODEL:gemini-2.5-flash}
+        base-url: ${GEMINI_BASE_URL:https://generativelanguage.googleapis.com/v1beta}
+        timeout-ms: 15000
+        cost-tier: low
+      # Priority 5.
+      groq:
+        display-name: Groq
+        api-key: ${GROQ_API_KEY:}
+        model: ${GROQ_MODEL:llama-3.3-70b-versatile}
+        base-url: ${GROQ_BASE_URL:https://api.groq.com/openai/v1}
+        timeout-ms: 20000
+        cost-tier: low
+      # ---- SambaNova cluster (priorities 6-11) — same OpenAI-compatible endpoint,
+      # served by the single SambaNovaProvider class (see
+      # ai/provider/SambaNovaProvider.java). All share one SAMBANOVA_API_KEY by
+      # default (SambaNova issues one key per account, unlike NVIDIA's per-model
+      # keys tested earlier) — override any individual key below if that changes.
+      # Timeouts are generous (120s) based on the NVIDIA cluster's observed cold-start
+      # latency (70-130s) for comparable hosted models; tune down once SambaNova's
+      # own latency is measured in production. ----
+      # Priority 6 — primary.
+      sambanova_deepseek_v3_2:
+        display-name: SambaNova DeepSeek V3.2 (Primary)
+        api-key: ${SAMBANOVA_API_KEY:}
+        model: ${SAMBANOVA_DEEPSEEK_V32_MODEL:DeepSeek-V3.2}
+        base-url: ${SAMBANOVA_BASE_URL:https://api.sambanova.ai/v1}
+        timeout-ms: 120000
+        cost-tier: low
+        supports-reasoning: true
+      # Priority 7 — secondary DeepSeek variant, verified available, no named role.
+      sambanova_deepseek_v3_1:
+        display-name: SambaNova DeepSeek V3.1
+        api-key: ${SAMBANOVA_API_KEY:}
+        model: ${SAMBANOVA_DEEPSEEK_V31_MODEL:DeepSeek-V3.1}
+        base-url: ${SAMBANOVA_BASE_URL:https://api.sambanova.ai/v1}
+        timeout-ms: 120000
+        cost-tier: low
+        supports-reasoning: true
+      # Priority 8 — reasoning.
+      sambanova_gpt_oss_120b:
+        display-name: SambaNova gpt-oss-120b (Reasoning)
+        api-key: ${SAMBANOVA_API_KEY:}
+        model: ${SAMBANOVA_GPT_OSS_MODEL:gpt-oss-120b}
+        base-url: ${SAMBANOVA_BASE_URL:https://api.sambanova.ai/v1}
+        timeout-ms: 120000
+        cost-tier: medium
+        supports-reasoning: true
+      # Priority 9 — conversation.
+      sambanova_llama_3_3_70b:
+        display-name: SambaNova Llama 3.3 70B (Conversation)
+        api-key: ${SAMBANOVA_API_KEY:}
+        model: ${SAMBANOVA_LLAMA_MODEL:Meta-Llama-3.3-70B-Instruct}
+        base-url: ${SAMBANOVA_BASE_URL:https://api.sambanova.ai/v1}
+        timeout-ms: 120000
+        cost-tier: low
+        supports-reasoning: false
+      # Priority 10 — fast.
+      sambanova_gemma_4_31b:
+        display-name: SambaNova Gemma 4 31B (Fast)
+        api-key: ${SAMBANOVA_API_KEY:}
+        model: ${SAMBANOVA_GEMMA_MODEL:gemma-4-31B-it}
+        base-url: ${SAMBANOVA_BASE_URL:https://api.sambanova.ai/v1}
+        timeout-ms: 90000
+        cost-tier: low
+        supports-reasoning: false
+      # Priority 11 — fallback (last SambaNova model before OpenRouter).
+      sambanova_minimax_m2_7:
+        display-name: SambaNova MiniMax M2.7 (Fallback)
+        api-key: ${SAMBANOVA_API_KEY:}
+        model: ${SAMBANOVA_MINIMAX_MODEL:MiniMax-M2.7}
+        base-url: ${SAMBANOVA_BASE_URL:https://api.sambanova.ai/v1}
+        timeout-ms: 120000
+        cost-tier: low
+        supports-reasoning: false
+      # Priority 12 — last-resort fallback. api-key empty by default → provider is
+      # UNAVAILABLE and skipped. Supply OPENROUTER_API_KEY to activate. NOTE: unlike
+      # every other entry in this map, `model` is intentionally unused here —
+      # OpenRouterProvider overrides isConfigured() to ignore it and instead selects
+      # a model per-call from the pool defined in ai.gateway.open-router.capabilities
+      # above. timeout-ms still applies to every call this provider makes.
       openrouter:
         display-name: OpenRouter
         api-key: ${OPENROUTER_API_KEY:}
-        model: ${OPENROUTER_MODEL:qwen/qwen3-next-80b-a3b-instruct:free}
         base-url: ${OPENROUTER_BASE_URL:https://openrouter.ai/api/v1}
-        timeout-ms: 25000
+        timeout-ms: 30000
+        cost-tier: unknown
 
   # ---- Embeddings: pgvector semantic search (Phase 2 Increment A) ----
   # Gated DARK by default. When enabled, discovered jobs (post-ingest, capped) and resumes (on
@@ -206,7 +401,25 @@ resilience4j:
         ignore-exceptions:
           - io.github.resilience4j.circuitbreaker.CallNotPermittedException
           - ai.careerpilot.ai.QuotaExceededException
-      deepseek: *retryDefaults
+      # Slow, cold-start-prone models (70-130s observed) get 1 attempt instead of 3 —
+      # retrying a call that can take up to ~120s each would stack to 6+ minutes
+      # before the gateway even reaches the next provider in the chain. A single
+      # failed attempt here still fails over immediately to the next configured
+      # provider; it just doesn't retry *within* this slow provider first.
+      deepseek: &slowColdStartRetry
+        max-attempts: 1
+        retry-exceptions:
+          - java.lang.Exception
+        ignore-exceptions:
+          - io.github.resilience4j.circuitbreaker.CallNotPermittedException
+          - ai.careerpilot.ai.QuotaExceededException
+      sambanova_deepseek_v3_2: *slowColdStartRetry
+      sambanova_deepseek_v3_1: *slowColdStartRetry
+      sambanova_gpt_oss_120b: *slowColdStartRetry
+      sambanova_llama_3_3_70b: *slowColdStartRetry
+      sambanova_gemma_4_31b: *slowColdStartRetry
+      sambanova_minimax_m2_7: *slowColdStartRetry
+      deepseek_flash: *retryDefaults
       groq: *retryDefaults
       qwen: *retryDefaults
       openrouter: *retryDefaults
@@ -221,8 +434,15 @@ resilience4j:
         permitted-number-of-calls-in-half-open-state: 3
         automatic-transition-from-open-to-half-open-enabled: true
       deepseek: *cbDefaults
+      deepseek_flash: *cbDefaults
       groq: *cbDefaults
       qwen: *cbDefaults
+      sambanova_deepseek_v3_2: *cbDefaults
+      sambanova_deepseek_v3_1: *cbDefaults
+      sambanova_gpt_oss_120b: *cbDefaults
+      sambanova_llama_3_3_70b: *cbDefaults
+      sambanova_gemma_4_31b: *cbDefaults
+      sambanova_minimax_m2_7: *cbDefaults
       openrouter: *cbDefaults
 
 agent-service:

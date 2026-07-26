@@ -51,8 +51,25 @@ public abstract class AbstractOpenAiChatProvider extends AbstractLlmProvider {
 
     @Override
     public String chat(List<ChatMessage> messages, String system, double temperature) {
+        return chatWithModel(messages, system, temperature, cfg.getModel());
+    }
+
+    @Override
+    public Flux<String> streamChat(List<ChatMessage> messages, String system, double temperature) {
+        return streamChatWithModel(messages, system, temperature, cfg.getModel());
+    }
+
+    /**
+     * Same as {@link #chat} but with an explicit model id instead of {@code cfg.getModel()}.
+     * Exists so a subclass representing a <em>pool</em> of models on one shared account (e.g.
+     * {@code OpenRouterProvider}, which selects a model per-call rather than binding to one
+     * fixed model per instance) can reuse this class's transport/auth/JSON-parsing logic
+     * instead of duplicating it. {@link #chat} is unchanged — it simply delegates here with
+     * the instance's own configured model, so every existing subclass behaves identically.
+     */
+    protected String chatWithModel(List<ChatMessage> messages, String system, double temperature, String model) {
         Map<String, Object> body = Map.of(
-                "model", cfg.getModel(),
+                "model", model,
                 "messages", toOpenAiMessages(messages, system),
                 "temperature", temperature,
                 "stream", false);
@@ -82,10 +99,10 @@ public abstract class AbstractOpenAiChatProvider extends AbstractLlmProvider {
         }
     }
 
-    @Override
-    public Flux<String> streamChat(List<ChatMessage> messages, String system, double temperature) {
+    /** Streaming counterpart of {@link #chatWithModel} — see that method's javadoc. */
+    protected Flux<String> streamChatWithModel(List<ChatMessage> messages, String system, double temperature, String model) {
         Map<String, Object> body = Map.of(
-                "model", cfg.getModel(),
+                "model", model,
                 "messages", toOpenAiMessages(messages, system),
                 "temperature", temperature,
                 "stream", true);

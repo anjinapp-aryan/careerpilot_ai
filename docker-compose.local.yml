@@ -34,3 +34,12 @@ services:
       # defaults (DEBUG ai.careerpilot logging, Swagger enabled) — matching
       # the pre-hardening local behavior documented in CLAUDE.md.
       SPRING_PROFILES_ACTIVE: ""
+    ports: !override
+      # Host 8181 -> container 8080. Host 8080 was occupied by an unrelated
+      # local httpd process on this machine; the app itself still listens on
+      # 8080 inside the container (server.port default in application.yml),
+      # only the host-side publish moved. !override replaces
+      # docker-compose.yml's own "127.0.0.1:8080:8080" entry instead of
+      # merging alongside it — without it, ports: lists concatenate and 8080
+      # stays published too.
+      - "127.0.0.1:8181:8080"

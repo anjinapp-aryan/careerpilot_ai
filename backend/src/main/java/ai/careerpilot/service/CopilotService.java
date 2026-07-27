@@ -3,8 +3,14 @@ package ai.careerpilot.service;
 import ai.careerpilot.ai.AiGatewayService;
 import ai.careerpilot.ai.ChatMessage;
 import ai.careerpilot.api.dto.CopilotDtos.CopilotStreamRequest;
+import ai.careerpilot.capability.CapabilityAwareChatService;
+import ai.careerpilot.capability.CapabilityDecision;
+import ai.careerpilot.capability.CapabilityEngine;
+import ai.careerpilot.capability.CapabilityMetrics;
+import ai.careerpilot.capability.CapabilityResult;
 import ai.careerpilot.domain.CopilotConversation;
 import ai.careerpilot.domain.CopilotMessage;
+import ai.careerpilot.mcp.McpExecutionContext;
 import ai.careerpilot.security.AuthenticatedUser;
 import ai.careerpilot.service.copilot.CopilotSkillHandler;
 import ai.careerpilot.service.copilot.CopilotSkillRouter;
@@ -12,14 +18,18 @@ import ai.careerpilot.service.copilot.SkillContext;
 import ai.careerpilot.service.copilot.event.CopilotUserMessageEvent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 import reactor.core.scheduler.Schedulers;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
+import java.util.function.Consumer;
 
 /**
  * Enterprise Career Intelligence Assistant orchestration.
@@ -44,6 +54,10 @@ public class CopilotService {
     private final boolean candidateProfileContextEnabled;
     private final boolean careerMemoryContextEnabled;
     private final int careerMemoryContextLimit;
+    private final ObjectProvider<CapabilityEngine> capabilityEngineProvider;
+    private final ObjectProvider<CapabilityAwareChatService> capabilityAwareChatServiceProvider;
+    private final ObjectProvider<CapabilityMetrics> capabilityMetricsProvider;
+    private final boolean capabilityIntegrationEnabled;
 
     public CopilotService(AiGatewayService ai, ConversationMemory memory,
                           CopilotSkillRouter skillRouter, AgentOrchestrator orchestrator,
@@ -54,7 +68,12 @@ public class CopilotService {
                           @org.springframework.beans.factory.annotation.Value(
                                   "${copilot.career-memory-context.enabled:false}") boolean careerMemoryContextEnabled,
                           @org.springframework.beans.factory.annotation.Value(
-                                  "${copilot.career-memory-context.limit:5}") int careerMemoryContextLimit) {
+                                  "${copilot.career-memory-context.limit:5}") int careerMemoryContextLimit,
+                          ObjectProvider<CapabilityEngine> capabilityEngineProvider,
+                          ObjectProvider<CapabilityAwareChatService> capabilityAwareChatServiceProvider,
+                          ObjectProvider<CapabilityMetrics> capabilityMetricsProvider,
+                          @org.springframework.beans.factory.annotation.Value(
+                                  "${copilot.capability.integration.enabled:false}") boolean capabilityIntegrationEnabled) {
         this.ai = ai;
         this.memory = memory;
         this.skillRouter = skillRouter;
@@ -64,6 +83,10 @@ public class CopilotService {
         this.candidateProfileContextEnabled = candidateProfileContextEnabled;
         this.careerMemoryContextEnabled = careerMemoryContextEnabled;
         this.careerMemoryContextLimit = careerMemoryContextLimit;
+        this.capabilityEngineProvider = capabilityEngineProvider;
+        this.capabilityAwareChatServiceProvider = capabilityAwareChatServiceProvider;
+        this.capabilityMetricsProvider = capabilityMetricsProvider;
+        this.capabilityIntegrationEnabled = capabilityIntegrationEnabled;
     }
 
     /** The live result of a turn: the conversation id + token stream + sources + provider reference. */
@@ -136,8 +159,10 @@ public class CopilotService {
             log.info("Copilot response from provider: {}", providerName);
         };
 
+        Flux<String> rawTokens = routeTokens(turns, system, user, conv.getId(), userMessage, providerCallback, usedProvider);
+
         StringBuilder assistant = new StringBuilder();
-        Flux<String> tokens = ai.streamChat(turns, system, providerCallback)
+        Flux<String> tokens = rawTokens
                 .doOnNext(assistant::append)
                 .doOnComplete(() -> {
                     persistAssistantAsync(conv.getId(), assistant.toString(), sourcesBlock);
@@ -150,6 +175,59 @@ public class CopilotService {
                 });
 
         return new StreamResult(conv.getId(), tokens, new ArrayList<>(skillCtx.sources()), usedProvider);
+    }
+
+    /**
+     * Phase 10.4 — decides, per turn, whether to route through {@link CapabilityAwareChatService}
+     * (MCP tool calling) or the existing, byte-for-byte-unchanged {@code ai.streamChat(...)} call.
+     * Dark-shipped behind {@code copilot.capability.integration.enabled} (default {@code false}) —
+     * with it off, or with either {@link CapabilityEngine}/{@link CapabilityAwareChatService}
+     * unavailable (their own {@code capability.engine.enabled} flag off), this returns exactly
+     * the same {@code ai.streamChat(...)} call as before this phase.
+     *
+     * <p>Capability routing only replaces the streaming source when a capability actually
+     * matched — general chat always keeps the real token-by-token stream from {@code
+     * AiGatewayService.streamChat}, since {@link CapabilityAwareChatService#chat} is
+     * synchronous and would otherwise collapse general-chat responses into a single chunk,
+     * a user-visible regression the phase spec explicitly forbids ("user must NOT notice any
+     * UI change"). Any exception during capability routing (decision, tool execution, or Spring
+     * AI synthesis) falls back to the plain streaming call — never fails the request.
+     */
+    private Flux<String> routeTokens(List<ChatMessage> turns, String system, AuthenticatedUser user,
+                                      UUID conversationId, String userMessage,
+                                      Consumer<String> providerCallback,
+                                      java.util.concurrent.atomic.AtomicReference<String> usedProvider) {
+        if (capabilityIntegrationEnabled) {
+            CapabilityEngine engine = capabilityEngineProvider.getIfAvailable();
+            CapabilityAwareChatService capabilityService = capabilityAwareChatServiceProvider.getIfAvailable();
+            if (engine != null && capabilityService != null) {
+                long start = System.currentTimeMillis();
+                try {
+                    CapabilityDecision decision = engine.analyze(userMessage);
+                    if (decision.useToolCalling()) {
+                        McpExecutionContext mcpContext = new McpExecutionContext(
+                                user.userId(), user.orgId(), conversationId.toString(),
+                                UUID.randomUUID().toString(), Duration.ofSeconds(30), Map.of());
+                        CapabilityResult result = capabilityService.chat(turns, system, mcpContext);
+                        long elapsed = System.currentTimeMillis() - start;
+                        CapabilityMetrics metrics = capabilityMetricsProvider.getIfAvailable();
+                        if (metrics != null) {
+                            metrics.recordEndToEndLatency(elapsed);
+                        }
+                        log.info("Copilot capability turn: type={} usedSpringAi={} latencyMs={}",
+                                result.capabilityType(), result.usedSpringAi(), elapsed);
+                        usedProvider.set(result.usedSpringAi()
+                                ? "Spring AI Tool Calling (" + result.capabilityType() + ")"
+                                : "AI Gateway (tool-augmented: " + result.capabilityType() + ")");
+                        return Flux.just(result.answer());
+                    }
+                } catch (Exception e) {
+                    log.warn("Capability routing failed for conversation {}, falling back to AI Gateway: {}",
+                            conversationId, e.toString());
+                }
+            }
+        }
+        return ai.streamChat(turns, system, providerCallback);
     }
 
     /**

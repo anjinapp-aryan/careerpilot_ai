@@ -8,7 +8,6 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -22,8 +21,15 @@ import java.util.Map;
  * Implements {@code chat} ({@code :generateContent}) and {@code streamChat}
  * ({@code :streamGenerateContent?alt=sse}). Feature helpers come from
  * {@link AbstractLlmProvider}.
+ *
+ * <p>Phase 9.3 — deliberately NOT {@code @Component}-annotated. Constructed
+ * explicitly by {@link ai.careerpilot.ai.migration.ProviderRegistryConfig}, which
+ * chooses between this legacy implementation and {@link GeminiSpringAiProvider}
+ * based on {@code spring-ai.providers.gemini.enabled} (default {@code false} — this
+ * class remains the one actually registered as the {@code "gemini"} {@link
+ * ai.careerpilot.ai.LlmProvider} bean in production). No other logic in this class
+ * changed for that migration.
  */
-@Component
 public class GeminiProvider extends AbstractLlmProvider {
 
     private static final Logger log = LoggerFactory.getLogger(GeminiProvider.class);

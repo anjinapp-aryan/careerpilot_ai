@@ -1,6 +1,33 @@
 spring:
   application:
     name: careerpilot-backend
+  autoconfigure:
+    # Phase 9.1 — Spring AI Foundation. spring-ai-starter-model-openai (pulled in for
+    # ai.careerpilot.ai.springai's foundation beans — see ai.springai.foundation below)
+    # ships its own autoconfiguration that would otherwise activate on properties
+    # this app doesn't set today (e.g. spring.ai.openai.api-key) and silently create
+    # its own ChatModel/EmbeddingModel beans outside our control. Excluded so the
+    # ONLY Spring AI beans that ever exist are the explicitly-gated ones built by
+    # ai.careerpilot.ai.springai.SpringAiConfig — zero chance of accidental
+    # auto-activation, zero effect on the existing AI Gateway either way.
+    exclude:
+      - org.springframework.ai.model.openai.autoconfigure.OpenAiChatAutoConfiguration
+      - org.springframework.ai.model.openai.autoconfigure.OpenAiEmbeddingAutoConfiguration
+      - org.springframework.ai.model.openai.autoconfigure.OpenAiImageAutoConfiguration
+      - org.springframework.ai.model.openai.autoconfigure.OpenAiAudioTranscriptionAutoConfiguration
+      - org.springframework.ai.model.openai.autoconfigure.OpenAiAudioSpeechAutoConfiguration
+      - org.springframework.ai.model.openai.autoconfigure.OpenAiModerationAutoConfiguration
+      # Phase 9.3 — same reasoning as the OpenAI exclusions above, for the Google
+      # GenAI starter added for GeminiSpringAiProvider. Without this, merely having
+      # the starter on the classpath makes Spring AI try to auto-construct its OWN
+      # googleGenAiClient/ChatModel bean from spring.ai.google.genai.* properties —
+      # which this app never sets (GeminiSpringAiProvider builds its own client
+      # explicitly from ai.gateway.providers.gemini.* instead) — crashing startup
+      # with "Incomplete Google GenAI configuration" regardless of any migration
+      # flag (caught in local verification, exactly like the OpenAI case in Phase 9.1).
+      - org.springframework.ai.model.google.genai.autoconfigure.chat.GoogleGenAiChatAutoConfiguration
+      - org.springframework.ai.model.google.genai.autoconfigure.embedding.GoogleGenAiEmbeddingConnectionAutoConfiguration
+      - org.springframework.ai.model.google.genai.autoconfigure.embedding.GoogleGenAiTextEmbeddingAutoConfiguration
   lifecycle:
     # Ceiling for server.shutdown=graceful: how long Tomcat waits for in-flight
     # requests to finish before the JVM forces exit on SIGTERM. Set above the
@@ -77,6 +104,18 @@ spring:
   web:
     error:
       include-message: always
+  # ---- Phase 10.3 — Enterprise Capability Engine & Spring AI Tool Orchestration. This
+  # exact property path (spring.ai.tool.calling.enabled) is what the phase spec names;
+  # placed under this pre-existing top-level `spring:` block rather than a second one
+  # (YAML forbids duplicate top-level keys). Read only by
+  # ai.careerpilot.capability.CapabilityConfig — safe to live under Spring AI's own
+  # namespace since its autoconfiguration for this prefix is already excluded above
+  # (Phase 9.1/9.3) and no real Spring AI property named `tool.calling.enabled` exists
+  # to collide with.
+  ai:
+    tool:
+      calling:
+        enabled: ${SPRING_AI_TOOL_CALLING_ENABLED:false}
 
 server:
   shutdown: graceful
@@ -103,6 +142,29 @@ ai:
   model: ${AI_MODEL:gemini-2.5-flash}   # flash is free-tier eligible; pro returns 429 limit:0 on free keys
   gemini:
     api-key: ${GEMINI_API_KEY:}
+  # ---- Phase 9.1 — Spring AI Foundation. Entirely separate from `gateway` below:
+  # nothing here is read by AiGatewayService, the Smart Router, or any business
+  # service — see ai.careerpilot.ai.springai.SpringAiConfig, the only reader of
+  # this block. `enabled` defaults false (same dark-by-default convention as every
+  # other phase in this codebase), so by default SpringAiConfig's beans don't even
+  # get created. Flipping it on only constructs the beans — nothing consumes them
+  # yet, so even "on" has zero effect on any request path. ----
+  springai:
+    foundation:
+      enabled: ${SPRING_AI_FOUNDATION_ENABLED:false}
+      # OpenAI-compatible endpoint used only by the foundation beans. Defaults to
+      # NVIDIA's endpoint (same one ai.gateway.providers.deepseek_flash already
+      # calls) purely as a convenience default since it's a known-good
+      # OpenAI-compatible base-url — this is a SEPARATE HTTP client instance from
+      # NvidiaProvider's; the two share nothing at runtime.
+      base-url: ${SPRING_AI_FOUNDATION_BASE_URL:https://integrate.api.nvidia.com/v1}
+      api-key: ${SPRING_AI_FOUNDATION_API_KEY:}
+      chat-model: ${SPRING_AI_FOUNDATION_CHAT_MODEL:deepseek-ai/deepseek-v4-flash}
+      embedding-model: ${SPRING_AI_FOUNDATION_EMBEDDING_MODEL:nvidia/nv-embedqa-e5-v5}
+      # Phase 9.2 — governs SpringAiLlmProvider.timeout(). Same env var also mirrored
+      # into ai.gateway.providers.spring_ai.timeout-ms below (display metadata only)
+      # so the two can never drift apart.
+      timeout-ms: ${SPRING_AI_FOUNDATION_TIMEOUT_MS:20000}
   # ---- AI Gateway: single entry point for all LLM calls, with failover ----
   gateway:
     primary: ${PRIMARY_PROVIDER:deepseek_flash}
@@ -134,7 +196,15 @@ ai:
     # adding a provider is a config change, never a Java change. OpenRouter is a
     # single slot here ("openrouter") — internally it's a dynamic, capability-based
     # pool of models, not one fixed model (see `open-router` below).
-    order: ${AI_PROVIDER_ORDER:deepseek_flash,deepseek,qwen,gemini,groq,sambanova_deepseek_v3_2,sambanova_deepseek_v3_1,sambanova_gpt_oss_120b,sambanova_llama_3_3_70b,sambanova_gemma_4_31b,sambanova_minimax_m2_7,openrouter}
+    #
+    # Phase 9.2 — "spring_ai" is the canary LAST slot: a real, callable provider
+    # (ai.careerpilot.ai.provider.SpringAiLlmProvider) backed by the Phase 9.1
+    # Spring AI foundation beans (ai.springai.foundation.*, gated separately and
+    # off by default). It's only reached after every provider above has failed,
+    # and isConfigured() is false (see SpringAiLlmProvider) unless BOTH
+    # ai.springai.foundation.enabled=true AND a real api-key is set — so with
+    # stock config this slot is always skipped, identical to today's behavior.
+    order: ${AI_PROVIDER_ORDER:deepseek_flash,deepseek,qwen,gemini,groq,sambanova_deepseek_v3_2,sambanova_deepseek_v3_1,sambanova_gpt_oss_120b,sambanova_llama_3_3_70b,sambanova_gemma_4_31b,sambanova_minimax_m2_7,openrouter,spring_ai}
     default-temperature: 0.4
     # NVIDIA NIM model-cluster metadata (id/priority/enabled only — credentials/model
     # id/timeout for each of these keys still live under `providers` below, unchanged
@@ -243,7 +313,13 @@ ai:
         api-key: ${NVIDIA_DEEPSEEK_FLASH_API_KEY:}
         model: ${NVIDIA_DEEPSEEK_FLASH_MODEL:deepseek-ai/deepseek-v4-flash}
         base-url: ${NVIDIA_BASE_URL:https://integrate.api.nvidia.com/v1}
-        timeout-ms: 15000
+        # Live-observed (2026-07-26): on NVIDIA's shared free-tier NIM endpoint this
+        # model's real successful calls complete in ~2s; failures are congestion, not
+        # slowness, and previously waited the full 15s before failing over. Lowered so
+        # a congested attempt fails over to the next provider (deepseek/qwen/Gemini)
+        # in ~7s instead of 15s — three of these are stacked ahead of Gemini in
+        # ai.gateway.order, so this timeout is multiplied by up to 3x in the worst case.
+        timeout-ms: 7000
         cost-tier: low
         supports-reasoning: false
       # Priority 2 — DeepSeek pro/reasoning variant. Key stays "deepseek" (not
@@ -272,7 +348,10 @@ ai:
         api-key: ${QWEN3_NVIDIA_API_KEY:}
         model: ${NVIDIA_QWEN_MODEL:qwen/qwen3-next-80b-a3b-instruct}
         base-url: ${NVIDIA_BASE_URL:https://integrate.api.nvidia.com/v1}
-        timeout-ms: 25000
+        # Lowered alongside deepseek_flash above (2026-07-26) — same shared-NIM
+        # congestion reasoning, no documented cold-start need like deepseek (pro)
+        # has, so there's no legitimate slow-success case this would cut off.
+        timeout-ms: 8000
         cost-tier: medium
       # Priority 4.
       gemini:
@@ -364,6 +443,17 @@ ai:
         base-url: ${OPENROUTER_BASE_URL:https://openrouter.ai/api/v1}
         timeout-ms: 30000
         cost-tier: unknown
+      # Priority 13 (canary, last) — diagnostics/display metadata ONLY. Actual
+      # credentials/model/timeout for SpringAiLlmProvider come from
+      # ai.springai.foundation.* (same env vars referenced below, so they can't
+      # drift) — this block exists purely so GET /api/diagnostics/ai shows a real
+      # model/timeout instead of blanks; SpringAiLlmProvider does not read
+      # ai.gateway.providers.spring_ai at all.
+      spring_ai:
+        display-name: Spring AI (canary)
+        model: ${SPRING_AI_FOUNDATION_CHAT_MODEL:deepseek-ai/deepseek-v4-flash}
+        timeout-ms: ${SPRING_AI_FOUNDATION_TIMEOUT_MS:20000}
+        cost-tier: unknown
 
   # ---- Embeddings: pgvector semantic search (Phase 2 Increment A) ----
   # Gated DARK by default. When enabled, discovered jobs (post-ingest, capped) and resumes (on
@@ -423,6 +513,7 @@ resilience4j:
       groq: *retryDefaults
       qwen: *retryDefaults
       openrouter: *retryDefaults
+      spring_ai: *retryDefaults
   circuitbreaker:
     instances:
       gemini: &cbDefaults
@@ -444,6 +535,95 @@ resilience4j:
       sambanova_gemma_4_31b: *cbDefaults
       sambanova_minimax_m2_7: *cbDefaults
       openrouter: *cbDefaults
+      spring_ai: *cbDefaults
+
+# ---- Phase 9.3 — Spring AI Provider Migration flags. Read only by
+# ai.careerpilot.ai.migration.ProviderRegistryConfig, which is the ONLY place that
+# decides whether a provider key resolves to its legacy or Spring-AI-backed
+# implementation. AiGatewayService/the Smart Router never read this block and don't
+# know it exists. All default false = production behavior identical to before this
+# phase. Only "gemini" has a real second implementation today (GeminiSpringAiProvider)
+# — the other five keys exist so their config shape is stable for future migration
+# phases, but flipping one currently has no effect (see SpringAiMigrationProperties'
+# own javadoc). Rollback for any migrated provider is config-only: set its flag back
+# to false and restart — no code change, no redeploy artifact change. ----
+spring-ai:
+  providers:
+    gemini:
+      enabled: ${SPRING_AI_MIGRATE_GEMINI:false}
+    groq:
+      enabled: ${SPRING_AI_MIGRATE_GROQ:false}
+    sambanova:
+      enabled: ${SPRING_AI_MIGRATE_SAMBANOVA:false}
+    nvidia:
+      enabled: ${SPRING_AI_MIGRATE_NVIDIA:false}
+    qwen:
+      enabled: ${SPRING_AI_MIGRATE_QWEN:false}
+    openrouter:
+      enabled: ${SPRING_AI_MIGRATE_OPENROUTER:false}
+
+# ---- Phase 10.1 — Enterprise MCP Foundation. Platform-only: no MCP server is
+# implemented or connected. See ai.careerpilot.mcp.McpConfig, the only reader of
+# this block, and the package's own javadoc for the full architecture. All three
+# flags default false — with `enabled: false`, McpRegistry/McpMetrics beans don't
+# even get created; `health.enabled: false` likewise skips McpHealthManager.
+# `discovery.enabled` is reserved for a future server auto-discovery mechanism —
+# nothing reads it yet in this phase. Zero effect on AiGatewayService, Spring AI,
+# LangGraph, or any business service regardless of these values. ----
+mcp:
+  enabled: ${MCP_ENABLED:false}
+  discovery:
+    enabled: ${MCP_DISCOVERY_ENABLED:false}
+  health:
+    enabled: ${MCP_HEALTH_ENABLED:false}
+  # ---- Phase 10.2 — first real MCP tool servers, each independently flagged and each
+  # a thin read-only wrapper around an existing service/repository (no new tables, no
+  # new queries beyond existing finder methods). Every flag defaults false; each
+  # server's own @Configuration class also requires `mcp.enabled: true` (see e.g.
+  # ai.careerpilot.mcp.tool.filesystem.FilesystemMcpServerConfig). None of these are
+  # called by any business service, AiGatewayService, or ChatModel bean — see the
+  # ai.careerpilot.mcp package javadoc. ----
+  filesystem:
+    enabled: ${MCP_FILESYSTEM_ENABLED:false}
+  postgres:
+    enabled: ${MCP_POSTGRES_ENABLED:false}
+  github:
+    enabled: ${MCP_GITHUB_ENABLED:false}
+    base-url: ${MCP_GITHUB_BASE_URL:https://api.github.com}
+    user-agent: ${MCP_GITHUB_USER_AGENT:CareerPilotAI/1.0 (+https://careerpilot.ai)}
+  memory:
+    enabled: ${MCP_MEMORY_ENABLED:false}
+  # Keyed, unlike the four servers above — isConfigured() (api-key non-blank) gates
+  # actual tool registration even when this flag is true. Endpoint shape is
+  # best-effort/not live-verified — see Context7ApiClient's javadoc.
+  context7:
+    enabled: ${MCP_CONTEXT7_ENABLED:false}
+    api-key: ${MCP_CONTEXT7_API_KEY:}
+    base-url: ${MCP_CONTEXT7_BASE_URL:https://context7.com/api}
+    timeout-ms: ${MCP_CONTEXT7_TIMEOUT_MS:10000}
+
+# ---- Phase 10.3 — Enterprise Capability Engine & Spring AI Tool Orchestration. See
+# ai.careerpilot.capability.CapabilityConfig, the only reader of these four flags, and
+# the package's own javadoc. `capability.engine.enabled` is the master switch — off
+# (default), none of ai.careerpilot.capability's beans exist and AiGatewayService
+# remains the only chat path, unchanged. The other three are runtime toggles read
+# inside that already-dark layer (see CapabilityConfig's own javadoc for exactly
+# where each is consulted) — all default false, so even with the master flag on,
+# every request falls back to AiGatewayService until each is explicitly enabled.
+capability:
+  engine:
+    enabled: ${CAPABILITY_ENGINE_ENABLED:false}
+tool:
+  selection:
+    enabled: ${TOOL_SELECTION_ENABLED:false}
+parallel:
+  tool:
+    execution:
+      enabled: ${PARALLEL_TOOL_EXECUTION_ENABLED:false}
+# `spring.ai.tool.calling.enabled` (the phase spec's exact requested property path) is
+# added under the existing top-level `spring:` block near the top of this file, not
+# duplicated here — YAML forbids a second top-level `spring:` key. See that block's
+# `ai.tool.calling.enabled` entry.
 
 agent-service:
   base-url: ${AGENT_SERVICE_URL:http://localhost:8088}

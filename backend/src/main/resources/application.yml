@@ -613,6 +613,11 @@ mcp:
 capability:
   engine:
     enabled: ${CAPABILITY_ENGINE_ENABLED:false}
+  # Phase 11.2 — Capability Planner. See ai.careerpilot.planner.PlannerConfig, the only
+  # reader of this flag. Produces CapabilityPlans only — does not execute them (Phase
+  # 11.3's job) and is not called by the Copilot or any other business service yet.
+  planner:
+    enabled: ${CAPABILITY_PLANNER_ENABLED:false}
 tool:
   selection:
     enabled: ${TOOL_SELECTION_ENABLED:false}
@@ -624,6 +629,42 @@ parallel:
 # added under the existing top-level `spring:` block near the top of this file, not
 # duplicated here — YAML forbids a second top-level `spring:` key. See that block's
 # `ai.tool.calling.enabled` entry.
+
+# ---- Phase 11.1 — Enterprise Intent Engine. See ai.careerpilot.intent.IntentConfig, the
+# only reader of this block. `enabled: false` (default) means none of
+# ai.careerpilot.intent's beans are constructed and nothing outside that package can
+# reference them — see the package javadoc for the "not wired into Copilot yet" scope
+# note (that's Phase 11.2's job). `min-confidence` is the DefaultIntentEngine threshold
+# below which a classification is treated as no-match/fallback.
+intent:
+  engine:
+    enabled: ${INTENT_ENGINE_ENABLED:false}
+    min-confidence: ${INTENT_ENGINE_MIN_CONFIDENCE:0.4}
+
+# ---- Phase 11.3 — Multi-Capability Execution. See
+# ai.careerpilot.planner.execution.MultiCapabilityExecutionConfig, the only reader of
+# this block. `enabled: false` (default) means none of that package's beans are
+# constructed. Executes a CapabilityPlan (Phase 11.2) stage by stage, parallel within a
+# stage — not called by the Copilot or any other business service yet. `max-retries` is
+# how many additional whole-step attempts DefaultCapabilityExecutor makes after an
+# initial failure before giving up on that capability.
+multi:
+  capability:
+    enabled: ${MULTI_CAPABILITY_ENABLED:false}
+    max-retries: ${MULTI_CAPABILITY_MAX_RETRIES:1}
+
+# ---- Phase 11.4 — Enterprise Memory Evolution. See
+# ai.careerpilot.memory.enterprise.EnterpriseMemoryConfig, the only reader of this
+# block. `enabled: false` (default) means none of that package's beans are
+# constructed. Additive alongside CareerMemoryService/ConversationMemory/Memory MCP —
+# does not replace or read from any of them, in-memory only (no new DB table), and not
+# called by the Copilot or any other business service yet.
+enterprise:
+  memory:
+    enabled: ${ENTERPRISE_MEMORY_ENABLED:false}
+    working-ttl-hours: ${ENTERPRISE_MEMORY_WORKING_TTL_HOURS:24}
+    promotion-access-threshold: ${ENTERPRISE_MEMORY_PROMOTION_ACCESS_THRESHOLD:3}
+    max-entries-per-type: ${ENTERPRISE_MEMORY_MAX_ENTRIES_PER_TYPE:200}
 
 agent-service:
   base-url: ${AGENT_SERVICE_URL:http://localhost:8088}
@@ -1344,6 +1385,31 @@ career:
   roadmap:
     persistence:
       enabled: ${CAREER_ROADMAP_PERSISTENCE_ENABLED:false}
+  # ---- Phase 11.5 — Proactive Career Intelligence. See
+  # ai.careerpilot.career.monitor.CareerMonitorConfig, the only reader of this block.
+  # `enabled: false` (default) means none of that package's beans are constructed. Every
+  # detector is a read-only wrapper around existing data (job recommendations, resume
+  # age, career strategy JSON fields, offer vs. market percentile, interview schedule) —
+  # no new query, no new table. Not called by any scheduler or controller yet.
+  monitor:
+    enabled: ${CAREER_MONITOR_ENABLED:false}
+    job-match-score-threshold: ${CAREER_MONITOR_JOB_MATCH_SCORE_THRESHOLD:80}
+    job-match-lookback-days: ${CAREER_MONITOR_JOB_MATCH_LOOKBACK_DAYS:7}
+    job-match-max-alerts: ${CAREER_MONITOR_JOB_MATCH_MAX_ALERTS:5}
+    resume-staleness-days: ${CAREER_MONITOR_RESUME_STALENESS_DAYS:90}
+    interview-reminder-window-days: ${CAREER_MONITOR_INTERVIEW_REMINDER_WINDOW_DAYS:7}
+    alert-cooldown-days: ${CAREER_MONITOR_ALERT_COOLDOWN_DAYS:7}
+    recommendation-limit: ${CAREER_MONITOR_RECOMMENDATION_LIMIT:10}
+  # ---- Phase 11.6 — Autonomous Career Agent. See
+  # ai.careerpilot.career.agent.AutonomousCareerAgentConfig, the only reader of this
+  # block. `enabled: false` (default) means none of that package's beans are
+  # constructed. Task dispatch is deliberately deferred (never calls a real business
+  # service — see DeferredAgentTaskExecutor's javadoc) and no @Scheduled bean exists —
+  # nothing triggers AutonomousCareerAgent.runOnce automatically.
+  agent:
+    enabled: ${CAREER_AGENT_ENABLED:false}
+    max-tasks-per-plan: ${CAREER_AGENT_MAX_TASKS_PER_PLAN:5}
+    min-run-interval-hours: ${CAREER_AGENT_MIN_RUN_INTERVAL_HOURS:24}
 
 # ---- Gap A: Company Discovery Agent (dark). Weekly, low-frequency background probe of
 # Greenhouse/Ashby/SmartRecruiters/Workday's real keyless public endpoints for candidate company

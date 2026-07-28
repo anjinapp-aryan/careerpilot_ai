@@ -20,6 +20,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -58,7 +59,7 @@ class CapabilityAwareChatServiceTest {
         when(aiGatewayService.chat(any(), any())).thenReturn("plain answer");
 
         CapabilityAwareChatService service = new CapabilityAwareChatService(
-                aiGatewayService, engine, providerFor(null), providerFor(null), metrics, false, false);
+                aiGatewayService, engine, providerFor(null), providerFor(null), providerFor(null), metrics,false, false);
 
         CapabilityResult result = service.chat(userMessage("hello"), "system", context());
 
@@ -75,7 +76,7 @@ class CapabilityAwareChatServiceTest {
         when(aiGatewayService.chat(any(), any())).thenReturn("fallback answer");
 
         CapabilityAwareChatService service = new CapabilityAwareChatService(
-                aiGatewayService, engine, providerFor(null), providerFor(null), metrics, false, false);
+                aiGatewayService, engine, providerFor(null), providerFor(null), providerFor(null), metrics,false, false);
 
         CapabilityResult result = service.chat(userMessage("github please"), "system", context());
 
@@ -93,7 +94,7 @@ class CapabilityAwareChatServiceTest {
         when(aiGatewayService.chat(any(), any())).thenReturn("synthesized answer");
 
         CapabilityAwareChatService service = new CapabilityAwareChatService(
-                aiGatewayService, engine, providerFor(executor), providerFor(null), metrics, false, false);
+                aiGatewayService, engine, providerFor(executor), providerFor(null), providerFor(null), metrics,false, false);
 
         CapabilityResult result = service.chat(userMessage("github please"), "system", context());
 
@@ -117,7 +118,7 @@ class CapabilityAwareChatServiceTest {
         ChatModel chatModel = mock(ChatModel.class);
 
         CapabilityAwareChatService service = new CapabilityAwareChatService(
-                aiGatewayService, engine, providerFor(executor), providerFor(chatModel), metrics, false, false);
+                aiGatewayService, engine, providerFor(executor), providerFor(chatModel), providerFor(null), metrics,false, false);
 
         CapabilityResult result = service.chat(userMessage("github please"), "system", context());
 
@@ -140,7 +141,7 @@ class CapabilityAwareChatServiceTest {
                 .thenThrow(new RuntimeException("provider unreachable"));
 
         CapabilityAwareChatService service = new CapabilityAwareChatService(
-                aiGatewayService, engine, providerFor(executor), providerFor(chatModel), metrics, false, true);
+                aiGatewayService, engine, providerFor(executor), providerFor(chatModel), providerFor(null), metrics,false, true);
 
         CapabilityResult result = service.chat(userMessage("github please"), "system", context());
 
@@ -160,7 +161,7 @@ class CapabilityAwareChatServiceTest {
         when(aiGatewayService.chat(any(), any())).thenReturn("answer");
 
         CapabilityAwareChatService service = new CapabilityAwareChatService(
-                aiGatewayService, engine, providerFor(executor), providerFor(null), metrics, true, false);
+                aiGatewayService, engine, providerFor(executor), providerFor(null), providerFor(null), metrics,true, false);
 
         CapabilityResult result = service.chat(userMessage("career strategy please"), "system", context());
 
@@ -178,7 +179,7 @@ class CapabilityAwareChatServiceTest {
         when(aiGatewayService.chat(any(), any())).thenReturn("answer despite tool failure");
 
         CapabilityAwareChatService service = new CapabilityAwareChatService(
-                aiGatewayService, engine, providerFor(executor), providerFor(null), metrics, false, false);
+                aiGatewayService, engine, providerFor(executor), providerFor(null), providerFor(null), metrics,false, false);
 
         CapabilityResult result = service.chat(userMessage("github please"), "system", context());
 
@@ -195,7 +196,7 @@ class CapabilityAwareChatServiceTest {
         when(aiGatewayService.chat(any(), any())).thenReturn("gateway answer");
 
         CapabilityAwareChatService service = new CapabilityAwareChatService(
-                aiGatewayService, engine, providerFor(executor), providerFor(null), metrics, false, true);
+                aiGatewayService, engine, providerFor(executor), providerFor(null), providerFor(null), metrics,false, true);
 
         CapabilityResult result = service.chat(userMessage("github please"), "system", context());
 
@@ -220,12 +221,76 @@ class CapabilityAwareChatServiceTest {
         when(generation.getOutput()).thenReturn(assistantMessage);
 
         CapabilityAwareChatService service = new CapabilityAwareChatService(
-                aiGatewayService, engine, providerFor(executor), providerFor(chatModel), metrics, false, true);
+                aiGatewayService, engine, providerFor(executor), providerFor(chatModel), providerFor(null), metrics,false, true);
 
         CapabilityResult result = service.chat(userMessage("github please"), "system", context());
 
         assertThat(result.usedSpringAi()).isTrue();
         assertThat(result.answer()).isEqualTo("spring ai answer");
         verify(aiGatewayService, never()).chat(any(), anyString());
+    }
+
+    @Test
+    void realToolCallingAvailable_preferredOverLegacyPreExecutePath() {
+        McpToolDefinition tool = new McpToolDefinition("analyze_github_profile", "d", Map.of(), Map.of(), McpCapability.GITHUB, "github");
+        CapabilityEngine engine = message -> CapabilityDecision.useTools(CapabilityType.GITHUB_REVIEW, List.of(tool), "matched");
+        McpExecutor executor = mock(McpExecutor.class);
+
+        ChatModel chatModel = mock(ChatModel.class);
+        org.springframework.ai.chat.model.ChatResponse response = mock(org.springframework.ai.chat.model.ChatResponse.class);
+        org.springframework.ai.chat.model.Generation generation = mock(org.springframework.ai.chat.model.Generation.class);
+        org.springframework.ai.chat.messages.AssistantMessage assistantMessage =
+                new org.springframework.ai.chat.messages.AssistantMessage("real tool-calling answer");
+        when(chatModel.call(any(org.springframework.ai.chat.prompt.Prompt.class))).thenReturn(response);
+        when(response.getResult()).thenReturn(generation);
+        when(generation.getOutput()).thenReturn(assistantMessage);
+
+        ai.careerpilot.mcp.springai.ToolCallingAdapter adapter = mock(ai.careerpilot.mcp.springai.ToolCallingAdapter.class);
+        org.springframework.ai.tool.ToolCallback callback = mock(org.springframework.ai.tool.ToolCallback.class);
+        when(adapter.adapt(any(), any())).thenReturn(callback);
+
+        CapabilityAwareChatService service = new CapabilityAwareChatService(
+                aiGatewayService, engine, providerFor(executor), providerFor(chatModel), providerFor(adapter), metrics, false, true);
+
+        CapabilityResult result = service.chat(userMessage("github please, username torvalds"), "system", context());
+
+        assertThat(result.usedSpringAi()).isTrue();
+        assertThat(result.answer()).isEqualTo("real tool-calling answer");
+        verify(adapter).adapt(eq(tool), any());
+        // Real tool calling lets Spring AI's internal loop invoke tools via the callback itself —
+        // this class never pre-executes them with an empty argument map for this path.
+        verify(executor, never()).execute(any(), any(), any());
+        verify(aiGatewayService, never()).chat(any(), anyString());
+    }
+
+    @Test
+    void realToolCallingThrows_fallsBackToLegacyPreExecutePath() {
+        McpToolDefinition tool = new McpToolDefinition("analyze_github_profile", "d", Map.of(), Map.of(), McpCapability.GITHUB, "github");
+        CapabilityEngine engine = message -> CapabilityDecision.useTools(CapabilityType.GITHUB_REVIEW, List.of(tool), "matched");
+        McpExecutor executor = mock(McpExecutor.class);
+        when(executor.execute(any(), any(), any())).thenReturn(Mono.just(McpToolResult.ok("ok")));
+
+        ChatModel chatModel = mock(ChatModel.class);
+        org.springframework.ai.chat.model.ChatResponse response = mock(org.springframework.ai.chat.model.ChatResponse.class);
+        org.springframework.ai.chat.model.Generation generation = mock(org.springframework.ai.chat.model.Generation.class);
+        org.springframework.ai.chat.messages.AssistantMessage assistantMessage =
+                new org.springframework.ai.chat.messages.AssistantMessage("legacy path answer");
+        when(chatModel.call(any(org.springframework.ai.chat.prompt.Prompt.class))).thenReturn(response);
+        when(response.getResult()).thenReturn(generation);
+        when(generation.getOutput()).thenReturn(assistantMessage);
+
+        ai.careerpilot.mcp.springai.ToolCallingAdapter adapter = mock(ai.careerpilot.mcp.springai.ToolCallingAdapter.class);
+        when(adapter.adapt(any(), any())).thenThrow(new RuntimeException("schema serialization failed"));
+
+        CapabilityAwareChatService service = new CapabilityAwareChatService(
+                aiGatewayService, engine, providerFor(executor), providerFor(chatModel), providerFor(adapter), metrics, false, true);
+
+        CapabilityResult result = service.chat(userMessage("github please"), "system", context());
+
+        assertThat(result.usedSpringAi()).isTrue();
+        assertThat(result.answer()).isEqualTo("legacy path answer");
+        // Legacy fallback pre-executes the tool (unlike the real-tool-calling path above).
+        verify(executor).execute(any(), any(), any());
+        assertThat(result.toolResults()).containsKey("analyze_github_profile");
     }
 }

@@ -6,6 +6,7 @@ import ai.careerpilot.mcp.McpExecutionContext;
 import ai.careerpilot.mcp.McpExecutor;
 import ai.careerpilot.mcp.McpToolDefinition;
 import ai.careerpilot.mcp.McpToolResult;
+import ai.careerpilot.mcp.springai.ToolCallingAdapter;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -15,6 +16,8 @@ import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.prompt.Prompt;
+import org.springframework.ai.openai.OpenAiChatOptions;
+import org.springframework.ai.tool.ToolCallback;
 import org.springframework.beans.factory.ObjectProvider;
 
 import java.util.ArrayList;
@@ -35,14 +38,18 @@ import java.util.stream.Collectors;
  *
  * <p>Decision chain per call: {@link CapabilityEngine#analyze} → if no tool calling needed
  * (no capability matched, {@code tool.selection.enabled=false}, or no tools registered for the
- * capability), delegate to {@code AiGatewayService.chat(...)} unchanged. Otherwise: execute the
- * selected tools (parallel via {@link CompletableFuture} when {@code
- * parallel.tool.execution.enabled=true}, sequential otherwise — see {@link #executeTools}), merge
- * their results into a context block, then either synthesize the final answer via the Phase 9.1
- * Spring AI foundation {@link ChatModel} (when {@code spring.ai.tool.calling.enabled=true} and
- * the bean exists) or fall back to {@code AiGatewayService.chat(...)} with the context appended
- * to the system prompt — a capability match never fails a request just because Spring AI itself
- * is unavailable.
+ * capability), delegate to {@code AiGatewayService.chat(...)} unchanged. Otherwise, prefer
+ * <b>real Spring AI tool calling</b> ({@link #synthesizeWithRealToolCalling}) — the LLM itself
+ * decides which tools to call and with what arguments from each tool's declared JSON schema —
+ * when {@code spring.ai.tool.calling.enabled=true} and both the Phase 9.1 {@link ChatModel} and
+ * the Phase 10.2 {@code ToolCallingAdapter} beans exist. Anything that stops that path (flag
+ * off, a missing bean, or the call itself throwing) falls through to the pre-Phase-10.3.1
+ * legacy path ({@link #legacyPreExecuteAndRespond}): pre-execute the selected tools with an
+ * empty argument map (parallel via {@link CompletableFuture} when {@code
+ * parallel.tool.execution.enabled=true}, sequential otherwise — see {@link #executeTools}),
+ * merge results into a context block, then synthesize via the {@link ChatModel} with that
+ * context appended to the system prompt, or fall back further to {@code
+ * AiGatewayService.chat(...)} — a capability match never fails a request outright.
  */
 public class CapabilityAwareChatService {
 
@@ -52,6 +59,7 @@ public class CapabilityAwareChatService {
     private final CapabilityEngine capabilityEngine;
     private final ObjectProvider<McpExecutor> mcpExecutorProvider;
     private final ObjectProvider<ChatModel> springAiChatModelProvider;
+    private final ObjectProvider<ToolCallingAdapter> toolCallingAdapterProvider;
     private final CapabilityMetrics metrics;
     private final boolean parallelExecutionEnabled;
     private final boolean springAiToolCallingEnabled;
@@ -61,6 +69,7 @@ public class CapabilityAwareChatService {
                                        CapabilityEngine capabilityEngine,
                                        ObjectProvider<McpExecutor> mcpExecutorProvider,
                                        ObjectProvider<ChatModel> springAiChatModelProvider,
+                                       ObjectProvider<ToolCallingAdapter> toolCallingAdapterProvider,
                                        CapabilityMetrics metrics,
                                        boolean parallelExecutionEnabled,
                                        boolean springAiToolCallingEnabled) {
@@ -68,6 +77,7 @@ public class CapabilityAwareChatService {
         this.capabilityEngine = capabilityEngine;
         this.mcpExecutorProvider = mcpExecutorProvider;
         this.springAiChatModelProvider = springAiChatModelProvider;
+        this.toolCallingAdapterProvider = toolCallingAdapterProvider;
         this.metrics = metrics;
         this.parallelExecutionEnabled = parallelExecutionEnabled;
         this.springAiToolCallingEnabled = springAiToolCallingEnabled;
@@ -88,24 +98,56 @@ public class CapabilityAwareChatService {
                     false, false, System.currentTimeMillis() - start, reason);
         }
 
+        // Real tool calling: the LLM itself decides which tools to call and with what
+        // arguments, based on each tool's declared JSON schema (see DefaultToolCallingAdapter).
+        // Preferred whenever available — it's the only path that actually threads real,
+        // model-chosen arguments (e.g. GitHub's "username") into the tool call. Anything that
+        // stops this path from working (flag off, no ChatModel bean, no ToolCallingAdapter
+        // bean, or the call itself throwing) falls through to the legacy pre-execute path below.
+        ChatModel chatModel = springAiChatModelProvider.getIfAvailable();
+        ToolCallingAdapter toolCallingAdapter = toolCallingAdapterProvider.getIfAvailable();
+        if (springAiToolCallingEnabled && chatModel != null && toolCallingAdapter != null) {
+            try {
+                String answer = synthesizeWithRealToolCalling(chatModel, toolCallingAdapter, decision.tools(), messages, system, context);
+                return new CapabilityResult(decision.capabilityType(), Map.of(), "", answer,
+                        true, true, System.currentTimeMillis() - start, null);
+            } catch (Exception e) {
+                // Phase 10.4 requirement: "If Spring AI Tool Calling fails -> Fallback ->
+                // AiGatewayService". Fall through to the legacy pre-execute path rather than
+                // propagating, matching every other engine's never-fail-the-request discipline.
+                log.warn("Spring AI real tool-calling failed, falling back to legacy pre-execute path: {}", e.toString());
+                metrics.recordFallback("Spring AI real tool calling failed: " + e);
+            }
+        }
+
+        return legacyPreExecuteAndRespond(decision, executor, context, messages, system, start, chatModel);
+    }
+
+    /**
+     * Pre-Phase-10.3.1 behavior, kept as the fallback path: pre-execute every selected tool with
+     * an empty argument map (fine for zero-argument tools, silently wrong for anything requiring
+     * real input — this is exactly why real tool calling above is preferred whenever available),
+     * merge the results into a text block, and either synthesize via the Spring AI {@link
+     * ChatModel} (context appended to the system prompt — the old "manual" synthesis) or fall
+     * back further to {@link AiGatewayService}.
+     */
+    private CapabilityResult legacyPreExecuteAndRespond(CapabilityDecision decision, McpExecutor executor,
+                                                          McpExecutionContext context, List<ChatMessage> messages,
+                                                          String system, long start, ChatModel chatModel) {
         Map<String, McpToolResult> toolResults = executeTools(decision.tools(), executor, context);
         String mergedContext = mergeResults(toolResults);
         metrics.recordMergedContextSize(mergedContext.length());
 
-        ChatModel chatModel = springAiChatModelProvider.getIfAvailable();
         String answer;
         boolean usedSpringAi;
-        String fallbackReason = null;
+        String fallbackReason;
         if (springAiToolCallingEnabled && chatModel != null) {
             try {
                 answer = synthesizeWithSpringAi(chatModel, messages, system, mergedContext);
                 usedSpringAi = true;
+                fallbackReason = null;
             } catch (Exception e) {
-                // Phase 10.4 requirement: "If Spring AI Tool Calling fails -> Fallback ->
-                // AiGatewayService". Falling back here (not just letting the exception
-                // propagate to a caller like CopilotService) means the tool results already
-                // gathered above aren't wasted — they're still appended to the fallback call.
-                log.warn("Spring AI tool-calling synthesis failed, falling back to AiGatewayService: {}", e.toString());
+                log.warn("Spring AI context-synthesis failed, falling back to AiGatewayService: {}", e.toString());
                 fallbackReason = "Spring AI tool calling failed: " + e;
                 metrics.recordFallback(fallbackReason);
                 answer = aiGatewayService.chat(appendContext(messages, mergedContext), system);
@@ -122,6 +164,38 @@ public class CapabilityAwareChatService {
 
         return new CapabilityResult(decision.capabilityType(), toolResults, mergedContext, answer,
                 true, usedSpringAi, System.currentTimeMillis() - start, fallbackReason);
+    }
+
+    /**
+     * Real Spring AI tool calling: builds one {@link ToolCallback} per selected tool via {@link
+     * ToolCallingAdapter#adapt}, using the {@link McpExecutionContext} of the actual request
+     * (unlike {@code DefaultSpringAiMcpBridge}'s system-scoped context, this class always has a
+     * real per-user context available). {@code OpenAiChatOptions.toolCallbacks(...)} hands those
+     * callbacks to Spring AI, which runs its own internal loop: call the model, detect any
+     * tool_calls in the response, invoke the matching callback (which itself calls {@link
+     * McpExecutor#execute} — the same executor, metrics, and audit trail as every other path),
+     * feed the tool result back to the model, and repeat until the model returns final text — all
+     * inside this single {@code chatModel.call(...)}.
+     */
+    private String synthesizeWithRealToolCalling(ChatModel chatModel, ToolCallingAdapter toolCallingAdapter,
+                                                   List<McpToolDefinition> tools, List<ChatMessage> messages,
+                                                   String system, McpExecutionContext context) {
+        List<ToolCallback> callbacks = tools.stream()
+                .map(tool -> toolCallingAdapter.adapt(tool, context))
+                .collect(Collectors.toList());
+
+        List<Message> out = new ArrayList<>();
+        if (system != null && !system.isBlank()) {
+            out.add(new SystemMessage(system));
+        }
+        for (ChatMessage m : messages) {
+            out.add("model".equals(m.role()) ? new AssistantMessage(m.content()) : new UserMessage(m.content()));
+        }
+
+        OpenAiChatOptions options = OpenAiChatOptions.builder()
+                .toolCallbacks(callbacks)
+                .build();
+        return chatModel.call(new Prompt(out, options)).getResult().getOutput().getText();
     }
 
     private Map<String, McpToolResult> executeTools(List<McpToolDefinition> tools, McpExecutor executor, McpExecutionContext context) {

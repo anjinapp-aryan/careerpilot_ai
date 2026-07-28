@@ -3,6 +3,7 @@ package ai.careerpilot.capability;
 import ai.careerpilot.ai.AiGatewayService;
 import ai.careerpilot.mcp.McpExecutor;
 import ai.careerpilot.mcp.McpRegistry;
+import ai.careerpilot.mcp.springai.ToolCallingAdapter;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
@@ -76,10 +77,12 @@ public class CapabilityConfig {
             CapabilityEngine capabilityEngine,
             ObjectProvider<McpExecutor> mcpExecutorProvider,
             ObjectProvider<ChatModel> springAiChatModelProvider,
+            ObjectProvider<ToolCallingAdapter> toolCallingAdapterProvider,
             CapabilityMetrics metrics,
             @Value("${parallel.tool.execution.enabled:false}") boolean parallelExecutionEnabled,
             @Value("${spring.ai.tool.calling.enabled:false}") boolean springAiToolCallingEnabled) {
         return new CapabilityAwareChatService(aiGatewayService, capabilityEngine, mcpExecutorProvider,
-                springAiChatModelProvider, metrics, parallelExecutionEnabled, springAiToolCallingEnabled);
+                springAiChatModelProvider, toolCallingAdapterProvider, metrics, parallelExecutionEnabled,
+                springAiToolCallingEnabled);
     }
 }

@@ -59,7 +59,7 @@ class CapabilityAwareChatServiceTest {
         when(aiGatewayService.chat(any(), any())).thenReturn("plain answer");
 
         CapabilityAwareChatService service = new CapabilityAwareChatService(
-                aiGatewayService, engine, providerFor(null), providerFor(null), providerFor(null), metrics,false, false);
+                aiGatewayService, engine, providerFor(null), providerFor(null), providerFor(null), providerFor(null), metrics,false, false);
 
         CapabilityResult result = service.chat(userMessage("hello"), "system", context());
 
@@ -76,7 +76,7 @@ class CapabilityAwareChatServiceTest {
         when(aiGatewayService.chat(any(), any())).thenReturn("fallback answer");
 
         CapabilityAwareChatService service = new CapabilityAwareChatService(
-                aiGatewayService, engine, providerFor(null), providerFor(null), providerFor(null), metrics,false, false);
+                aiGatewayService, engine, providerFor(null), providerFor(null), providerFor(null), providerFor(null), metrics,false, false);
 
         CapabilityResult result = service.chat(userMessage("github please"), "system", context());
 
@@ -94,7 +94,7 @@ class CapabilityAwareChatServiceTest {
         when(aiGatewayService.chat(any(), any())).thenReturn("synthesized answer");
 
         CapabilityAwareChatService service = new CapabilityAwareChatService(
-                aiGatewayService, engine, providerFor(executor), providerFor(null), providerFor(null), metrics,false, false);
+                aiGatewayService, engine, providerFor(executor), providerFor(null), providerFor(null), providerFor(null), metrics,false, false);
 
         CapabilityResult result = service.chat(userMessage("github please"), "system", context());
 
@@ -118,7 +118,7 @@ class CapabilityAwareChatServiceTest {
         ChatModel chatModel = mock(ChatModel.class);
 
         CapabilityAwareChatService service = new CapabilityAwareChatService(
-                aiGatewayService, engine, providerFor(executor), providerFor(chatModel), providerFor(null), metrics,false, false);
+                aiGatewayService, engine, providerFor(executor), providerFor(chatModel), providerFor(null), providerFor(null), metrics,false, false);
 
         CapabilityResult result = service.chat(userMessage("github please"), "system", context());
 
@@ -141,7 +141,7 @@ class CapabilityAwareChatServiceTest {
                 .thenThrow(new RuntimeException("provider unreachable"));
 
         CapabilityAwareChatService service = new CapabilityAwareChatService(
-                aiGatewayService, engine, providerFor(executor), providerFor(chatModel), providerFor(null), metrics,false, true);
+                aiGatewayService, engine, providerFor(executor), providerFor(chatModel), providerFor(null), providerFor(null), metrics,false, true);
 
         CapabilityResult result = service.chat(userMessage("github please"), "system", context());
 
@@ -161,7 +161,7 @@ class CapabilityAwareChatServiceTest {
         when(aiGatewayService.chat(any(), any())).thenReturn("answer");
 
         CapabilityAwareChatService service = new CapabilityAwareChatService(
-                aiGatewayService, engine, providerFor(executor), providerFor(null), providerFor(null), metrics,true, false);
+                aiGatewayService, engine, providerFor(executor), providerFor(null), providerFor(null), providerFor(null), metrics,true, false);
 
         CapabilityResult result = service.chat(userMessage("career strategy please"), "system", context());
 
@@ -179,7 +179,7 @@ class CapabilityAwareChatServiceTest {
         when(aiGatewayService.chat(any(), any())).thenReturn("answer despite tool failure");
 
         CapabilityAwareChatService service = new CapabilityAwareChatService(
-                aiGatewayService, engine, providerFor(executor), providerFor(null), providerFor(null), metrics,false, false);
+                aiGatewayService, engine, providerFor(executor), providerFor(null), providerFor(null), providerFor(null), metrics,false, false);
 
         CapabilityResult result = service.chat(userMessage("github please"), "system", context());
 
@@ -196,7 +196,7 @@ class CapabilityAwareChatServiceTest {
         when(aiGatewayService.chat(any(), any())).thenReturn("gateway answer");
 
         CapabilityAwareChatService service = new CapabilityAwareChatService(
-                aiGatewayService, engine, providerFor(executor), providerFor(null), providerFor(null), metrics,false, true);
+                aiGatewayService, engine, providerFor(executor), providerFor(null), providerFor(null), providerFor(null), metrics,false, true);
 
         CapabilityResult result = service.chat(userMessage("github please"), "system", context());
 
@@ -221,7 +221,7 @@ class CapabilityAwareChatServiceTest {
         when(generation.getOutput()).thenReturn(assistantMessage);
 
         CapabilityAwareChatService service = new CapabilityAwareChatService(
-                aiGatewayService, engine, providerFor(executor), providerFor(chatModel), providerFor(null), metrics,false, true);
+                aiGatewayService, engine, providerFor(executor), providerFor(chatModel), providerFor(null), providerFor(null), metrics,false, true);
 
         CapabilityResult result = service.chat(userMessage("github please"), "system", context());
 
@@ -250,7 +250,7 @@ class CapabilityAwareChatServiceTest {
         when(adapter.adapt(any(), any())).thenReturn(callback);
 
         CapabilityAwareChatService service = new CapabilityAwareChatService(
-                aiGatewayService, engine, providerFor(executor), providerFor(chatModel), providerFor(adapter), metrics, false, true);
+                aiGatewayService, engine, providerFor(executor), providerFor(chatModel), providerFor(adapter), providerFor(null), metrics, false, true);
 
         CapabilityResult result = service.chat(userMessage("github please, username torvalds"), "system", context());
 
@@ -283,7 +283,7 @@ class CapabilityAwareChatServiceTest {
         when(adapter.adapt(any(), any())).thenThrow(new RuntimeException("schema serialization failed"));
 
         CapabilityAwareChatService service = new CapabilityAwareChatService(
-                aiGatewayService, engine, providerFor(executor), providerFor(chatModel), providerFor(adapter), metrics, false, true);
+                aiGatewayService, engine, providerFor(executor), providerFor(chatModel), providerFor(adapter), providerFor(null), metrics, false, true);
 
         CapabilityResult result = service.chat(userMessage("github please"), "system", context());
 

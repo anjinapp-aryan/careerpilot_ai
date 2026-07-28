@@ -2,6 +2,7 @@ package ai.careerpilot.capability;
 
 import ai.careerpilot.ai.AiGatewayService;
 import ai.careerpilot.ai.ChatMessage;
+import ai.careerpilot.ai.springai.SpringAiFoundationProperties;
 import ai.careerpilot.mcp.McpExecutionContext;
 import ai.careerpilot.mcp.McpExecutor;
 import ai.careerpilot.mcp.McpToolDefinition;
@@ -60,6 +61,7 @@ public class CapabilityAwareChatService {
     private final ObjectProvider<McpExecutor> mcpExecutorProvider;
     private final ObjectProvider<ChatModel> springAiChatModelProvider;
     private final ObjectProvider<ToolCallingAdapter> toolCallingAdapterProvider;
+    private final ObjectProvider<SpringAiFoundationProperties> springAiFoundationPropertiesProvider;
     private final CapabilityMetrics metrics;
     private final boolean parallelExecutionEnabled;
     private final boolean springAiToolCallingEnabled;
@@ -70,6 +72,7 @@ public class CapabilityAwareChatService {
                                        ObjectProvider<McpExecutor> mcpExecutorProvider,
                                        ObjectProvider<ChatModel> springAiChatModelProvider,
                                        ObjectProvider<ToolCallingAdapter> toolCallingAdapterProvider,
+                                       ObjectProvider<SpringAiFoundationProperties> springAiFoundationPropertiesProvider,
                                        CapabilityMetrics metrics,
                                        boolean parallelExecutionEnabled,
                                        boolean springAiToolCallingEnabled) {
@@ -78,6 +81,7 @@ public class CapabilityAwareChatService {
         this.mcpExecutorProvider = mcpExecutorProvider;
         this.springAiChatModelProvider = springAiChatModelProvider;
         this.toolCallingAdapterProvider = toolCallingAdapterProvider;
+        this.springAiFoundationPropertiesProvider = springAiFoundationPropertiesProvider;
         this.metrics = metrics;
         this.parallelExecutionEnabled = parallelExecutionEnabled;
         this.springAiToolCallingEnabled = springAiToolCallingEnabled;
@@ -192,10 +196,18 @@ public class CapabilityAwareChatService {
             out.add("model".equals(m.role()) ? new AssistantMessage(m.content()) : new UserMessage(m.content()));
         }
 
-        OpenAiChatOptions options = OpenAiChatOptions.builder()
-                .toolCallbacks(callbacks)
-                .build();
-        return chatModel.call(new Prompt(out, options)).getResult().getOutput().getText();
+        // A Prompt's own ChatOptions REPLACE the ChatModel bean's default options rather than
+        // merging with them (verified live: omitting .model(...) here silently sent Spring AI's
+        // own hardcoded fallback model name instead of the configured one, which NVIDIA then
+        // 404'd on as an unknown model — sent "gpt-5-mini" instead of the configured
+        // "deepseek-ai/deepseek-v4-flash"). Carrying the configured model name forward
+        // explicitly is required, not optional.
+        SpringAiFoundationProperties props = springAiFoundationPropertiesProvider.getIfAvailable();
+        OpenAiChatOptions.Builder optionsBuilder = OpenAiChatOptions.builder().toolCallbacks(callbacks);
+        if (props != null && props.getChatModel() != null) {
+            optionsBuilder.model(props.getChatModel());
+        }
+        return chatModel.call(new Prompt(out, optionsBuilder.build())).getResult().getOutput().getText();
     }
 
     private Map<String, McpToolResult> executeTools(List<McpToolDefinition> tools, McpExecutor executor, McpExecutionContext context) {

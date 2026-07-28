@@ -2,11 +2,11 @@ package ai.careerpilot.ai.springai;
 
 import com.openai.client.OpenAIClient;
 import com.openai.client.okhttp.OpenAIOkHttpClient;
-import com.openai.core.LogLevel;
 import com.openai.core.Timeout;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.StreamingChatModel;
 import org.springframework.ai.embedding.EmbeddingModel;
+import org.springframework.ai.model.tool.ToolCallingManager;
 import org.springframework.ai.openai.OpenAiChatModel;
 import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.ai.openai.OpenAiEmbeddingModel;
@@ -101,7 +101,6 @@ public class SpringAiConfig {
                 .baseUrl(props.getBaseUrl())
                 .apiKey(apiKey)
                 .timeout(requestBoundedTimeout)
-                .logLevel(LogLevel.DEBUG)
                 .build();
     }
 
@@ -118,10 +117,21 @@ public class SpringAiConfig {
         // "At least one credential source must be specified" (caught in local
         // verification — see the OpenAIClient.async() derivation below, which correctly
         // shares this client's already-configured credentials instead).
+        // Spring Boot's own OpenAI autoconfiguration (excluded here, per this class's own
+        // javadoc) normally wires a ToolCallingManager into OpenAiChatModel automatically.
+        // Building the model by hand, as this bean does, means real tool calling (Phase
+        // 10.3.1's CapabilityAwareChatService) silently never invokes any ToolCallback without
+        // this — caught live: the model correctly returned a tool_calls decision, but with no
+        // manager to execute it, ChatModel.call(...) just returned that decision as a truncated,
+        // content-less response instead of actually running the tool and looping for a final
+        // answer. Default-configured (no custom resolver/exception-processor needed — our
+        // ToolCallback instances are passed directly via ToolCallingChatOptions, not resolved by
+        // name).
         return OpenAiChatModel.builder()
                 .openAiClient(springAiOpenAiClient)
                 .openAiClientAsync(springAiOpenAiClient.async())
                 .options(OpenAiChatOptions.builder().model(props.getChatModel()).build())
+                .toolCallingManager(ToolCallingManager.builder().build())
                 .build();
     }
 

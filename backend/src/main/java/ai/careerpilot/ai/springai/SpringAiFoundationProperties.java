@@ -6,7 +6,15 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * Strongly-typed configuration for the Phase 9.1 Spring AI foundation beans. Binds
  * {@code ai.springai.foundation.*} (see application.yml) — a namespace entirely
  * separate from {@code ai.gateway.*} ({@link ai.careerpilot.ai.AiGatewayProperties}).
- * Nothing here is read outside {@link SpringAiConfig}.
+ *
+ * <p>As of Phase 10.3.1, also read by {@code ai.careerpilot.capability.CapabilityAwareChatService}
+ * (via {@code ObjectProvider}, since {@code capability.engine.enabled} and {@code
+ * ai.springai.foundation.enabled} are independent flags): a {@link
+ * org.springframework.ai.chat.prompt.Prompt}'s own {@code ChatOptions} REPLACE — not merge with
+ * — the {@code ChatModel} bean's default options, so real Spring AI tool calling must carry
+ * {@link #getChatModel()} forward explicitly on every call or the request silently falls back to
+ * Spring AI's own hardcoded default model name (caught live: sent {@code "gpt-5-mini"} to
+ * NVIDIA, which 404'd since that model doesn't exist on that gateway).
  *
  * <pre>
  * ai.springai.foundation.enabled          = false   (dark by default)

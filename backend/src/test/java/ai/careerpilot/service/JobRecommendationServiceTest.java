@@ -4,6 +4,7 @@ import ai.careerpilot.api.dto.JobRecommendationDtos.RecommendedJobsResponse;
 import ai.careerpilot.domain.CandidateProfile;
 import ai.careerpilot.jobdiscovery.JobMatchingService;
 import ai.careerpilot.jobdiscovery.JobScoring;
+import ai.careerpilot.jobdiscovery.international.InternationalJobRankingService;
 import ai.careerpilot.repo.CandidateProfileRepository;
 import ai.careerpilot.repo.JobRecommendationRepository;
 import ai.careerpilot.repo.JobRepository;
@@ -34,6 +35,7 @@ class JobRecommendationServiceTest {
     private final JobRepository jobs = mock(JobRepository.class);
     private final JobRecommendationRepository recommendations = mock(JobRecommendationRepository.class);
     private final JobMatchingService matching = mock(JobMatchingService.class);
+    private final InternationalJobRankingService internationalRanking = mock(InternationalJobRankingService.class);
     private final JobScoring scoring = mock(JobScoring.class);
     private final CandidateProfileRepository candidateProfiles = mock(CandidateProfileRepository.class);
     private final ResumeRepository resumes = mock(ResumeRepository.class);
@@ -42,7 +44,7 @@ class JobRecommendationServiceTest {
     private final UUID orgId = UUID.randomUUID();
 
     private JobRecommendationService service() {
-        return new JobRecommendationService(runs, jobs, recommendations, matching, scoring,
+        return new JobRecommendationService(runs, jobs, recommendations, matching, internationalRanking, scoring,
                 candidateProfiles, resumes, true, 70);
     }
 

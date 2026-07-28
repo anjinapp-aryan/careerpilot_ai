@@ -67,6 +67,7 @@ export function RecommendedJobs({ onApply, onSave, busy }: RecommendedJobsProps)
     title: string;
     breakdown?: ScoreBreakdown | null;
     matchScore?: number | null;
+    country?: string | null;
   } | null>(null);
   const [relevanceJob, setRelevanceJob] = useState<RecommendedJob | null>(null);
 
@@ -98,6 +99,7 @@ export function RecommendedJobs({ onApply, onSave, busy }: RecommendedJobsProps)
       title: rec.job.title,
       breakdown: rec.scoreBreakdown ?? null,
       matchScore: rec.matchScore,
+      country: rec.job.country ?? null,
     });
   };
   const openRelevance = (rec: RecommendedJob) => {
@@ -233,6 +235,7 @@ export function RecommendedJobs({ onApply, onSave, busy }: RecommendedJobsProps)
         jobTitle={explainJob?.title}
         breakdown={explainJob?.breakdown}
         matchScore={explainJob?.matchScore}
+        country={explainJob?.country}
         onClose={() => setExplainJob(null)}
       />
       <RelevanceDrawer

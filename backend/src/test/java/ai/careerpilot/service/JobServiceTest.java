@@ -5,6 +5,7 @@ import ai.careerpilot.discovery.relevance.CareerThresholdPolicy;
 import ai.careerpilot.domain.Job;
 import ai.careerpilot.jobdiscovery.CandidateSignalResolver;
 import ai.careerpilot.jobdiscovery.RoleExclusionFilter;
+import ai.careerpilot.jobdiscovery.international.InternationalEligibilityFilter;
 import ai.careerpilot.jobdiscovery.scope.JobScopeStrategyResolver;
 import ai.careerpilot.repo.JobRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -35,6 +36,7 @@ class JobServiceTest {
                 mock(CandidateSignalResolver.class),
                 mock(CareerRelevanceEvaluator.class),
                 mock(CareerThresholdPolicy.class),
+                mock(InternationalEligibilityFilter.class),
                 75,
                 false,
                 false,

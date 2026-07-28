@@ -6,6 +6,7 @@ import ai.careerpilot.domain.JobRecommendation;
 import ai.careerpilot.domain.RecommendationAudit;
 import ai.careerpilot.jobdiscovery.CandidateSignalResolver.CandidateMatchSignals;
 import ai.careerpilot.jobdiscovery.cache.MatchCache;
+import ai.careerpilot.jobdiscovery.international.InternationalEligibilityFilter;
 import ai.careerpilot.learning.recommendation.LearningRecommendationBooster;
 import ai.careerpilot.repo.CandidateProfileVersionRepository;
 import ai.careerpilot.repo.JobAiEnrichmentRepository;
@@ -60,6 +61,7 @@ public class JobMatchingService {
     private final LearningRecommendationBooster learningBooster;
     private final ai.careerpilot.companyintel.CompanyKnowledgeBooster companyBooster;
     private final ai.careerpilot.memory.CareerMemoryBooster careerMemoryBooster;
+    private final InternationalEligibilityFilter internationalEligibility;
     private final ObjectMapper mapper = new ObjectMapper();
 
     /** Full-spec Recommended gate: score >= minScore AND >= 1 role family AND >= 3 skill families. */
@@ -115,6 +117,7 @@ public class JobMatchingService {
                               LearningRecommendationBooster learningBooster,
                               ai.careerpilot.companyintel.CompanyKnowledgeBooster companyBooster,
                               ai.careerpilot.memory.CareerMemoryBooster careerMemoryBooster,
+                              InternationalEligibilityFilter internationalEligibility,
                               @Value("${jobs.recommendation.strict-gate-enabled:true}") boolean strictGateEnabled,
                               @Value("${jobs.recommendation.gate-min-score:70}") int gateMinScore,
                               @Value("${jobs.recommendation.gate-min-skills:3}") int gateMinSkillFamilies,
@@ -140,6 +143,7 @@ public class JobMatchingService {
         this.learningBooster = learningBooster;
         this.companyBooster = companyBooster;
         this.careerMemoryBooster = careerMemoryBooster;
+        this.internationalEligibility = internationalEligibility;
         this.strictGateEnabled = strictGateEnabled;
         this.gateMinScore = gateMinScore;
         this.gateMinSkillFamilies = gateMinSkillFamilies;
@@ -196,18 +200,31 @@ public class JobMatchingService {
         //    survives. 3) Apply the full Recommended gate (score + role + skills). 4) Rank, keep top N.
         //    Jobs that fail any gate are simply not persisted, so they surface under Browse instead.
         record Scored(Job job, JobScoring.ScoreResultV2 result) {}
+        // TEMPORARY diagnostic counters (Phase: 2026-07-28 zero-match investigation) — per-stage
+        // attrition so we can see WHERE a pool gets filtered to zero instead of guessing. Revert
+        // once root-caused.
+        java.util.concurrent.atomic.AtomicInteger cRoleExcl = new java.util.concurrent.atomic.AtomicInteger();
+        java.util.concurrent.atomic.AtomicInteger cIndustryExcl = new java.util.concurrent.atomic.AtomicInteger();
+        java.util.concurrent.atomic.AtomicInteger cHardPref = new java.util.concurrent.atomic.AtomicInteger();
+        java.util.concurrent.atomic.AtomicInteger cRoleSim = new java.util.concurrent.atomic.AtomicInteger();
+        java.util.concurrent.atomic.AtomicInteger cGate = new java.util.concurrent.atomic.AtomicInteger();
         List<Scored> scored = pool.stream()
-                .filter(j -> !isRoleExcluded(j, excludedRoles))
-                .filter(j -> !isIndustryExcluded(j, candidateFamily))
-                .filter(j -> !hardPreferenceEnabled || !preferenceGate.isHardRejected(j, prefs))
+                .filter(j -> { boolean ok = !isRoleExcluded(j, excludedRoles); if (!ok) cRoleExcl.incrementAndGet(); return ok; })
+                .filter(j -> { boolean ok = !isIndustryExcluded(j, candidateFamily); if (!ok) cIndustryExcl.incrementAndGet(); return ok; })
+                .filter(internationalEligibility::isEligible)
+                .filter(j -> { boolean ok = !hardPreferenceEnabled || !preferenceGate.isHardRejected(j, prefs); if (!ok) cHardPref.incrementAndGet(); return ok; })
                 .filter(j -> {
                     int rs = scoring.roleSimilarity(j, effectiveSkills(j, enrichedSkills), skills, targetRole);
-                    return rs < 0 || rs >= roleRelevanceMin;
+                    boolean ok = rs < 0 || rs >= roleRelevanceMin;
+                    if (!ok) cRoleSim.incrementAndGet();
+                    return ok;
                 })
                 .map(j -> new Scored(j, applyCareerMemoryBoost(userId, j, applyCompanyKnowledgeBoost(userId, j,
                         applyLearningBoost(userId, j, scoring.scoreV2(j, effectiveSkills(j, enrichedSkills), ctx, prefs))))))
-                .filter(s -> passesGate(s.result()))
+                .filter(s -> { boolean ok = passesGate(s.result()); if (!ok) cGate.incrementAndGet(); return ok; })
                 .toList();
+        log.info("RECO_MATCH_DEBUG pool={} droppedRoleExcl={} droppedIndustry={} droppedHardPref={} droppedRoleSim={} droppedGate={} survived={}",
+                pool.size(), cRoleExcl.get(), cIndustryExcl.get(), cHardPref.get(), cRoleSim.get(), cGate.get(), scored.size());
         List<Scored> ranked = scored.stream()
                 .sorted(Comparator.comparingInt((Scored s) -> s.result().matchScore()).reversed())
                 .limit(KEEP_TOP)

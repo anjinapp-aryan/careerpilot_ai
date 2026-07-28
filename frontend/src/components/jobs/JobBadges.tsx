@@ -1,4 +1,4 @@
-import { Flame, Globe, Plane, Stamp, Star } from 'lucide-react';
+import { Flame, Globe, Plane, Stamp, Star, MapPin, TrendingUp } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/cn';
 import type { Job } from '@/types/workflow';
@@ -42,6 +42,32 @@ export function MatchStrengthBadge({ matchStrength }: { matchStrength?: string |
         ? 'warning'
         : 'danger';
   return <Badge tone={tone}>{matchStrength}</Badge>;
+}
+
+const TIER_TONE: Record<string, 'success' | 'primary' | 'neutral'> = {
+  TIER_1: 'success',
+  TIER_2: 'primary',
+  TIER_3: 'neutral',
+};
+
+/** International Job Discovery Engine, Phase 1 — country-tier chip (TIER_1/2/3). */
+export function CountryTierBadge({ tier }: { tier?: string | null }) {
+  if (!tier) return null;
+  return (
+    <Badge tone={TIER_TONE[tier] ?? 'neutral'}>
+      <MapPin className="h-3 w-3" /> {tier.replace('_', ' ')}
+    </Badge>
+  );
+}
+
+/** International Job Discovery Engine, Phase 1 — seniority level chip (Senior/Staff/Principal/etc.). */
+export function SeniorityBadge({ seniority }: { seniority?: string | null }) {
+  if (!seniority) return null;
+  return (
+    <Badge tone="primary">
+      <TrendingUp className="h-3 w-3" /> {seniority}
+    </Badge>
+  );
 }
 
 /**

@@ -7,6 +7,7 @@ import ai.careerpilot.discovery.relevance.RelevanceCandidateContext;
 import ai.careerpilot.domain.Job;
 import ai.careerpilot.jobdiscovery.CandidateSignalResolver;
 import ai.careerpilot.jobdiscovery.RoleExclusionFilter;
+import ai.careerpilot.jobdiscovery.international.InternationalEligibilityFilter;
 import ai.careerpilot.jobdiscovery.scope.JobScopeStrategyResolver;
 import ai.careerpilot.repo.JobRepository;
 import org.springframework.beans.factory.annotation.Value;
@@ -32,6 +33,7 @@ public class JobService {
     private final CandidateSignalResolver signalResolver;
     private final CareerRelevanceEvaluator relevanceEvaluator;
     private final CareerThresholdPolicy thresholdPolicy;
+    private final InternationalEligibilityFilter internationalEligibility;
     /**
      * When true, Domestic/International are derived strictly from the candidate's own profile
      * (home country / preferred countries) and excluded roles are filtered out. When false, the
@@ -54,6 +56,7 @@ public class JobService {
                       CandidateSignalResolver signalResolver,
                       CareerRelevanceEvaluator relevanceEvaluator,
                       CareerThresholdPolicy thresholdPolicy,
+                      InternationalEligibilityFilter internationalEligibility,
                       @Value("${jobs.recommendation.threshold:75}") int recommendThreshold,
                       @Value("${jobs.discovery.scope-strict-enabled:false}") boolean scopeStrictEnabled,
                       @Value("${career.domestic.filter.enabled:false}") boolean domesticRelevanceFilterEnabled,
@@ -64,6 +67,7 @@ public class JobService {
         this.signalResolver = signalResolver;
         this.relevanceEvaluator = relevanceEvaluator;
         this.thresholdPolicy = thresholdPolicy;
+        this.internationalEligibility = internationalEligibility;
         this.recommendThreshold = recommendThreshold;
         this.scopeStrictEnabled = scopeStrictEnabled;
         this.domesticRelevanceFilterEnabled = domesticRelevanceFilterEnabled;
@@ -99,6 +103,7 @@ public class JobService {
             Page<Job> result = jobs.findDiscoveredInCountries(countries,
                     blankToNull(remoteType), sponsorship, relocation, blankToNull(q), pageable);
             result = applyRoleExclusion(userId, result, pageable);
+            result = applyInternationalEligibility(scopeNorm, result, pageable);
             return applyCareerRelevance(userId, scopeNorm, result, pageable);
         }
 
@@ -157,6 +162,23 @@ public class JobService {
                 .toList();
         if (kept.size() == page.getContent().size()) return page;
         // Total is adjusted by the number filtered from this page so paging stays monotonic.
+        long total = page.getTotalElements() - (page.getContent().size() - kept.size());
+        return new PageImpl<>(kept, pageable, total);
+    }
+
+    /**
+     * International Job Discovery Engine, Phase 1 — scope-aware post-filter: only applied when
+     * {@code scopeNorm} is "international" (Domestic and Browse are untouched). No-op when the
+     * underlying {@code career.international.seniority-filter.enabled} flag is off, since {@link
+     * InternationalEligibilityFilter#isEligible} itself returns {@code true} unconditionally in
+     * that case. Same already-paginated-page filtering tradeoff as {@link #applyRoleExclusion}.
+     */
+    private Page<Job> applyInternationalEligibility(String scopeNorm, Page<Job> page, Pageable pageable) {
+        if (!"international".equals(scopeNorm) || page.getContent().isEmpty()) return page;
+        List<Job> kept = page.getContent().stream()
+                .filter(internationalEligibility::isEligible)
+                .toList();
+        if (kept.size() == page.getContent().size()) return page;
         long total = page.getTotalElements() - (page.getContent().size() - kept.size());
         return new PageImpl<>(kept, pageable, total);
     }

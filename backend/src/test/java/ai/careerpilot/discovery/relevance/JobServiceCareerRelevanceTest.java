@@ -4,6 +4,9 @@ import ai.careerpilot.domain.Job;
 import ai.careerpilot.jobdiscovery.CandidateSignalResolver;
 import ai.careerpilot.jobdiscovery.JobTaxonomy;
 import ai.careerpilot.jobdiscovery.RoleExclusionFilter;
+import ai.careerpilot.jobdiscovery.international.InternationalEligibilityFilter;
+import ai.careerpilot.jobdiscovery.international.InternationalRoleTaxonomy;
+import ai.careerpilot.jobdiscovery.international.SeniorityLevelClassifier;
 import ai.careerpilot.jobdiscovery.scope.JobScopeStrategyResolver;
 import ai.careerpilot.repo.JobRepository;
 import ai.careerpilot.service.JobService;
@@ -45,6 +48,8 @@ class JobServiceCareerRelevanceTest {
 
     private static final CareerThresholdPolicy LEGACY_POLICY = new CareerThresholdPolicy(false, 85, 60, 60, 60);
     private static final CareerThresholdPolicy SOFT_POLICY = new CareerThresholdPolicy(true, 85, 60, 60, 60);
+    private static final InternationalEligibilityFilter ELIGIBILITY_FILTER_OFF = new InternationalEligibilityFilter(
+            new SeniorityLevelClassifier(new JobTaxonomy()), new InternationalRoleTaxonomy(new JobTaxonomy()), false, false);
 
     private JobService serviceWith(boolean masterEnabled, boolean domesticEnabled, boolean internationalEnabled,
                                    CareerRelevanceEvaluator evaluator) {
@@ -62,7 +67,7 @@ class JobServiceCareerRelevanceTest {
                 .thenReturn(new CandidateSignalResolver.CandidateLocationSignals(null, List.of(), List.of(), "PREFERENCES"));
 
         return new JobService(jobs, mock(JobScopeStrategyResolver.class), new RoleExclusionFilter(new JobTaxonomy()),
-                signalResolver, evaluator, policy, 75, false, domesticEnabled, internationalEnabled);
+                signalResolver, evaluator, policy, ELIGIBILITY_FILTER_OFF, 75, false, domesticEnabled, internationalEnabled);
     }
 
     /** Evaluator stub: STRONG scores 95, MODERATE_OLDER scores 80, WEAK scores 40 (below threshold). */
@@ -156,7 +161,7 @@ class JobServiceCareerRelevanceTest {
                 .thenReturn(new PageImpl<>(List.of(STRONG, WEAK, MODERATE_OLDER)));
         JobService service = new JobService(jobs, mock(JobScopeStrategyResolver.class),
                 new RoleExclusionFilter(new JobTaxonomy()), mock(CandidateSignalResolver.class),
-                evaluator, LEGACY_POLICY, 75, false, true, true);
+                evaluator, LEGACY_POLICY, ELIGIBILITY_FILTER_OFF, 75, false, true, true);
 
         Page<Job> page = service.browsePool(UUID.randomUUID(), 0, 20);
 

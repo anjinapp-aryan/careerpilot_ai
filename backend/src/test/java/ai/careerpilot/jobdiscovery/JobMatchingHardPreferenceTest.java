@@ -4,6 +4,9 @@ import ai.careerpilot.domain.Job;
 import ai.careerpilot.jobdiscovery.CandidateSignalResolver.CandidateMatchSignals;
 import ai.careerpilot.jobdiscovery.cache.MatchCache;
 import ai.careerpilot.jobdiscovery.cache.MatchCacheMetrics;
+import ai.careerpilot.jobdiscovery.international.InternationalEligibilityFilter;
+import ai.careerpilot.jobdiscovery.international.InternationalRoleTaxonomy;
+import ai.careerpilot.jobdiscovery.international.SeniorityLevelClassifier;
 import ai.careerpilot.repo.CandidateProfileVersionRepository;
 import ai.careerpilot.repo.JobAiEnrichmentRepository;
 import ai.careerpilot.repo.JobRecommendationRepository;
@@ -61,6 +64,7 @@ class JobMatchingHardPreferenceTest {
                 mock(ai.careerpilot.learning.recommendation.LearningRecommendationBooster.class),
                 mock(ai.careerpilot.companyintel.CompanyKnowledgeBooster.class),
                 mock(ai.careerpilot.memory.CareerMemoryBooster.class),
+                new InternationalEligibilityFilter(new SeniorityLevelClassifier(taxonomy), new InternationalRoleTaxonomy(taxonomy), false, false),
                 false, 0, 0, false, false, false, 0, hardPreference);   // strict gate off so scoring alone wouldn't drop the job
     }
 

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { motion } from 'framer-motion';
 import {
@@ -482,6 +483,12 @@ export default function Jobs() {
               >
                 Relocation Support
               </button>
+              <Link
+                to="/jobs/international/dashboard"
+                className="ml-auto rounded-full border border-border px-3 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted"
+              >
+                View dashboard
+              </Link>
             </div>
           )}
           <p className="text-sm text-muted-foreground">

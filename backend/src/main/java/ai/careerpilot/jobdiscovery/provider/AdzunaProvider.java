@@ -32,6 +32,7 @@ public class AdzunaProvider extends AbstractWebJobProvider {
             Map.entry("in", "India"), Map.entry("de", "Germany"),
             Map.entry("ca", "Canada"), Map.entry("au", "Australia"),
             Map.entry("nl", "Netherlands"), Map.entry("sg", "Singapore"),
+            Map.entry("ie", "Ireland"),
             Map.entry("fr", "France"), Map.entry("at", "Austria"),
             Map.entry("br", "Brazil"), Map.entry("it", "Italy"),
             Map.entry("nz", "New Zealand"), Map.entry("pl", "Poland"),
@@ -46,7 +47,7 @@ public class AdzunaProvider extends AbstractWebJobProvider {
             @Value("${jobs.discovery.providers.adzuna.base-url:https://api.adzuna.com}") String baseUrl,
             @Value("${jobs.discovery.providers.adzuna.app-id:}") String appId,
             @Value("${jobs.discovery.providers.adzuna.app-key:}") String appKey,
-            @Value("${jobs.discovery.providers.adzuna.countries:gb,us,in}") String countries,
+            @Value("${jobs.discovery.providers.adzuna.countries:gb,us,in,ie,au}") String countries,
             @Value("${jobs.discovery.providers.adzuna.results-per-page:50}") int resultsPerPage,
             @Value("${jobs.discovery.user-agent:CareerPilotAI/1.0 (+https://careerpilot.ai)}") String userAgent) {
         super(baseUrl, userAgent);
@@ -134,7 +135,7 @@ public class AdzunaProvider extends AbstractWebJobProvider {
             case "gb" -> "GBP";
             case "us", "ca", "au", "nz", "sg" -> "USD";
             case "in" -> "INR";
-            case "de", "nl", "fr", "at", "it", "es", "pl" -> "EUR";
+            case "de", "nl", "fr", "at", "it", "es", "pl", "ie" -> "EUR";
             case "br" -> "BRL";
             case "za" -> "ZAR";
             default -> null;

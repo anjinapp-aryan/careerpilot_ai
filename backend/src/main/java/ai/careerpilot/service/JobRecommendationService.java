@@ -11,6 +11,7 @@ import ai.careerpilot.domain.WorkflowRun;
 import ai.careerpilot.jobdiscovery.JobMatchingService;
 import ai.careerpilot.jobdiscovery.JobScoring;
 import ai.careerpilot.jobdiscovery.JobScoring.ScoreBreakdown;
+import ai.careerpilot.jobdiscovery.international.InternationalJobRankingService;
 import ai.careerpilot.repo.CandidateProfileRepository;
 import ai.careerpilot.repo.JobRecommendationRepository;
 import ai.careerpilot.repo.JobRepository;
@@ -47,6 +48,7 @@ public class JobRecommendationService {
     private final JobRepository jobs;
     private final JobRecommendationRepository recommendations;
     private final JobMatchingService matching;
+    private final InternationalJobRankingService internationalRanking;
     private final JobScoring scoring;
     private final CandidateProfileRepository candidateProfiles;
     private final ResumeRepository resumes;
@@ -60,6 +62,7 @@ public class JobRecommendationService {
                                     JobRepository jobs,
                                     JobRecommendationRepository recommendations,
                                     JobMatchingService matching,
+                                    InternationalJobRankingService internationalRanking,
                                     JobScoring scoring,
                                     CandidateProfileRepository candidateProfiles,
                                     ResumeRepository resumes,
@@ -69,6 +72,7 @@ public class JobRecommendationService {
         this.jobs = jobs;
         this.recommendations = recommendations;
         this.matching = matching;
+        this.internationalRanking = internationalRanking;
         this.scoring = scoring;
         this.candidateProfiles = candidateProfiles;
         this.resumes = resumes;
@@ -87,7 +91,24 @@ public class JobRecommendationService {
      * this just gives the client an explicit trigger (e.g. "Refresh matches" button) and a count.
      */
     public int rebuild(UUID userId) {
-        return matching.refreshForUser(userId);
+        int written = matching.refreshForUser(userId);
+        refreshInternationalRankingSafely(userId);
+        return written;
+    }
+
+    /**
+     * International Job Discovery Engine, Phase 1 — rides the same refresh lifecycle as the
+     * existing recommendation matcher rather than adding a new trigger. Try/catch isolated so a
+     * ranking failure never blocks the existing recommendation refresh (matches the codebase-wide
+     * discipline of {@code JobAggregationService.runProvider}). No-op when {@code
+     * career.international.ranking.enabled} is off.
+     */
+    private void refreshInternationalRankingSafely(UUID userId) {
+        try {
+            internationalRanking.refreshForUser(userId);
+        } catch (Exception e) {
+            log.warn("International ranking refresh failed for user={}: {}", userId, e.toString());
+        }
     }
 
     public RecommendedJobsResponse recommend(UUID userId, UUID orgId, int limit, String filter) {
@@ -152,7 +173,10 @@ public class JobRecommendationService {
 
         // Prefer the real discovered pool: refresh + read persisted recommendations. Only recompute
         // on the first page — "Load more" pagination must not re-score the whole pool on every call.
-        if (pageNum == 0) matching.refreshForUser(userId);
+        if (pageNum == 0) {
+            matching.refreshForUser(userId);
+            refreshInternationalRankingSafely(userId);
+        }
         List<RecommendedJob> all = fromPersisted(userId, filter);
 
         // Fallback: no discovered recommendations yet → score the org pool on the fly (legacy).

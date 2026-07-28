@@ -17,6 +17,7 @@ import AiMemory from '@/pages/AiMemory';
 import AdminDashboard from '@/pages/AdminDashboard';
 import OperationsCenter from '@/pages/OperationsCenter';
 import CompanyIntelligenceDashboard from '@/pages/CompanyIntelligenceDashboard';
+import InternationalDashboard from '@/pages/InternationalDashboard';
 import AppShell from '@/components/app-shell/AppShell';
 
 const ADMIN_ROLES = new Set(['OWNER', 'ADMIN']);
@@ -50,6 +51,7 @@ export default function App() {
         <Route path="resumes/:id/optimize" element={<ResumeOptimization />} />
         <Route path="resumes/:id/intelligence" element={<ResumeIntelligence />} />
         <Route path="jobs" element={<Jobs />} />
+        <Route path="jobs/international/dashboard" element={<InternationalDashboard />} />
         <Route path="applications" element={<Applications />} />
         <Route path="workflow" element={<Workflow />} />
         <Route path="career" element={<CareerIntelligence />} />

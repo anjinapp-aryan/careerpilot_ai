@@ -162,16 +162,8 @@ public class JobScoring {
         List<String> missingSkills = mentionedSkills.stream()
                 .filter(s -> !candFamilies.contains(taxonomy.skillFamily(s))).distinct().toList();
 
-        int skills;
-        if (candFamilies.isEmpty()) {
-            skills = 50;                              // no candidate skills on file → can't assess
-        } else if (jobSkillFamilies.isEmpty()) {
-            skills = 25;                              // JD names no recognizable tech skills → weak fit
-        } else {
-            int denom = Math.min(Math.max(jobSkillFamilies.size(), SKILL_DENOM_FLOOR), skillDenomCap);
-            skills = Math.min(100, matchedFamilies.size() * 100 / denom);
-            signals++;
-        }
+        int skills = skillScoreValue(candFamilies, jobSkillFamilies, matchedFamilies);
+        if (!candFamilies.isEmpty() && !jobSkillFamilies.isEmpty()) signals++;
 
         // ── Role (25%) — coarse role-family overlap via the taxonomy ────────────────────
         Set<String> candRoles = taxonomy.roleFamilies(ctx.targetRole());
@@ -247,6 +239,35 @@ public class JobScoring {
         return new ScoreResultV2(total, matchedSkills, missingSkills,
                 new ScoreBreakdown(skills, experience, role, location, salary, visa, workMode, 0), confidence,
                 matchedFamilies.size(), matchedRoleCount);
+    }
+
+    /** Core skill-ratio computation shared by {@link #scoreV2} and {@link #skillScoreOnly}. */
+    private int skillScoreValue(Set<String> candFamilies, Set<String> jobSkillFamilies, Set<String> matchedFamilies) {
+        if (candFamilies.isEmpty()) return 50;             // no candidate skills on file → can't assess
+        if (jobSkillFamilies.isEmpty()) return 25;          // JD names no recognizable tech skills → weak fit
+        int denom = Math.min(Math.max(jobSkillFamilies.size(), SKILL_DENOM_FLOOR), skillDenomCap);
+        return Math.min(100, matchedFamilies.size() * 100 / denom);
+    }
+
+    /**
+     * Public entry point for the same skills-only sub-score {@link #scoreV2} computes internally
+     * (International Job Discovery Engine, Phase 1 — reused by {@code InternationalJobScoring} so
+     * the two ranking formulas never disagree on what "skill match" means). Zero behavior change
+     * to {@link #scoreV2} itself — both call the same {@link #skillScoreValue} core.
+     */
+    public int skillScoreOnly(Job job, String effectiveSkills, CandidateContext ctx) {
+        String haystack = ((job.getTitle() == null ? "" : job.getTitle()) + " "
+                + (job.getDescription() == null ? "" : job.getDescription()) + " "
+                + (effectiveSkills == null ? "" : effectiveSkills)).toLowerCase();
+        Set<String> candFamilies = taxonomy.skillFamilies(ctx.skills());
+        Set<String> jobSkillFamilies = new HashSet<>(taxonomy.skillFamiliesInText(haystack));
+        if (effectiveSkills != null) {
+            jobSkillFamilies.addAll(taxonomy.skillFamilies(
+                    Arrays.asList(effectiveSkills.toLowerCase().split("\\s*,\\s*"))));
+        }
+        Set<String> matchedFamilies = new HashSet<>(candFamilies);
+        matchedFamilies.retainAll(jobSkillFamilies);
+        return skillScoreValue(candFamilies, jobSkillFamilies, matchedFamilies);
     }
 
     /**
@@ -346,7 +367,8 @@ public class JobScoring {
         };
     }
 
-    private int salaryScore(Job job, PreferenceContext p) {
+    /** Public: reused by {@code InternationalJobScoring} (International Job Discovery Engine, Phase 1). */
+    public int salaryScore(Job job, PreferenceContext p) {
         java.math.BigDecimal jobMax = job.getSalaryMax() != null ? job.getSalaryMax() : job.getSalaryMin();
         java.math.BigDecimal jobMin = job.getSalaryMin() != null ? job.getSalaryMin() : job.getSalaryMax();
         java.math.BigDecimal want = p.salaryMin() != null ? p.salaryMin() : p.salaryMax();

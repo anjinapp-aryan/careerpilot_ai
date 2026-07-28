@@ -22,6 +22,18 @@ interface PreferencesDialogProps {
   onOpenChange: (open: boolean) => void;
 }
 
+interface SupportedCountry {
+  countryCode: string;
+  displayName: string;
+  tier: string;
+}
+
+const TIER_LABEL: Record<string, string> = {
+  TIER_1: 'Tier 1',
+  TIER_2: 'Tier 2',
+  TIER_3: 'Tier 3',
+};
+
 /** Common target-role titles offered as one-click chips in "Preferred roles". Not an
  *  enum/enforced value set — `preferredRoles` stays free-text end-to-end (see
  *  CandidatePreferencesDto), so a custom role typed below is just as valid as a chip here. */
@@ -115,6 +127,15 @@ export function PreferencesDialog({ open, onOpenChange }: PreferencesDialogProps
     enabled: open,
   });
 
+  // International Job Discovery Engine, Phase 1 — the config-driven, tier-grouped country list.
+  // 404/empty when career.international.tiering.enabled is off; the picker just doesn't render.
+  const { data: supportedCountries } = useQuery<SupportedCountry[]>({
+    queryKey: ['jobs', 'international', 'countries'],
+    queryFn: async () => (await api.get('/api/jobs/international/countries')).data,
+    enabled: open,
+    retry: false,
+  });
+
   const csv = (xs: string[]) => xs.join(', ');
   const parseCsv = (v: string) => v.split(',').map((s) => s.trim()).filter(Boolean);
 
@@ -197,6 +218,52 @@ export function PreferencesDialog({ open, onOpenChange }: PreferencesDialogProps
                 />
               </div>
             </div>
+
+            {supportedCountries && supportedCountries.length > 0 && (
+              <div>
+                <Label>Supported relocation countries</Label>
+                <p className="mb-1.5 text-xs text-muted-foreground">
+                  Click to add to Preferred countries above.
+                </p>
+                <div className="space-y-1.5">
+                  {(['TIER_1', 'TIER_2', 'TIER_3'] as const).map((tier) => {
+                    const inTier = supportedCountries.filter((c) => c.tier === tier);
+                    if (inTier.length === 0) return null;
+                    return (
+                      <div key={tier} className="flex flex-wrap items-center gap-1.5">
+                        <span className="text-xs font-medium text-muted-foreground">{TIER_LABEL[tier]}:</span>
+                        {inTier.map((c) => {
+                          const selected = parseCsv(countriesText).some(
+                            (v) => v.toLowerCase() === c.displayName.toLowerCase(),
+                          );
+                          return (
+                            <button
+                              key={c.countryCode}
+                              type="button"
+                              onClick={() =>
+                                setCountriesText((prev) => {
+                                  const list = parseCsv(prev);
+                                  if (selected) return list.filter((v) => v.toLowerCase() !== c.displayName.toLowerCase()).join(', ');
+                                  return [...list, c.displayName].join(', ');
+                                })
+                              }
+                              className={cn(
+                                'rounded-full border px-2.5 py-0.5 text-xs font-medium transition-colors',
+                                selected
+                                  ? 'border-primary bg-primary/10 text-primary'
+                                  : 'border-border text-muted-foreground hover:bg-muted',
+                              )}
+                            >
+                              {c.displayName}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
 
             <div>
               <Label>Preferred roles</Label>

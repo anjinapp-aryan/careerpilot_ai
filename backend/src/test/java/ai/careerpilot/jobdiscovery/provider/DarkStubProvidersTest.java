@@ -91,4 +91,47 @@ class DarkStubProvidersTest {
         assertEquals("Globex", enabled.companies().get(0).company());
         assertEquals("DE", enabled.companies().get(0).country());
     }
+
+    // ── International Job Discovery Engine, Phase 1: LinkedIn/Indeed/Glassdoor dark stubs ──────
+    // None of the three has a free/ToS-compliant public API — isConfigured() stays false
+    // unconditionally, regardless of the operator's own flag (diagnostics-only, isFlagEnabled()).
+
+    @Test
+    void linkedInIsAlwaysInertRegardlessOfFlag() {
+        var enabled = new LinkedInProvider(true);
+        var disabled = new LinkedInProvider(false);
+
+        assertFalse(enabled.isConfigured());
+        assertFalse(disabled.isConfigured());
+        assertTrue(enabled.isFlagEnabled());
+        assertFalse(disabled.isFlagEnabled());
+        assertTrue(enabled.fetch().isEmpty());
+        assertEquals("linkedin", enabled.name());
+    }
+
+    @Test
+    void indeedIsAlwaysInertRegardlessOfFlag() {
+        var enabled = new IndeedProvider(true);
+        var disabled = new IndeedProvider(false);
+
+        assertFalse(enabled.isConfigured());
+        assertFalse(disabled.isConfigured());
+        assertTrue(enabled.isFlagEnabled());
+        assertFalse(disabled.isFlagEnabled());
+        assertTrue(enabled.fetch().isEmpty());
+        assertEquals("indeed", enabled.name());
+    }
+
+    @Test
+    void glassdoorIsAlwaysInertRegardlessOfFlag() {
+        var enabled = new GlassdoorProvider(true);
+        var disabled = new GlassdoorProvider(false);
+
+        assertFalse(enabled.isConfigured());
+        assertFalse(disabled.isConfigured());
+        assertTrue(enabled.isFlagEnabled());
+        assertFalse(disabled.isFlagEnabled());
+        assertTrue(enabled.fetch().isEmpty());
+        assertEquals("glassdoor", enabled.name());
+    }
 }

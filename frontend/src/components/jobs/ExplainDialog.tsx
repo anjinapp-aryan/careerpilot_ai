@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { CheckCircle2, FileText, ScanLine, Sparkles, TrendingDown, XCircle } from 'lucide-react';
+import { CheckCircle2, FileText, Globe2, ScanLine, Sparkles, Stamp, TrendingDown, XCircle } from 'lucide-react';
 import { api } from '@/lib/api';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Dialog, DialogBody, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
@@ -12,7 +12,81 @@ interface ExplainDialogProps {
   breakdown?: ScoreBreakdown | null;
   /** Overall match score, shown alongside the breakdown. */
   matchScore?: number | null;
+  /** International Job Discovery Engine, Phase 1 — the job's display-name country (e.g. "Germany"),
+   *  if any. Used to look up and render a country-intelligence block when ranking data exists. */
+  country?: string | null;
   onClose: () => void;
+}
+
+interface SupportedCountryRef {
+  countryCode: string;
+  displayName: string;
+  tier: string;
+}
+
+interface CountryIntelligence {
+  countryCode: string;
+  visaProbabilityScore: number;
+  relocationDifficultyScore: number;
+  languageRequirementScore: number;
+  costOfLivingIndex: number;
+  expectedSavingsScore: number;
+  jobStabilityScore: number;
+  techMarketScore: number;
+  principalEngineerGrowthScore: number;
+  aiMarketScore: number;
+  sourceNote?: string | null;
+}
+
+/** International Job Discovery Engine, Phase 1 — compact country-intelligence block, rendered
+ *  only when the job's country resolves to one of the Phase-1 tiered countries. */
+function CountryIntelligenceSection({ country }: { country: string }) {
+  const { data: countries } = useQuery<SupportedCountryRef[]>({
+    queryKey: ['jobs', 'international', 'countries'],
+    queryFn: async () => (await api.get('/api/jobs/international/countries')).data,
+    retry: false,
+    staleTime: Infinity,
+  });
+  const code = countries?.find((c) => c.displayName.toLowerCase() === country.toLowerCase())?.countryCode ?? null;
+
+  const { data: intel } = useQuery<CountryIntelligence>({
+    queryKey: ['jobs', 'international', 'intelligence', code],
+    queryFn: async () => (await api.get(`/api/jobs/international/intelligence/${code}`)).data,
+    enabled: !!code,
+    retry: false,
+    staleTime: Infinity,
+  });
+
+  if (!code || !intel) return null;
+
+  const rows: { label: string; value: number }[] = [
+    { label: 'Visa probability', value: intel.visaProbabilityScore },
+    { label: 'Job stability', value: intel.jobStabilityScore },
+    { label: 'Tech market strength', value: intel.techMarketScore },
+    { label: 'Principal-engineer growth', value: intel.principalEngineerGrowthScore },
+    { label: 'AI market strength', value: intel.aiMarketScore },
+    { label: 'Expected savings', value: intel.expectedSavingsScore },
+  ];
+
+  return (
+    <div className="rounded-lg border border-border bg-card p-3">
+      <h4 className="mb-2 flex items-center gap-1.5 text-sm font-semibold text-foreground">
+        <Globe2 className="h-4 w-4 text-primary" /> Relocation to {country}
+      </h4>
+      <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 sm:grid-cols-3">
+        {rows.map((r) => (
+          <div key={r.label} className="flex items-center justify-between gap-2 text-xs">
+            <span className="text-muted-foreground">{r.label}</span>
+            <span className="font-medium tabular-nums text-foreground">{r.value}</span>
+          </div>
+        ))}
+      </div>
+      <p className="mt-2 flex items-center gap-1 text-[11px] text-muted-foreground">
+        <Stamp className="h-3 w-3" /> Curated reference data{intel.sourceNote ? ` — ${intel.sourceNote}` : ''}, not
+        live-computed.
+      </p>
+    </div>
+  );
 }
 
 /** Factor labels + relative weights, mirroring JobScoring.ScoreBreakdown on the backend. */
@@ -122,7 +196,7 @@ function Section({
   );
 }
 
-export function ExplainDialog({ jobId, jobTitle, breakdown, matchScore, onClose }: ExplainDialogProps) {
+export function ExplainDialog({ jobId, jobTitle, breakdown, matchScore, country, onClose }: ExplainDialogProps) {
   const { data, isLoading, isError } = useQuery<JobMatchExplanation>({
     queryKey: ['jobs', 'explain', jobId],
     queryFn: async () => (await api.post(`/api/jobs/${jobId}/explain`)).data,
@@ -156,6 +230,7 @@ export function ExplainDialog({ jobId, jobTitle, breakdown, matchScore, onClose 
           <>
             {breakdown && <ScoreBreakdownSection breakdown={breakdown} matchScore={matchScore} />}
             {breakdown && <WhyNotSection breakdown={breakdown} />}
+            {country && <CountryIntelligenceSection country={country} />}
             <Section icon={CheckCircle2} title="Matching skills" items={data.matchingSkills} tone="text-success" />
             <Section icon={XCircle} title="Skills to build" items={data.missingSkills} tone="text-warning" />
             <Section icon={FileText} title="Resume improvements" items={data.resumeImprovements} tone="text-primary" />

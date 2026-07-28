@@ -1301,6 +1301,15 @@ career:
   international:
     filter:
       enabled: ${CAREER_INTERNATIONAL_FILTER_ENABLED:false}
+    # ---- International Job Discovery Engine, Phase 1 (dark by default) ----
+    tiering:
+      enabled: ${CAREER_INTERNATIONAL_TIERING_ENABLED:false}
+    seniority-filter:
+      enabled: ${CAREER_INTERNATIONAL_SENIORITY_FILTER_ENABLED:false}
+    title-allowlist:
+      enabled: ${CAREER_INTERNATIONAL_TITLE_ALLOWLIST_ENABLED:false}
+    ranking:
+      enabled: ${CAREER_INTERNATIONAL_RANKING_ENABLED:false}
   explainability:
     enabled: ${CAREER_EXPLAINABILITY_ENABLED:false}
   # ---- Job discovery: 2 new keyless-public-API providers, same shape/flag namespace as
@@ -1335,6 +1344,15 @@ career:
       enabled: ${CAREER_DISCOVERY_DEVITJOBS_ENABLED:false}
     graphql-jobs:
       enabled: ${CAREER_DISCOVERY_GRAPHQL_JOBS_ENABLED:false}
+    # ---- International Job Discovery Engine, Phase 1: architecture-ready dark stubs. None of the
+    # three has a free/ToS-compliant public API — isConfigured() stays false unconditionally
+    # regardless of this flag (diagnostics-only, see LinkedInProvider/IndeedProvider/GlassdoorProvider).
+    linkedin:
+      enabled: ${CAREER_DISCOVERY_LINKEDIN_ENABLED:false}
+    indeed:
+      enabled: ${CAREER_DISCOVERY_INDEED_ENABLED:false}
+    glassdoor:
+      enabled: ${CAREER_DISCOVERY_GLASSDOOR_ENABLED:false}
     # ---- Phase 5.3: Enterprise ATS Connector Framework. `enterprise.enabled` is the
     # framework-wide master switch, AND'd with each provider's own flag (so both must be true).
     # Workday is real (see WorkdayProvider javadoc); Taleo/SuccessFactors are connector

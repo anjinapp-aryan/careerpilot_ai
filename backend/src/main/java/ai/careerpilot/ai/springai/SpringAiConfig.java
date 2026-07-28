@@ -2,6 +2,7 @@ package ai.careerpilot.ai.springai;
 
 import com.openai.client.OpenAIClient;
 import com.openai.client.okhttp.OpenAIOkHttpClient;
+import com.openai.core.Timeout;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.StreamingChatModel;
 import org.springframework.ai.embedding.EmbeddingModel;
@@ -13,6 +14,8 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
+
+import java.time.Duration;
 
 /**
  * Phase 9.1 — Spring AI Foundation configuration.
@@ -60,14 +63,43 @@ public class SpringAiConfig {
      * ai.springai.foundation.enabled=true} without also setting a real api-key gets a
      * provider that reports itself unconfigured (see {@code SpringAiLlmProvider}),
      * not a crash-looping app.
+     *
+     * <p><b>{@code .timeout(...)} matters, not just documentation.</b> {@link
+     * SpringAiFoundationProperties#getTimeoutMs()} was previously only honored by the
+     * legacy {@code SpringAiLlmProvider} path (Phase 9.2's canary in {@code
+     * AiGatewayService}'s chain, which gets Resilience4j timeout wrapping generically
+     * for every provider). The direct path — {@code
+     * ai.careerpilot.capability.CapabilityAwareChatService} calling {@code
+     * ChatModel.call(...)} straight against this client — had no bound at all before
+     * this fix: a slow/hung upstream (observed live: an NVIDIA call that took 107s
+     * under congestion, not actually hung, but nothing would have stopped it if it
+     * had been) could block the calling thread indefinitely.
+     *
+     * <p><b>Why an explicit {@link Timeout} object, not the single-{@code Duration}
+     * convenience overload.</b> The OpenAI Java SDK's {@code Timeout} has four
+     * independent dimensions — {@code connect}/{@code read}/{@code write} (each an
+     * idle-between-bytes bound, standard OkHttp semantics) and {@code request} (the
+     * actual wall-clock deadline for the whole call). The single-{@code Duration}
+     * overload does not set {@code request} — caught live: a real NVIDIA response
+     * that trickled in over 34s, never idling long enough to trip a 20s read
+     * timeout, sailed straight through the naive version of this fix. Setting {@code
+     * request} explicitly is what actually bounds total call duration.
      */
     @Bean
     public OpenAIClient springAiOpenAiClient() {
         String apiKey = props.getApiKey() == null || props.getApiKey().isBlank()
                 ? "unset" : props.getApiKey();
+        Duration timeout = Duration.ofMillis(props.getTimeoutMs());
+        Timeout requestBoundedTimeout = Timeout.builder()
+                .connect(timeout)
+                .read(timeout)
+                .write(timeout)
+                .request(timeout)
+                .build();
         return OpenAIOkHttpClient.builder()
                 .baseUrl(props.getBaseUrl())
                 .apiKey(apiKey)
+                .timeout(requestBoundedTimeout)
                 .build();
     }
 

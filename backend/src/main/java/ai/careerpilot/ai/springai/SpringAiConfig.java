@@ -2,6 +2,7 @@ package ai.careerpilot.ai.springai;
 
 import com.openai.client.OpenAIClient;
 import com.openai.client.okhttp.OpenAIOkHttpClient;
+import com.openai.core.LogLevel;
 import com.openai.core.Timeout;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.StreamingChatModel;
@@ -100,6 +101,7 @@ public class SpringAiConfig {
                 .baseUrl(props.getBaseUrl())
                 .apiKey(apiKey)
                 .timeout(requestBoundedTimeout)
+                .logLevel(LogLevel.DEBUG)
                 .build();
     }
 

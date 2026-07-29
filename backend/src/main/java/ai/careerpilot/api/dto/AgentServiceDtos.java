@@ -1,12 +1,31 @@
 package ai.careerpilot.api.dto;
 
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 /** DTOs for agent service responses. */
 public final class AgentServiceDtos {
 
     private AgentServiceDtos() {}
+
+    /**
+     * Phase 10A — response from the generic dispatcher's {@code POST /workflows/{workflowId}/runs}
+     * (see {@code agent-service/app/dispatcher/router.py}'s {@code WorkflowRunResponse}). Field
+     * names are already camelCase on the Python side so this record binds via Jackson's default
+     * naming strategy with zero custom mapping — deliberately the same shape discipline as {@link
+     * ai.careerpilot.skillgap.SkillGapAgentResponse}, but generic: {@code output} is an opaque
+     * payload, not typed to any one workflow's business fields.
+     */
+    public record WorkflowDispatchResponse(
+            String workflowId,
+            String executionId,
+            String correlationId,
+            String status,
+            long durationMs,
+            Map<String, Object> output,
+            List<String> errors) {
+    }
 
     /**
      * Response from /runs or /runs/resume endpoints.

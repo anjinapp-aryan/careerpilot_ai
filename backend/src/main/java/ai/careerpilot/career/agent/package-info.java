@@ -55,5 +55,44 @@
  * earlier master plan) actually connected new orchestration to a live request path. Wiring any
  * of Phase 11's layers into production — Copilot, a scheduler, or real task dispatch — is future
  * work this series deliberately left open.
+ *
+ * <h2>Phase 7A — Mission-Aware Autonomous Career Agent</h2>
+ * Evolves this same {@link ai.careerpilot.career.agent.DefaultAutonomousCareerAgent} — no
+ * {@code AgentV2}, no {@code MissionAgent}, no second planner — into a Mission-aware execution
+ * coordinator. Mission-awareness is one more optional observation source, the same shape {@code
+ * CareerMonitor} already has: {@link ai.careerpilot.career.agent.MissionContext} (new) carries
+ * data read verbatim from {@code ai.careerpilot.mission.MissionAwareDailyBriefService} (Phase
+ * 6A) — this package still owns zero Mission/Strategy/Workflow-Registry business rules; {@code
+ * MissionOrchestratorService} (Phase 5) remains the only thing that decides "what should run
+ * next," this agent only translates that decision list into its own {@link
+ * ai.careerpilot.career.agent.AgentTaskType} vocabulary via {@link
+ * ai.careerpilot.career.agent.DefaultAgentPlanner} (the same, unmodified interface, extended not
+ * duplicated).
+ *
+ * <p>Gated by its own {@code career.mission.agent.enabled} flag (default {@code false},
+ * independent of {@code career.agent.enabled}) — off, {@link
+ * ai.careerpilot.career.agent.DefaultAutonomousCareerAgent} never even looks at {@code
+ * MissionAwareDailyBriefService}, byte-identical to pre-7A behavior.
+ *
+ * <p>Two forward-looking, currently-inert preparations, matching this codebase's established
+ * "foundation now, wiring later" discipline (e.g. {@code ai.springai} Phase 9.1, {@code
+ * ai.careerpilot.mcp} Phase 10.1):
+ * <ul>
+ *   <li>{@link ai.careerpilot.career.agent.WorkflowType} — a richer taxonomy (RESUME,
+ *       JOB_DISCOVERY, ATS, INTERVIEW, LEARNING, OFFER, VISA, RELOCATION, COMPANY, SALARY) plus a
+ *       pure {@code forAgentTask(AgentTaskType)} translation table, prepared for a future
+ *       LangGraph-dispatching {@link ai.careerpilot.career.agent.AgentTaskExecutor} — not called
+ *       by {@link ai.careerpilot.career.agent.DeferredAgentTaskExecutor} or anything else today.</li>
+ *   <li>{@code ObjectProvider<ai.careerpilot.mission.WorkflowPlanner>} — reuses Phase 6A.1's
+ *       extension-point interface (not a second one) as a provisioned-but-unused seam on {@link
+ *       ai.careerpilot.career.agent.DefaultAutonomousCareerAgent} for a future, richer Workflow
+ *       Planner. No bean implements it; nothing calls it.</li>
+ * </ul>
+ *
+ * <p>This agent never calls {@code AiGatewayService}, Spring AI, or any MCP tool handler
+ * directly, and never bypasses {@code SafetyEngine}/{@code ApprovalService} — {@link
+ * ai.careerpilot.career.agent.DeferredAgentTaskExecutor} is still the only {@link
+ * ai.careerpilot.career.agent.AgentTaskExecutor}, so no real dispatch, approval, or AI call
+ * happens as a result of this phase.
  */
 package ai.careerpilot.career.agent;

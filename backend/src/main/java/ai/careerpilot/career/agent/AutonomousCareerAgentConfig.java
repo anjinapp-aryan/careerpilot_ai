@@ -1,6 +1,8 @@
 package ai.careerpilot.career.agent;
 
 import ai.careerpilot.career.monitor.CareerMonitor;
+import ai.careerpilot.mission.MissionAwareDailyBriefService;
+import ai.careerpilot.mission.WorkflowPlanner;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -17,6 +19,13 @@ import java.time.Duration;
  * DefaultAutonomousCareerAgent} degrades to an empty observation if it's off even while this one
  * is on. No {@code @Scheduled} bean exists here — nothing triggers {@link
  * AutonomousCareerAgent#runOnce} automatically; see the package javadoc.
+ *
+ * <p><b>Phase 7A</b> — {@link MissionAwareDailyBriefService} (Phase 6A) and {@link WorkflowPlanner}
+ * (Phase 6A.1's extension point, reused rather than duplicated) are injected the same way:
+ * {@link ObjectProvider}, so an absent bean never breaks context startup. {@code
+ * career.mission.agent.enabled} (default {@code false}, its own flag, independent of {@code
+ * career.agent.enabled}) is the master switch for whether {@link DefaultAutonomousCareerAgent}
+ * ever consults them at all.
  */
 @Configuration
 public class AutonomousCareerAgentConfig {
@@ -56,8 +65,11 @@ public class AutonomousCareerAgentConfig {
     public AutonomousCareerAgent autonomousCareerAgent(
             ObjectProvider<CareerMonitor> careerMonitorProvider, AgentPlanner planner, AgentTaskExecutor executor,
             TaskScheduler scheduler, AgentMemory memory, AgentMetrics metrics,
-            @Value("${career.agent.min-run-interval-hours:24}") long minRunIntervalHours) {
+            ObjectProvider<MissionAwareDailyBriefService> missionBriefProvider,
+            ObjectProvider<WorkflowPlanner> workflowPlannerProvider,
+            @Value("${career.agent.min-run-interval-hours:24}") long minRunIntervalHours,
+            @Value("${career.mission.agent.enabled:false}") boolean missionAwareEnabled) {
         return new DefaultAutonomousCareerAgent(careerMonitorProvider, planner, executor, scheduler, memory, metrics,
-                Duration.ofHours(minRunIntervalHours));
+                Duration.ofHours(minRunIntervalHours), missionBriefProvider, workflowPlannerProvider, missionAwareEnabled);
     }
 }

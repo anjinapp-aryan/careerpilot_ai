@@ -1,6 +1,7 @@
 package ai.careerpilot.agent;
 
 import ai.careerpilot.api.dto.AgentServiceDtos.AgentRunResponse;
+import ai.careerpilot.api.dto.AgentServiceDtos.WorkflowDispatchResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -57,6 +58,35 @@ public class AgentServiceClient {
         } catch (Exception e) {
             log.error("Agent startRun failed: error_type={}, error_msg={}",
                     e.getClass().getSimpleName(), e.getMessage(), e);
+            throw new AgentServiceException("Agent service unavailable", e);
+        }
+    }
+
+    /**
+     * Phase 10A — the generic dispatch call: {@code POST /workflows/{workflowId}/runs}. Unlike
+     * {@link #startRun}, this can invoke ANY workflow the Python side has registered (see
+     * {@code agent-service/app/dispatcher/registry.py}) — no new client class, no new endpoint,
+     * per workflow. Purely additive: {@link #startRun}/{@link #resumeRun}/{@link #getRun} and
+     * every existing caller of them are byte-for-byte unchanged.
+     */
+    public WorkflowDispatchResponse startWorkflowRun(String workflowId, Map<String, Object> payload) {
+        try {
+            log.info("agent_dispatch_request_begin: workflow_id={}, execution_id={}",
+                    workflowId, payload.get("execution_id"));
+            WorkflowDispatchResponse resp = client.post().uri("/workflows/{workflowId}/runs", workflowId)
+                    .bodyValue(payload).retrieve().bodyToMono(WorkflowDispatchResponse.class)
+                    .timeout(readTimeout).block();
+            log.info("agent_dispatch_response: workflow_id={}, execution_id={}, status={}, duration_ms={}",
+                    workflowId, resp != null ? resp.executionId() : "null",
+                    resp != null ? resp.status() : "null", resp != null ? resp.durationMs() : -1);
+            return resp;
+        } catch (WebClientResponseException e) {
+            log.error("Agent startWorkflowRun HTTP error: workflow_id={}, status={}, body={}",
+                    workflowId, e.getStatusCode(), e.getResponseBodyAsString(), e);
+            throw new AgentServiceException("Agent service HTTP error: " + e.getStatusCode(), e);
+        } catch (Exception e) {
+            log.error("Agent startWorkflowRun failed: workflow_id={}, error_type={}, error_msg={}",
+                    workflowId, e.getClass().getSimpleName(), e.getMessage(), e);
             throw new AgentServiceException("Agent service unavailable", e);
         }
     }

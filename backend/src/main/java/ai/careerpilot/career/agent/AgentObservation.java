@@ -15,8 +15,20 @@ import java.util.UUID;
  * {@link CareerInsights} run); {@link #empty} is used when Phase 11.5's {@code CareerMonitor}
  * bean isn't available (its own independent {@code career.monitor.enabled} flag is off) —
  * observing nothing is a valid, honest state, not an error.
+ *
+ * <p><b>Phase 7A</b> — {@code missionContext} is {@code null} unless {@code
+ * career.mission.agent.enabled} is on and the user has an active Mission; {@link
+ * #withMissionContext} attaches it without disturbing the {@code CareerMonitor}-derived fields.
+ * The 4-arg constructor below is preserved so every pre-7A call site (tests included) keeps
+ * compiling unchanged, always producing a {@code null} mission context — identical to pre-7A
+ * behavior.
  */
-public record AgentObservation(UUID userId, Instant observedAt, List<CareerAlert> signals, String source) {
+public record AgentObservation(UUID userId, Instant observedAt, List<CareerAlert> signals, String source,
+                                MissionContext missionContext) {
+
+    public AgentObservation(UUID userId, Instant observedAt, List<CareerAlert> signals, String source) {
+        this(userId, observedAt, signals, source, null);
+    }
 
     public static AgentObservation from(UUID userId, CareerInsights insights) {
         return new AgentObservation(userId, Instant.now(), insights.recommendations(), "CareerMonitor");
@@ -24,5 +36,9 @@ public record AgentObservation(UUID userId, Instant observedAt, List<CareerAlert
 
     public static AgentObservation empty(UUID userId) {
         return new AgentObservation(userId, Instant.now(), List.of(), "none (CareerMonitor unavailable)");
+    }
+
+    public AgentObservation withMissionContext(MissionContext missionContext) {
+        return new AgentObservation(userId, observedAt, signals, source, missionContext);
     }
 }

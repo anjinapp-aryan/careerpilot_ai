@@ -6,8 +6,10 @@ import ai.careerpilot.domain.CareerIntelligence;
 import ai.careerpilot.domain.DailyCareerSummary;
 import ai.careerpilot.domain.User;
 import ai.careerpilot.learning.career.executive.ExecutiveDecisionEngine;
+import ai.careerpilot.mission.MissionAwareDailyBriefService;
 import ai.careerpilot.repo.CareerIntelligenceRepository;
 import ai.careerpilot.repo.DailyCareerSummaryRepository;
+import ai.careerpilot.service.profile.JsonLists;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -36,6 +38,7 @@ public class DailyCareerSummaryGenerator {
     private final DailyCareerSummaryRepository summaries;
     private final CareerIntelligenceRepository careerIntelligence;
     private final ExecutiveDecisionEngine executiveDecisionEngine;
+    private final MissionAwareDailyBriefService missionBrief;
     private final boolean enabled;
     private final ObjectMapper mapper = new ObjectMapper();
 
@@ -43,11 +46,13 @@ public class DailyCareerSummaryGenerator {
                                        DailyCareerSummaryRepository summaries,
                                        CareerIntelligenceRepository careerIntelligence,
                                        ExecutiveDecisionEngine executiveDecisionEngine,
+                                       MissionAwareDailyBriefService missionBrief,
                                        @Value("${career.discovery.summary.enabled:false}") boolean enabled) {
         this.ai = ai;
         this.summaries = summaries;
         this.careerIntelligence = careerIntelligence;
         this.executiveDecisionEngine = executiveDecisionEngine;
+        this.missionBrief = missionBrief;
         this.enabled = enabled;
     }
 
@@ -62,7 +67,7 @@ public class DailyCareerSummaryGenerator {
             String text = renderText(user, s, interviewDelta, offerDelta);
             Map<String, Object> decisions = executiveDecisionEngine.isEnabled() ? executiveDecisionEngine.decide(user.getId()) : null;
 
-            summaries.save(DailyCareerSummary.builder()
+            DailyCareerSummary.DailyCareerSummaryBuilder builder = DailyCareerSummary.builder()
                     .runId(runId).userId(user.getId())
                     .summaryText(text)
                     .jobsFetched(s.recommendedJobs())
@@ -75,8 +80,11 @@ public class DailyCareerSummaryGenerator {
                     .interviewProbabilityDelta(interviewDelta)
                     .offerProbabilityDelta(offerDelta)
                     .executiveDecisionsJson(executiveDecisionsJson(decisions))
-                    .careerHealthScore(careerHealthScore(decisions))
-                    .build());
+                    .careerHealthScore(careerHealthScore(decisions));
+
+            applyMissionBrief(builder, user.getId());
+
+            summaries.save(builder.build());
         } catch (Exception e) {
             log.warn("Daily career summary generation failed for user={}: {}", user.getId(), e.toString());
         }
@@ -114,6 +122,35 @@ public class DailyCareerSummaryGenerator {
         if (interviewDelta != null) sb.append("Interview probability change: ").append(interviewDelta).append("%\n");
         if (offerDelta != null) sb.append("Offer probability change: ").append(offerDelta).append("%\n");
         return sb.toString();
+    }
+
+    /**
+     * Phase 6A — Mission-Aware Daily Coach Integration: attaches {@link MissionAwareDailyBriefService}'s
+     * output to the daily brief, per explicit scope choice (extend this generator's own builder
+     * rather than build a rival Daily Coach). No-op (builder untouched, every new column stays
+     * null) when the flag is off or the user has no ACTIVE mission — {@link
+     * MissionAwareDailyBriefService#buildFor} itself never throws, but this call site is
+     * defensively wrapped too so a summary is still written even if that changes later.
+     */
+    private void applyMissionBrief(DailyCareerSummary.DailyCareerSummaryBuilder builder, UUID userId) {
+        try {
+            missionBrief.buildFor(userId).ifPresent(b -> builder
+                    .missionId(b.missionId())
+                    .missionName(b.missionName())
+                    .missionProgressPercent(b.progressPercent())
+                    .currentStrategyCountry(b.currentStrategyCountry())
+                    .alternativeStrategyCountry(b.alternativeStrategyCountry())
+                    .todaysMissionTasksJson(JsonLists.toJson(b.todaysMissionTasks()))
+                    .priorityWorkflowsJson(JsonLists.toJson(b.priorityWorkflows()))
+                    .highRiskAreasJson(JsonLists.toJson(b.highRiskAreas()))
+                    .recommendedLearningJson(JsonLists.toJson(b.recommendedLearning()))
+                    .recommendedJobsJson(JsonLists.toJson(b.recommendedJobs()))
+                    .recommendedInterviewsJson(JsonLists.toJson(b.recommendedInterviews()))
+                    .estimatedCompletionTimeline(b.estimatedCompletionTimeline())
+                    .missionRecommendation(b.recommendation()));
+        } catch (Exception e) {
+            log.warn("Mission-aware brief application failed for user={}: {}", userId, e.toString());
+        }
     }
 
     /**

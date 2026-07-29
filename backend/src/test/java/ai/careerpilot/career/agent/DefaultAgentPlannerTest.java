@@ -78,4 +78,63 @@ class DefaultAgentPlannerTest {
 
         assertThat(plan.tasks()).doesNotContain(AgentTaskType.APPLICATION_TRACKING);
     }
+
+    // ── Phase 7A: mission-aware planning ──────────────────────────────────────────────
+
+    private MissionContext missionContext(UUID missionId, List<String> workflowIds) {
+        return new MissionContext(missionId, "Become Principal Engineer Abroad", 50, "Netherlands", List.of(), workflowIds);
+    }
+
+    @Test
+    void missionRecommendationsAreTranslatedIntoTasksAheadOfSignals() {
+        UUID userId = UUID.randomUUID();
+        UUID missionId = UUID.randomUUID();
+        AgentObservation observation = new AgentObservation(userId, java.time.Instant.now(), List.of(), "test",
+                missionContext(missionId, List.of("JOB_DISCOVERY_V1", "SKILL_ANALYSIS_V1")));
+
+        AgentExecutionPlan plan = planner.plan(observation);
+
+        assertThat(plan.tasks()).containsExactlyInAnyOrder(AgentTaskType.JOB_DISCOVERY, AgentTaskType.SKILL_GAP_DETECTION);
+        assertThat(plan.reason()).contains("mission " + missionId).contains("recommendations");
+    }
+
+    @Test
+    void missionRecommendationsAndSignalsAreBothConsultedUpToMaxTasks() {
+        UUID userId = UUID.randomUUID();
+        UUID missionId = UUID.randomUUID();
+        AgentObservation observation = new AgentObservation(userId, java.time.Instant.now(),
+                List.of(alert(userId, CareerAlertType.INTERVIEW_REMINDER)), "test",
+                missionContext(missionId, List.of("JOB_DISCOVERY_V1")));
+
+        AgentExecutionPlan plan = planner.plan(observation);
+
+        assertThat(plan.tasks()).containsExactlyInAnyOrder(AgentTaskType.JOB_DISCOVERY, AgentTaskType.INTERVIEW_PLANNING);
+    }
+
+    @Test
+    void missionRecommendationsRespectMaxTasksPerPlanBeforeSignalsAreConsidered() {
+        UUID userId = UUID.randomUUID();
+        UUID missionId = UUID.randomUUID();
+        DefaultAgentPlanner tinyPlanner = new DefaultAgentPlanner(1);
+        AgentObservation observation = new AgentObservation(userId, java.time.Instant.now(),
+                List.of(alert(userId, CareerAlertType.INTERVIEW_REMINDER)), "test",
+                missionContext(missionId, List.of("JOB_DISCOVERY_V1", "SKILL_ANALYSIS_V1")));
+
+        AgentExecutionPlan plan = tinyPlanner.plan(observation);
+
+        assertThat(plan.tasks()).containsExactly(AgentTaskType.JOB_DISCOVERY);
+    }
+
+    @Test
+    void emptyMissionRecommendationsFallBackToSignalsOnly() {
+        UUID userId = UUID.randomUUID();
+        UUID missionId = UUID.randomUUID();
+        AgentObservation observation = new AgentObservation(userId, java.time.Instant.now(),
+                List.of(alert(userId, CareerAlertType.JOB_MATCH)), "test", missionContext(missionId, List.of()));
+
+        AgentExecutionPlan plan = planner.plan(observation);
+
+        assertThat(plan.tasks()).containsExactly(AgentTaskType.JOB_DISCOVERY);
+        assertThat(plan.reason()).doesNotContain("mission");
+    }
 }

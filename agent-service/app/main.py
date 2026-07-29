@@ -12,8 +12,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from .config import settings
+from .dispatcher.registry import get_dispatch_registry
+from .dispatcher.router import router as workflow_dispatch_router
 from .graph import get_compiled_graph
 from .rate_limiter import GeminiRateLimiter
+from .skillgap.registration import register_skill_gap_workflow
+from .skillgap.router import router as skill_gap_router
 
 # ---------------------------------------------------------------------------
 # Structured JSON logging — wire up python-json-logger before anything else
@@ -63,6 +67,14 @@ app.add_middleware(
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "Accept"],
 )
+
+# Skill Gap Intelligence Workflow — additive, independent of the /runs endpoints below.
+app.include_router(skill_gap_router)
+
+# Phase 10A — generic workflow dispatcher, additive alongside /runs and /skill-gap/runs. Every
+# workflow registers itself once at startup; new workflows require no new endpoint.
+register_skill_gap_workflow(get_dispatch_registry())
+app.include_router(workflow_dispatch_router)
 
 
 # ---------------------------------------------------------------------------

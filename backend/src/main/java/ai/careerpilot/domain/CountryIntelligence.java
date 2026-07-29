@@ -3,7 +3,9 @@ package ai.careerpilot.domain;
 import jakarta.persistence.*;
 import lombok.*;
 import org.hibernate.annotations.CreationTimestamp;
+import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.annotations.UpdateTimestamp;
+import org.hibernate.type.SqlTypes;
 
 import java.time.Instant;
 import java.util.UUID;
@@ -13,6 +15,12 @@ import java.util.UUID;
  * (NOT live-computed; there is no real data source for e.g. live visa-approval probability).
  * {@code sourceNote} documents the curation provenance for each row. See
  * {@code V70__country_intelligence.sql} for the seeded values and their rationale.
+ *
+ * <p><b>Extended, not duplicated, by Country Intelligence Engine, Phase 2</b> ({@code
+ * V73__country_intelligence_profile_fields.sql}): {@code visaInformation}/{@code
+ * salaryInformation}/{@code technologyDemandJson}/{@code remotePolicy}/{@code priorityScore} are
+ * this phase's richer, descriptive fields on the SAME row — a competing {@code country_profile}
+ * table was deliberately rejected to keep one source of truth for per-country data.
  */
 @Entity
 @Table(name = "country_intelligence")
@@ -35,6 +43,14 @@ public class CountryIntelligence {
     @Column(name = "ai_market_score", nullable = false) private Integer aiMarketScore;
 
     @Column(name = "source_note", columnDefinition = "text") private String sourceNote;
+
+    // ── Country Intelligence Engine, Phase 2 — richer, descriptive fields ──────────────
+    @Column(name = "visa_information", columnDefinition = "text") private String visaInformation;
+    @Column(name = "salary_information", columnDefinition = "text") private String salaryInformation;
+    @JdbcTypeCode(SqlTypes.JSON) @Column(name = "technology_demand", columnDefinition = "jsonb")
+    private String technologyDemandJson;
+    @Column(name = "remote_policy") private String remotePolicy;
+    @Column(name = "priority_score") private Integer priorityScore;
 
     @CreationTimestamp @Column(name = "created_at", updatable = false) private Instant createdAt;
     @UpdateTimestamp @Column(name = "updated_at") private Instant updatedAt;

@@ -32,5 +32,11 @@ export interface CopilotStreamRequest {
   contextId?: string | null;
 }
 
-/** App surfaces the Copilot is aware of (matches the backend page keys). */
-export type CopilotPageKey = 'resume' | 'jobs' | 'applications' | 'workflow' | 'dashboard' | 'career';
+/**
+ * App surfaces the Copilot is aware of (matches the backend page keys).
+ * 'mission' is new (Phase 10C) — the backend's CopilotSkillRouter doesn't have a
+ * dedicated handler for it yet, so it falls back to keyword-inference/GeneralAssistantHandler
+ * exactly like any other unrecognized page value (see CopilotController's routing chain) —
+ * this is a safe, additive frontend-only change, not a backend dependency.
+ */
+export type CopilotPageKey = 'resume' | 'jobs' | 'applications' | 'workflow' | 'dashboard' | 'career' | 'mission';

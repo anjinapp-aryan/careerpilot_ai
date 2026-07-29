@@ -3,6 +3,7 @@ import { useAuthStore } from '@/lib/auth';
 import Login from '@/pages/Login';
 import Register from '@/pages/Register';
 import Dashboard from '@/pages/Dashboard';
+import MissionDashboard from '@/pages/MissionDashboard';
 import Resumes from '@/pages/Resumes';
 import ResumeOptimization from '@/pages/ResumeOptimization';
 import ResumeIntelligence from '@/pages/ResumeIntelligence';
@@ -47,6 +48,7 @@ export default function App() {
         }
       >
         <Route index element={<Dashboard />} />
+        <Route path="mission" element={<MissionDashboard />} />
         <Route path="resumes" element={<Resumes />} />
         <Route path="resumes/:id/optimize" element={<ResumeOptimization />} />
         <Route path="resumes/:id/intelligence" element={<ResumeIntelligence />} />

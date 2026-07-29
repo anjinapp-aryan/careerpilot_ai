@@ -10,6 +10,7 @@ import {
   Brain,
   Radar,
   Building2,
+  Rocket,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -48,6 +49,13 @@ export const NAV_GROUPS: NavGroup[] = [
   {
     label: 'Career',
     items: [
+      {
+        to: '/mission',
+        label: 'Career Mission',
+        icon: Rocket,
+        keywords: ['dream', 'goal', 'roadmap', 'strategy', 'orchestrator', 'north star'],
+        description: 'Your personal AI Career Operating System',
+      },
       {
         to: '/resumes',
         label: 'Resumes',

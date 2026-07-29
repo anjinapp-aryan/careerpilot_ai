@@ -11,6 +11,7 @@ import {
   Brain,
   DollarSign,
   ListChecks,
+  Rocket,
   type LucideIcon,
 } from 'lucide-react';
 import type { CopilotPageKey } from '@/types/copilot';
@@ -95,6 +96,19 @@ export function pageConfigForPath(pathname: string): PageConfig {
         { key: 'skills_gap', label: 'Skill Gaps', icon: ListChecks, prompt: 'Which missing skills appear most often across my recommendations?' },
         { key: 'recommendations', label: 'Best Company Matches', icon: Sparkles, prompt: 'Which companies match me best based on today’s discovery run?' },
         { key: 'recommendations', label: "What's Changed", icon: CalendarClock, prompt: "What changed in my recommendations since yesterday's discovery run?" },
+      ],
+    };
+  }
+  if (pathname.startsWith('/mission')) {
+    return {
+      page: 'mission',
+      label: 'Career Mission',
+      icon: Rocket,
+      actions: [
+        { key: 'career_guidance', label: 'Should I continue?', icon: Rocket, prompt: 'Should I continue focusing on my current target country, or consider an alternative?' },
+        { key: 'career_guidance', label: "What should I do today?", icon: Sparkles, prompt: "What should I do today to move my career mission forward?" },
+        { key: 'career_guidance', label: "What's blocking me?", icon: AlertTriangle, prompt: 'What is blocking my mission right now, and how do I unblock it?' },
+        { key: 'career_guidance', label: 'Am I ready?', icon: CheckCircle2, prompt: 'Based on my current progress, am I ready to start applying for my target role?' },
       ],
     };
   }

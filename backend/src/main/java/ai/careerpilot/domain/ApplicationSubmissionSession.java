@@ -39,6 +39,8 @@ public class ApplicationSubmissionSession {
     public static final String STATUS_VERIFIED = "VERIFIED";
     /** Phase 7.16.1 — verification ran but produced no usable evidence (NOT_VERIFIED/UNABLE_TO_VERIFY/UNKNOWN). NOT the same as FAILED: the application likely was submitted, we simply can't prove it — tracking still proceeds. */
     public static final String STATUS_VERIFICATION_FAILED = "VERIFICATION_FAILED";
+    /** Phase 7.16.5 — reached from SUBMITTING instead of SUBMITTED whenever no genuine automated submission occurred (no configured/eligible execution backend, or the Gap D guest-apply form-screenshot approval is still pending). Never render this as "Submitted"/"Completed" — the package is real and ready, but the user must complete submission themselves. */
+    public static final String STATUS_WAITING_MANUAL_SUBMISSION = "WAITING_MANUAL_SUBMISSION";
     public static final String STATUS_TRACKING = "TRACKING";
     public static final String STATUS_COMPLETED = "COMPLETED";
     public static final String STATUS_FAILED = "FAILED";

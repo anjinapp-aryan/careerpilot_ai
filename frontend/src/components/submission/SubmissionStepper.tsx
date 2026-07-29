@@ -13,7 +13,7 @@ const PHASES: { label: string; statuses: string[] }[] = [
   { label: 'Prepare package', statuses: ['PACKAGE_READY', 'REVIEW_READY', 'COMPANY_READY', 'STAR_READY'] },
   { label: 'Ready', statuses: ['READY_FOR_SUBMISSION'] },
   { label: 'Human approval', statuses: ['WAITING_APPROVAL'] },
-  { label: 'Submit', statuses: ['SUBMITTING', 'SUBMITTED', 'VERIFIED'] },
+  { label: 'Submit', statuses: ['SUBMITTING', 'SUBMITTED', 'VERIFIED', 'VERIFICATION_FAILED', 'WAITING_MANUAL_SUBMISSION'] },
   { label: 'Complete', statuses: ['TRACKING', 'COMPLETED'] },
 ];
 
@@ -43,7 +43,9 @@ export function SubmissionStepper({ session }: { session: ApplicationSubmissionS
     if (i > activeIndex) return 'pending';
     // i === activeIndex
     if (failed) return 'failed';
-    if (status === 'WAITING_APPROVAL') return 'approval';
+    // WAITING_MANUAL_SUBMISSION means no automated submission actually happened — never render it
+    // as a spinning "in progress" step, which would imply completion is imminent on its own.
+    if (status === 'WAITING_APPROVAL' || status === 'WAITING_MANUAL_SUBMISSION') return 'approval';
     return 'active';
   }
 

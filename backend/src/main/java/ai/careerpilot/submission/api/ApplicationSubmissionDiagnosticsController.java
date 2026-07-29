@@ -48,6 +48,9 @@ public class ApplicationSubmissionDiagnosticsController {
         long failed = sessions.countByStatus(ApplicationSubmissionSession.STATUS_FAILED);
         long waitingApproval = sessions.countByStatus(ApplicationSubmissionSession.STATUS_WAITING_APPROVAL);
         long submitting = sessions.countByStatus(ApplicationSubmissionSession.STATUS_SUBMITTING);
+        // Phase 7.16.5 — truthfulness gate: package prepared but no genuine automated submission
+        // occurred (no eligible execution backend, or Gap D's screenshot approval still pending).
+        long waitingManualSubmission = sessions.countByStatus(ApplicationSubmissionSession.STATUS_WAITING_MANUAL_SUBMISSION);
         long total = sessions.count();
 
         out.put("sessionsTotal", total);
@@ -55,6 +58,7 @@ public class ApplicationSubmissionDiagnosticsController {
         out.put("sessionsFailed", failed);
         out.put("sessionsWaitingApproval", waitingApproval);
         out.put("sessionsSubmitting", submitting);
+        out.put("sessionsWaitingManualSubmission", waitingManualSubmission);
 
         int queueSize = executor.getThreadPoolExecutor().getQueue().size();
         out.put("executorActiveCount", executor.getActiveCount());

@@ -58,9 +58,23 @@ class SubmissionStateMachineTest {
     }
 
     @Test
-    void submittingAdvancesOnlyToSubmitted() {
+    void submittingCanBranchToSubmittedOrWaitingManualSubmission() {
+        // Phase 7.16.5 — SUBMITTING only reaches SUBMITTED when a genuine automated submission
+        // occurred; otherwise it routes to WAITING_MANUAL_SUBMISSION instead of fabricating SUBMITTED.
         assertTrue(SubmissionStateMachine.canTransition(STATUS_SUBMITTING, STATUS_SUBMITTED));
+        assertTrue(SubmissionStateMachine.canTransition(STATUS_SUBMITTING, STATUS_WAITING_MANUAL_SUBMISSION));
         assertFalse(SubmissionStateMachine.canTransition(STATUS_SUBMITTING, STATUS_VERIFIED));
+    }
+
+    @Test
+    void waitingManualSubmissionHasNoForwardTransitionsButCanFail() {
+        // A deliberate resting state (like WAITING_APPROVAL) — not currently auto-progressed
+        // anywhere; only fail-closed FAILED is legal until a future manual-confirm action exists.
+        assertFalse(SubmissionStateMachine.isTerminal(STATUS_WAITING_MANUAL_SUBMISSION));
+        assertTrue(SubmissionStateMachine.isKnown(STATUS_WAITING_MANUAL_SUBMISSION));
+        assertFalse(SubmissionStateMachine.canTransition(STATUS_WAITING_MANUAL_SUBMISSION, STATUS_TRACKING));
+        assertFalse(SubmissionStateMachine.canTransition(STATUS_WAITING_MANUAL_SUBMISSION, STATUS_SUBMITTED));
+        assertTrue(SubmissionStateMachine.canTransition(STATUS_WAITING_MANUAL_SUBMISSION, STATUS_FAILED));
     }
 
     @Test
@@ -105,8 +119,8 @@ class SubmissionStateMachineTest {
         for (String active : new String[] {
                 STATUS_CREATED, STATUS_VALIDATING, STATUS_PACKAGE_READY, STATUS_REVIEW_READY,
                 STATUS_COMPANY_READY, STATUS_STAR_READY, STATUS_READY_FOR_SUBMISSION, STATUS_WAITING_APPROVAL,
-                STATUS_SUBMITTING, STATUS_SUBMITTED, STATUS_VERIFYING, STATUS_VERIFIED,
-                STATUS_VERIFICATION_FAILED, STATUS_TRACKING}) {
+                STATUS_SUBMITTING, STATUS_SUBMITTED, STATUS_WAITING_MANUAL_SUBMISSION, STATUS_VERIFYING,
+                STATUS_VERIFIED, STATUS_VERIFICATION_FAILED, STATUS_TRACKING}) {
             assertTrue(SubmissionStateMachine.canTransition(active, STATUS_FAILED), active + " -> FAILED must be legal");
         }
     }

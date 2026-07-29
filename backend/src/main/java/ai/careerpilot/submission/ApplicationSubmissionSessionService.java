@@ -409,16 +409,28 @@ public class ApplicationSubmissionSessionService {
         if (execution.isPresent()) {
             session.setApplicationExecutionId(execution.get().getId());
         }
-        boolean executionFailed = execution.isPresent()
-                && ApplicationExecution.STATUS_FAILED.equals(execution.get().getExecutionStatus());
+        String executionStatus = execution.map(ApplicationExecution::getExecutionStatus).orElse(null);
+        boolean executionFailed = ApplicationExecution.STATUS_FAILED.equals(executionStatus);
         if (executionFailed) {
             fail(session, "execution failed: " + execution.get().getFailureReason());
             return;
         }
 
-        // Step 10 — the provider always safely returns HUMAN_REVIEW today (no credentialed
-        // integration exists anywhere) — treat that as SUBMITTED ("handed off for human completion"),
-        // matching autopilot's existing safe semantics. A real ATSConnector SUBMITTED also counts.
+        // Step 10 — truthfulness gate (Phase 7.16.5): only advance to SUBMITTED when the
+        // underlying ApplicationExecution genuinely reached SUBMITTED (a real ATSConnector or
+        // Playwright guest-apply click actually happened). Every other outcome — ABORTED (no
+        // execution backend configured, or a connector present but not guest-apply-eligible),
+        // AWAITING_APPROVAL (Gap D's own form-screenshot approval still pending, not yet clicked),
+        // or no execution row at all (execution engine disabled) — means no company ever received
+        // this application. Those cases stop at WAITING_MANUAL_SUBMISSION: the package is real and
+        // ready, but the user must complete submission themselves. This intentionally replaces the
+        // prior "treat ABORTED as SUBMITTED, matching autopilot's safe semantics" behavior, which
+        // mislabeled the vast majority of runs (every ATS except Greenhouse/Lever) as submitted.
+        boolean genuinelySubmitted = ApplicationExecution.STATUS_SUBMITTED.equals(executionStatus);
+        if (!genuinelySubmitted) {
+            advance(session, ApplicationSubmissionSession.STATUS_WAITING_MANUAL_SUBMISSION);
+            return;
+        }
         advance(session, ApplicationSubmissionSession.STATUS_SUBMITTED);
 
         // Step 11 — verify (Phase 7.16.1): VERIFIED is now gated behind real evidence rather than

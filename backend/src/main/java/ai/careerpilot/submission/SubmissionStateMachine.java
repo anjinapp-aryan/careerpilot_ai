@@ -27,7 +27,15 @@ public final class SubmissionStateMachine {
             Map.entry(STATUS_STAR_READY, Set.of(STATUS_READY_FOR_SUBMISSION)),
             Map.entry(STATUS_READY_FOR_SUBMISSION, Set.of(STATUS_WAITING_APPROVAL, STATUS_SUBMITTING)),
             Map.entry(STATUS_WAITING_APPROVAL, Set.of(STATUS_SUBMITTING)),
-            Map.entry(STATUS_SUBMITTING, Set.of(STATUS_SUBMITTED)),
+            // Phase 7.16.5 — SUBMITTING no longer advances to SUBMITTED unconditionally. It only
+            // does so when the underlying ApplicationExecution genuinely reached SUBMITTED (a real
+            // ATS-connector or Playwright guest-apply click actually happened); every other
+            // execution outcome (no backend configured, ineligible connector, or the Gap D
+            // form-screenshot approval still pending) routes to WAITING_MANUAL_SUBMISSION instead —
+            // a deliberate dead end for now (like WAITING_APPROVAL, resting until a future
+            // manual-confirm action), never silently relabeled SUBMITTED.
+            Map.entry(STATUS_SUBMITTING, Set.of(STATUS_SUBMITTED, STATUS_WAITING_MANUAL_SUBMISSION)),
+            Map.entry(STATUS_WAITING_MANUAL_SUBMISSION, Set.of()),
             // Phase 7.16.1 — VERIFYING inserted so VERIFIED is never a bare transition; it can
             // only be reached after a real evidence check. VERIFICATION_FAILED is deliberately
             // NOT terminal — it still proceeds to TRACKING (the application likely was

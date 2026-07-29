@@ -18,7 +18,20 @@ const STATUS_TONE: Record<string, BadgeTone> = {
   TRACKING: 'info',
   SUBMITTING: 'info',
   WAITING_APPROVAL: 'warning',
+  WAITING_MANUAL_SUBMISSION: 'warning',
+  VERIFICATION_FAILED: 'warning',
   FAILED: 'danger',
+};
+
+/**
+ * Explicit copy overrides for statuses where the honest wording matters — never let a
+ * mechanically-generated label imply a real submission occurred when it didn't (see CLAUDE.md's
+ * application-submission truthfulness discipline: WAITING_MANUAL_SUBMISSION means no ATS
+ * connector/Playwright click ever happened, so it must never read as "submitted"/"complete").
+ */
+const STATUS_LABELS: Record<string, string> = {
+  WAITING_MANUAL_SUBMISSION: 'Package ready — submit manually',
+  PACKAGE_READY: 'Application package ready',
 };
 
 function toneFor(status: string): BadgeTone {
@@ -26,7 +39,7 @@ function toneFor(status: string): BadgeTone {
 }
 
 function humanStatus(status: string): string {
-  return status.replaceAll('_', ' ').toLowerCase().replace(/^\w/, (c) => c.toUpperCase());
+  return STATUS_LABELS[status] ?? status.replaceAll('_', ' ').toLowerCase().replace(/^\w/, (c) => c.toUpperCase());
 }
 
 function SubmissionRow({ session }: { session: ApplicationSubmissionSession }) {
@@ -82,6 +95,14 @@ function SubmissionRow({ session }: { session: ApplicationSubmissionSession }) {
           {session.failureReason && (
             <p className="mb-3 rounded-md bg-danger/10 px-3 py-2 text-xs text-danger">
               {session.failureReason}
+            </p>
+          )}
+
+          {session.status === 'WAITING_MANUAL_SUBMISSION' && (
+            <p className="mb-3 rounded-md bg-warning/10 px-3 py-2 text-xs text-warning">
+              Automated submission isn't available for this employer's application system, so nothing
+              was sent yet. Your tailored resume, cover letter, and answers below are ready — use them
+              to complete the application yourself on the company's site.
             </p>
           )}
 

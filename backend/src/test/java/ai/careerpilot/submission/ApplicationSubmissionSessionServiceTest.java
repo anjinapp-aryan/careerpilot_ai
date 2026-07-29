@@ -439,12 +439,57 @@ class ApplicationSubmissionSessionServiceTest {
     }
 
     @Test
-    void runPipelineTreatsEmptyExecutionResultAsNonFailure() {
+    void runPipelineTreatsEmptyExecutionResultAsNonFailureButWaitingManualSubmission() {
+        // Phase 7.16.5 — no execution row at all (execution engine disabled) is not a FAILED
+        // pipeline, but it is also not a genuine submission: never claim COMPLETED/SUBMITTED here.
         when(executionService.execute(userId, jobId, pkg.getId())).thenReturn(Optional.empty());
         ApplicationSubmissionSessionService s = service(true, false, true, false);
         s.runPipeline(sessionId);
-        assertEquals(ApplicationSubmissionSession.STATUS_COMPLETED, session.getStatus());
+        assertEquals(ApplicationSubmissionSession.STATUS_WAITING_MANUAL_SUBMISSION, session.getStatus());
         assertNull(session.getApplicationExecutionId());
+        verifyNoInteractions(lifecycleService, learningPipeline);
+        verify(applicationService, never()).create(any(), any(), any());
+        verify(applicationService, never()).updateStatus(any(), any(), any(), any());
+    }
+
+    @Test
+    void runPipelineAbortedExecutionRoutesToWaitingManualSubmissionNotSubmitted() {
+        // Phase 7.16.5 — the core truthfulness bug: an ABORTED execution outcome (no execution
+        // backend configured, or a connector present but not guest-apply-eligible — the overwhelming
+        // majority of real traffic, since only Greenhouse/Lever have any real automation) must never
+        // be relabeled SUBMITTED/COMPLETED.
+        ApplicationExecution aborted = ApplicationExecution.builder().id(UUID.randomUUID())
+                .userId(userId).jobId(jobId).applicationPackageId(pkg.getId())
+                .executionStatus(ApplicationExecution.STATUS_ABORTED).executionType(ApplicationExecution.TYPE_MANUAL)
+                .attemptCount(1).failureReason("submission not enabled in this build").build();
+        when(executionService.execute(userId, jobId, pkg.getId())).thenReturn(Optional.of(aborted));
+
+        ApplicationSubmissionSessionService s = service(true, false, true, false);
+        s.runPipeline(sessionId);
+
+        assertEquals(ApplicationSubmissionSession.STATUS_WAITING_MANUAL_SUBMISSION, session.getStatus());
+        assertEquals(aborted.getId(), session.getApplicationExecutionId());
+        verifyNoInteractions(lifecycleService, learningPipeline);
+        verify(applicationService, never()).create(any(), any(), any());
+        verify(applicationService, never()).updateStatus(any(), any(), any(), any());
+    }
+
+    @Test
+    void runPipelineAwaitingApprovalExecutionRoutesToWaitingManualSubmissionNotSubmitted() {
+        // Gap D's guest-apply flow can return AWAITING_APPROVAL synchronously (the form is filled and
+        // screenshotted, but the actual submit click hasn't happened yet, pending human approval of
+        // that screenshot) — this must not be mistaken for a completed submission either.
+        ApplicationExecution awaiting = ApplicationExecution.builder().id(UUID.randomUUID())
+                .userId(userId).jobId(jobId).applicationPackageId(pkg.getId())
+                .executionStatus(ApplicationExecution.STATUS_AWAITING_APPROVAL)
+                .executionType(ApplicationExecution.TYPE_ATS_CONNECTOR).attemptCount(1).build();
+        when(executionService.execute(userId, jobId, pkg.getId())).thenReturn(Optional.of(awaiting));
+
+        ApplicationSubmissionSessionService s = service(true, false, true, false);
+        s.runPipeline(sessionId);
+
+        assertEquals(ApplicationSubmissionSession.STATUS_WAITING_MANUAL_SUBMISSION, session.getStatus());
+        verifyNoInteractions(lifecycleService, learningPipeline);
     }
 
     @Test

@@ -8,7 +8,6 @@ import ai.careerpilot.mission.MissionNotFoundException;
 import ai.careerpilot.repo.CareerMissionRepository;
 import ai.careerpilot.repo.SkillGapAnalysisRepository;
 import ai.careerpilot.workflowregistry.WorkflowRegistryService;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -29,7 +28,6 @@ class SkillGapWorkflowServiceTest {
     private final WorkflowRegistryService registry = mock(WorkflowRegistryService.class);
     private final SkillGapAgentServiceClient agentClient = mock(SkillGapAgentServiceClient.class);
     private final SkillGapAnalysisRepository analyses = mock(SkillGapAnalysisRepository.class);
-    private final ObjectMapper mapper = new ObjectMapper();
 
     private SkillGapWorkflowService service;
 
@@ -38,7 +36,7 @@ class SkillGapWorkflowServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new SkillGapWorkflowService(missions, registry, agentClient, analyses, mapper);
+        service = new SkillGapWorkflowService(missions, registry, agentClient, analyses);
         ReflectionTestUtils.setField(service, "enabled", true);
         when(analyses.save(any(SkillGapAnalysis.class))).thenAnswer(inv -> {
             SkillGapAnalysis a = inv.getArgument(0);

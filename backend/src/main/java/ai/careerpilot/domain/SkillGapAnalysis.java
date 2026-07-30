@@ -35,7 +35,7 @@ public class SkillGapAnalysis {
     @Column(nullable = false, length = 20) @Builder.Default
     private String status = "QUEUED";
 
-    @JdbcTypeCode(SqlTypes.JSON) @Column(columnDefinition = "jsonb")
+    @JdbcTypeCode(SqlTypes.JSON) @Column(name = "result", columnDefinition = "jsonb")
     private String resultJson;
 
     @Column(name = "error_message", columnDefinition = "text") private String errorMessage;

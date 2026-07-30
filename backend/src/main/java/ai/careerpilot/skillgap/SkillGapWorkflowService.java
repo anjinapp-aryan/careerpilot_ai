@@ -11,6 +11,7 @@ import ai.careerpilot.service.profile.JsonLists;
 import ai.careerpilot.workflowregistry.WorkflowRegistryService;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -41,19 +42,24 @@ public class SkillGapWorkflowService {
     private final WorkflowRegistryService registry;
     private final SkillGapAgentServiceClient agentClient;
     private final SkillGapAnalysisRepository analyses;
-    private final ObjectMapper mapper;
+    // Owns its own ObjectMapper rather than autowiring one: this app's default Spring-managed
+    // ObjectMapper bean (via spring-boot-starter-jackson) is Jackson 3 (tools.jackson.databind),
+    // while every JSON dependency actually used here (Jackson annotations/TypeReference on the
+    // agent-service response DTOs, jackson-datatype-jsr310) is classic Jackson 2
+    // (com.fasterxml.jackson) — no Jackson 2 ObjectMapper bean exists anywhere in this app to
+    // inject. A local instance with JavaTimeModule registered (for the Instant fields on
+    // SkillGapAnalysisResponse) is self-contained and doesn't affect any other bean.
+    private final ObjectMapper mapper = new ObjectMapper().registerModule(new JavaTimeModule());
 
     @Value("${skillgap.workflow.enabled:false}")
     private boolean enabled;
 
     public SkillGapWorkflowService(CareerMissionRepository missions, WorkflowRegistryService registry,
-                                    SkillGapAgentServiceClient agentClient, SkillGapAnalysisRepository analyses,
-                                    ObjectMapper mapper) {
+                                    SkillGapAgentServiceClient agentClient, SkillGapAnalysisRepository analyses) {
         this.missions = missions;
         this.registry = registry;
         this.agentClient = agentClient;
         this.analyses = analyses;
-        this.mapper = mapper;
     }
 
     /**

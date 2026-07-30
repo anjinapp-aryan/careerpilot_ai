@@ -14,6 +14,8 @@ import {
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useWorkflowStatus } from '@/hooks/useWorkflowStatus';
+import { useObservability, healthTone } from '@/hooks/useObservability';
+import { runStatusTone, runStatusLabel, currentStage, formatWorkflowDuration } from '@/lib/workflowStatus';
 import { PageHeader } from '@/components/common/PageHeader';
 import { ErrorBoundary } from '@/components/common/ErrorBoundary';
 import { WorkflowForm } from '@/components/workflow/WorkflowForm';
@@ -47,23 +49,20 @@ const PIPELINE = [
   'Application Tracking',
 ];
 
-const RUN_STATUS: Record<string, { icon: React.ElementType; tone: BadgeTone; label: string; spin?: boolean }> = {
-  COMPLETED: { icon: CheckCircle2, tone: 'success', label: 'Completed' },
-  ERROR: { icon: XCircle, tone: 'danger', label: 'Failed' },
-  FAILED: { icon: XCircle, tone: 'danger', label: 'Failed' },
-  REJECTED: { icon: XCircle, tone: 'danger', label: 'Rejected' },
-  RUNNING: { icon: Loader2, tone: 'info', label: 'Running', spin: true },
-  IN_PROGRESS: { icon: Loader2, tone: 'info', label: 'Running', spin: true },
-  INTERRUPTED: { icon: AlertTriangle, tone: 'warning', label: 'Needs approval' },
+/** Icon + spin decoration per run status — tone/label now come from the shared `lib/workflowStatus`. */
+const RUN_STATUS_ICON: Record<string, { icon: React.ElementType; spin?: boolean }> = {
+  COMPLETED: { icon: CheckCircle2 },
+  ERROR: { icon: XCircle },
+  FAILED: { icon: XCircle },
+  REJECTED: { icon: XCircle },
+  RUNNING: { icon: Loader2, spin: true },
+  IN_PROGRESS: { icon: Loader2, spin: true },
+  INTERRUPTED: { icon: AlertTriangle },
 };
 
-/** Compact human label for a millisecond duration (e.g. "1.4s", "820ms", "2m 5s"). */
-function formatDuration(ms: number): string {
-  if (ms < 1000) return `${Math.round(ms)}ms`;
-  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
-  const m = Math.floor(ms / 60_000);
-  const s = Math.round((ms % 60_000) / 1000);
-  return `${m}m ${s}s`;
+function runStatusConfig(status: string): { icon: React.ElementType; tone: BadgeTone; label: string; spin?: boolean } {
+  const iconCfg = RUN_STATUS_ICON[status] ?? { icon: Clock };
+  return { ...iconCfg, tone: runStatusTone(status), label: runStatusLabel(status) };
 }
 
 /** Format an ISO timestamp as a short local date+time, tolerant of bad input. */
@@ -241,15 +240,6 @@ export default function Workflow() {
 // No auth required; every stage reads NOT_CONFIGURED at stock (dark) defaults.
 // ---------------------------------------------------------------------------
 
-const HEALTH_TONE: Record<string, BadgeTone> = {
-  UP: 'success',
-  HEALTHY: 'success',
-  DEGRADED: 'warning',
-  DOWN: 'danger',
-  NOT_CONFIGURED: 'neutral',
-  UNKNOWN: 'neutral',
-};
-
 function humanizeStage(key: string): string {
   return key.replace(/([A-Z])/g, ' $1').replace(/^./, (c) => c.toUpperCase()).trim();
 }
@@ -272,7 +262,7 @@ function StageRows({ section }: { section: Record<string, unknown> }) {
               <Badge tone={stage.enabled ? 'info' : 'neutral'}>{stage.enabled ? 'enabled' : 'off'}</Badge>
             </td>
             <td className="py-2 pr-4">
-              <Badge tone={HEALTH_TONE[health.toUpperCase()] ?? 'neutral'}>{health}</Badge>
+              <Badge tone={healthTone(health)}>{health}</Badge>
             </td>
             <td className="py-2 pr-4 tabular-nums text-muted-foreground">{queue}</td>
           </tr>
@@ -283,12 +273,7 @@ function StageRows({ section }: { section: Record<string, unknown> }) {
 }
 
 function StageDiagnostics() {
-  const { data, isLoading, isError } = useQuery<Record<string, any>>({
-    queryKey: ['observability'],
-    queryFn: async () => (await api.get('/api/diagnostics/observability')).data,
-    retry: false,
-    staleTime: 30_000,
-  });
+  const { data, isLoading, isError } = useObservability<Record<string, any>>();
 
   return (
     <Card>
@@ -298,7 +283,7 @@ function StageDiagnostics() {
           <p className="text-sm text-muted-foreground">Per-stage health &amp; queue depth across the workflow and execution engines.</p>
         </div>
         {data?.overall && (
-          <Badge tone={HEALTH_TONE[String(data.overall).toUpperCase()] ?? 'neutral'}>{data.overall}</Badge>
+          <Badge tone={healthTone(String(data.overall))}>{data.overall}</Badge>
         )}
       </CardHeader>
       <CardContent>
@@ -384,18 +369,10 @@ function PipelineOverview({
 
   const total = agents.length;
   const completed = agents.filter((a) => a.status === 'COMPLETED').length;
-  // "Current stage" = where attention is owed: a failure first, then an active/awaiting
-  // stage, then the next pending one. Surfacing the failed stage (instead of the stage
-  // after it) keeps this label consistent with a FAILED run badge.
-  const current =
-    agents.find((a) => a.status === 'FAILED' || a.status === 'REJECTED') ??
-    agents.find((a) => a.status === 'ACTIVE' || a.status === 'WAITING_FOR_APPROVAL') ??
-    agents.find((a) => a.status === 'PENDING') ??
-    // All stages COMPLETED → the current stage is the final one (Application Tracking),
-    // so a finished run reads "Current stage: Application Tracking" rather than "—".
-    agents[agents.length - 1];
+  // "Current stage" = where attention is owed (shared with RunCard + MissionDashboard's AiActivitySection).
+  const current = currentStage(agents);
   const runStatus = data?.status ?? latestRun.status;
-  const cfg = RUN_STATUS[runStatus] ?? { icon: Clock, tone: 'neutral' as BadgeTone, label: runStatus };
+  const cfg = runStatusConfig(runStatus);
   const StatusIcon = cfg.icon;
   const pct = total > 0 ? Math.round((completed / total) * 100) : 0;
 
@@ -501,18 +478,14 @@ function RunCard({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusRequest?.nonce]);
 
-  const cfg = RUN_STATUS[run.status] ?? { icon: Clock, tone: 'neutral' as BadgeTone, label: run.status };
+  const cfg = runStatusConfig(run.status);
   const Icon = cfg.icon;
   const hasScores =
     run.resumeScore != null || run.atsScore != null || run.jobMatchScore != null || run.interviewReadinessScore != null;
 
   // Phase 9 — at-a-glance health, derived from the same agents[] the timeline renders.
   const agents = run.agents ?? [];
-  const currentStage =
-    agents.find((a) => a.status === 'FAILED' || a.status === 'REJECTED') ??
-    agents.find((a) => a.status === 'ACTIVE' || a.status === 'WAITING_FOR_APPROVAL') ??
-    agents.find((a) => a.status === 'PENDING') ??
-    agents[agents.length - 1];
+  const currentAgentStage = currentStage(agents);
   const totalDurationMs = agents.reduce((sum, a) => sum + (a.durationMs ?? 0), 0);
   const updatedLabel = run.updatedAt ? formatWhen(run.updatedAt) : null;
   const isRejected = run.status === 'REJECTED';
@@ -538,9 +511,9 @@ function RunCard({
           </Badge>
 
           {/* Phase 9 — current stage + last updated, visible without expanding. */}
-          {currentStage && run.status !== 'COMPLETED' && (
+          {currentAgentStage && run.status !== 'COMPLETED' && (
             <span className="hidden text-xs text-muted-foreground md:inline">
-              {currentStage.name}
+              {currentAgentStage.name}
             </span>
           )}
           {updatedLabel && (
@@ -580,7 +553,7 @@ function RunCard({
                 </span>
                 {totalDurationMs > 0 && (
                   <span className="flex items-center gap-1 normal-case tabular-nums">
-                    <Clock className="h-3 w-3" /> {formatDuration(totalDurationMs)} total
+                    <Clock className="h-3 w-3" /> {formatWorkflowDuration(totalDurationMs)} total
                   </span>
                 )}
               </div>

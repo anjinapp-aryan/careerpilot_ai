@@ -45,6 +45,8 @@ import { Input, Textarea, Label } from '@/components/ui/input';
 import { Tooltip } from '@/components/ui/tooltip';
 import { useToast } from '@/components/ui/toast';
 import { useWorkflowStatus } from '@/hooks/useWorkflowStatus';
+import { useObservability, healthTone } from '@/hooks/useObservability';
+import { runStatusTone, runStatusLabel, currentStage } from '@/lib/workflowStatus';
 import type { WorkflowRun, WorkflowAgent, AgentStatus, CareerDecisionMemory } from '@/types/workflow';
 
 // ---------------------------------------------------------------------------
@@ -502,12 +504,7 @@ function MissionControlDashboard({ mission }: { mission: MissionResponse }) {
     retry: false,
   });
 
-  const observabilityQuery = useQuery<{ overall?: string }>({
-    queryKey: ['mission', 'observability'],
-    queryFn: async () => { try { return (await api.get('/api/diagnostics/observability')).data; } catch { return {}; } },
-    retry: false,
-    refetchInterval: 30_000,
-  });
+  const observabilityQuery = useObservability<{ overall?: string }>(30_000);
 
   const runOrchestrator = useMutation({
     mutationFn: async () => (await api.post(`/api/orchestrator/run/${mission.id}`)).data,
@@ -986,11 +983,7 @@ function AiActivitySection({ latestRun }: { latestRun: WorkflowRun | undefined }
   }
 
   const completed = agents.filter((a) => a.status === 'COMPLETED').length;
-  const current =
-    agents.find((a) => a.status === 'FAILED' || a.status === 'REJECTED') ??
-    agents.find((a) => a.status === 'ACTIVE' || a.status === 'WAITING_FOR_APPROVAL') ??
-    agents.find((a) => a.status === 'PENDING') ??
-    agents[agents.length - 1];
+  const current = currentStage(agents);
   const pct = Math.round((completed / agents.length) * 100);
   const isRunning = runStatus === 'RUNNING' || current?.status === 'ACTIVE';
   const currentPersona = current ? AGENT_PERSONAS[current.name] : undefined;
@@ -1078,14 +1071,6 @@ function AiActivitySection({ latestRun }: { latestRun: WorkflowRun | undefined }
 // Workflow Queue — real recent WorkflowRuns, grouped by status
 // ---------------------------------------------------------------------------
 
-const RUN_QUEUE_GROUP: Record<string, { label: string; tone: BadgeTone }> = {
-  RUNNING: { label: 'Running', tone: 'primary' },
-  INTERRUPTED: { label: 'Approval required', tone: 'warning' },
-  COMPLETED: { label: 'Completed', tone: 'success' },
-  FAILED: { label: 'Blocked', tone: 'danger' },
-  REJECTED: { label: 'Blocked', tone: 'danger' },
-};
-
 function WorkflowQueueCard({ runs, isLoading }: { runs: WorkflowRun[]; isLoading: boolean }) {
   return (
     <Card>
@@ -1097,18 +1082,15 @@ function WorkflowQueueCard({ runs, isLoading }: { runs: WorkflowRun[]; isLoading
           <EmptyState compact icon={Activity} title="No runs yet" />
         ) : (
           <ul className="space-y-2">
-            {runs.slice(0, 6).map((r) => {
-              const g = RUN_QUEUE_GROUP[r.status] ?? { label: r.status, tone: 'neutral' as BadgeTone };
-              return (
-                <li key={r.threadId} className="flex items-center justify-between gap-3 rounded-lg border border-border p-3 text-sm">
-                  <div className="min-w-0">
-                    <p className="truncate font-medium text-foreground">{r.targetRole || 'Career workflow'}</p>
-                    {r.createdAt && <p className="text-xs text-muted-foreground">{new Date(r.createdAt).toLocaleString()}</p>}
-                  </div>
-                  <Badge tone={g.tone} className="shrink-0">{g.label}</Badge>
-                </li>
-              );
-            })}
+            {runs.slice(0, 6).map((r) => (
+              <li key={r.threadId} className="flex items-center justify-between gap-3 rounded-lg border border-border p-3 text-sm">
+                <div className="min-w-0">
+                  <p className="truncate font-medium text-foreground">{r.targetRole || 'Career workflow'}</p>
+                  {r.createdAt && <p className="text-xs text-muted-foreground">{new Date(r.createdAt).toLocaleString()}</p>}
+                </div>
+                <Badge tone={runStatusTone(r.status)} className="shrink-0">{runStatusLabel(r.status)}</Badge>
+              </li>
+            ))}
           </ul>
         )}
       </CardContent>
@@ -1150,12 +1132,11 @@ function CareerMemoryCard({ memories, isLoading }: { memories: CareerDecisionMem
 // (confirmed by grep) so they're intentionally not represented as fake dots.
 // ---------------------------------------------------------------------------
 
-const OPS_HEALTH_TONE: Record<string, BadgeTone> = { UP: 'success', DEGRADED: 'warning', DOWN: 'danger', NOT_CONFIGURED: 'neutral' };
 const OPS_HEALTH_ICON: Record<string, typeof CheckCircle2> = { UP: CheckCircle2, DEGRADED: Clock, DOWN: XCircle, NOT_CONFIGURED: Circle };
 
 function OperationsIndicator({ overall }: { overall?: string }) {
   if (!overall) return null;
-  const tone = OPS_HEALTH_TONE[overall] ?? 'neutral';
+  const tone = healthTone(overall);
   const Icon = OPS_HEALTH_ICON[overall] ?? Circle;
   return (
     <Tooltip content="AI platform status">

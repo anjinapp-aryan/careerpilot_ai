@@ -44,6 +44,8 @@ import { KpiCard } from '@/components/dashboard/KpiCard';
 import { DailyDiscoveryPanel } from '@/components/dashboard/DailyDiscoveryPanel';
 import { CompanyIntelligenceWidget } from '@/components/dashboard/CompanyIntelligenceWidget';
 import { CopilotAvatar } from '@/components/copilot/CopilotAvatar';
+import { useObservability, healthTone } from '@/hooks/useObservability';
+import { runStatusTone, runStatusLabel } from '@/lib/workflowStatus';
 import type { CareerIntelligenceRow, DailyDiscoverySnapshot, RecommendedJobsResponse, WorkflowRun } from '@/types/workflow';
 
 interface Snapshot {
@@ -59,15 +61,6 @@ interface Snapshot {
   /** Phase 5O — additive; null until the daily discovery agent has run for this user. */
   dailyDiscovery?: DailyDiscoverySnapshot | null;
 }
-
-const RUN_TONE: Record<string, string> = {
-  COMPLETED: 'success',
-  ERROR: 'danger',
-  FAILED: 'danger',
-  RUNNING: 'info',
-  IN_PROGRESS: 'info',
-  INTERRUPTED: 'warning',
-};
 
 const INSIGHT_TONE: Record<string, string> = {
   primary: 'bg-primary/10 text-primary',
@@ -337,7 +330,7 @@ export default function Dashboard() {
                           ATS <span className="font-semibold text-foreground">{r.atsScore}</span>
                         </span>
                       )}
-                      <Badge tone={(RUN_TONE[r.status] as any) ?? 'neutral'}>{r.status}</Badge>
+                      <Badge tone={runStatusTone(r.status)}>{runStatusLabel(r.status)}</Badge>
                       {r.createdAt && (
                         <span className="hidden text-xs text-muted-foreground md:block">
                           {new Date(r.createdAt).toLocaleDateString()}
@@ -365,27 +358,6 @@ export default function Dashboard() {
 interface LakeStatus {
   enabled?: boolean;
   lakeCounts?: { discovered?: number; normalized?: number; deduplicated?: number; readyForAi?: number };
-}
-
-interface ObservabilitySnapshot {
-  workflow?: { health?: string };
-  execution?: { health?: string };
-  providers?: { health?: string; providers?: Record<string, string> };
-  overall?: string;
-}
-
-
-const HEALTH_TONE: Record<string, 'success' | 'warning' | 'danger' | 'neutral'> = {
-  UP: 'success',
-  HEALTHY: 'success',
-  DEGRADED: 'warning',
-  DOWN: 'danger',
-  NOT_CONFIGURED: 'neutral',
-  UNKNOWN: 'neutral',
-};
-
-function healthTone(v?: string): 'success' | 'warning' | 'danger' | 'neutral' {
-  return HEALTH_TONE[(v ?? '').toUpperCase()] ?? 'neutral';
 }
 
 function PlatformIntelligence() {
@@ -418,11 +390,7 @@ function PlatformIntelligence() {
     queryFn: async () => (await api.get('/api/jobs/discovery/lake/status')).data as LakeStatus,
     retry: false,
   });
-  const obs = useQuery({
-    queryKey: ['dashboard', 'observability'],
-    queryFn: async () => (await api.get('/api/diagnostics/observability')).data as ObservabilitySnapshot,
-    retry: false,
-  });
+  const obs = useObservability();
   const career = useQuery({
     queryKey: ['dashboard', 'career-intelligence'],
     queryFn: async () => (await api.get('/api/workflow/career-intelligence')).data as CareerIntelligenceRow[],

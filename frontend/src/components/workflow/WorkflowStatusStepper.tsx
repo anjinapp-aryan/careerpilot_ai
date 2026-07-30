@@ -21,6 +21,7 @@ import { useWorkflowStatus } from '@/hooks/useWorkflowStatus';
 import { StatusBadge } from './StatusBadge';
 import { StageDetailPanel } from './StageDetailPanel';
 import { cn } from '@/lib/cn';
+import { formatWorkflowDuration as formatDuration } from '@/lib/workflowStatus';
 import type { AgentStatus, WorkflowStatusStepperProps, WorkflowAgent } from '@/types/workflow';
 
 // ---------------------------------------------------------------------------
@@ -83,12 +84,6 @@ const AGENT_ICONS: Record<string, React.ElementType> = {
 
 function getAgentIcon(name: string): React.ElementType {
   return AGENT_ICONS[name] ?? ClipboardList;
-}
-
-/** Render a millisecond duration as a compact human label (e.g. "1.4s", "820ms"). */
-function formatDuration(ms: number): string {
-  if (ms < 1000) return `${Math.round(ms)}ms`;
-  return `${(ms / 1000).toFixed(1)}s`;
 }
 
 // ---------------------------------------------------------------------------

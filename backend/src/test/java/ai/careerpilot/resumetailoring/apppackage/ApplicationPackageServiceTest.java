@@ -67,7 +67,16 @@ class ApplicationPackageServiceTest {
         when(profileVersions.findByUserIdOrderByCreatedAtDesc(any())).thenReturn(List.of());
         when(behaviorProfiles.findById(any())).thenReturn(Optional.empty());
         when(recommendationAudit.findFirstByUserIdAndJobIdOrderByCreatedAtDesc(any(), any())).thenReturn(Optional.empty());
-        when(packages.findByUserIdAndJobId(any(), any())).thenReturn(Optional.empty());
+        // The head row is now claimed conflict-tolerantly before being read, so "no package yet"
+        // means the claim creates a version-0 row which the read then returns. The default stubs
+        // model that; a test needing an EXISTING package overrides findByUserIdAndJobId with its
+        // own row, which must keep working — hence no side effects in these stubs.
+        when(packages.claimHeadIfAbsent(any(), any())).thenReturn(1);
+        when(packages.findByUserIdAndJobId(any(), any())).thenReturn(Optional.of(
+                ApplicationPackage.builder()
+                        .id(UUID.randomUUID()).userId(userId).jobId(jobId)
+                        .packageVersion(0).status(ApplicationPackage.STATUS_INCOMPLETE)
+                        .build()));
         when(packages.save(any(ApplicationPackage.class))).thenAnswer(inv -> {
             ApplicationPackage p = inv.getArgument(0);
             if (p.getId() == null) p.setId(UUID.randomUUID());
@@ -171,5 +180,29 @@ class ApplicationPackageServiceTest {
         ApplicationPackage result = service.assemble(userId, jobId).orElseThrow();
 
         assertEquals(4, result.getPackageVersion());
+    }
+
+    @Test
+    void concurrentAssembleReusesTheClaimedHeadRatherThanInserting() {
+        // The production failure this fixes: two overlapping runs for one (user, job) both saw no
+        // head, both inserted, and the loser died on uq_application_package_user_job with a
+        // DataIntegrityViolationException that killed the pipeline. The claim is now conflict
+        // tolerant, so the losing caller simply reads back the row the winner created.
+        ApplicationPackageService service = service(true);
+        stubTailoring();
+
+        ApplicationPackage claimedByWinner = ApplicationPackage.builder()
+                .id(UUID.randomUUID()).userId(userId).jobId(jobId)
+                .packageVersion(0).status(ApplicationPackage.STATUS_INCOMPLETE)
+                .build();
+        // 0 == "another caller already claimed it"; the row is still there to be read.
+        when(packages.claimHeadIfAbsent(any(), any())).thenReturn(0);
+        when(packages.findByUserIdAndJobId(any(), any())).thenReturn(Optional.of(claimedByWinner));
+
+        ApplicationPackage saved = service.assemble(userId, jobId).orElseThrow();
+
+        // The winner's row is reused, not a second insert.
+        assertEquals(claimedByWinner.getId(), saved.getId());
+        assertEquals(1, saved.getPackageVersion());
     }
 }

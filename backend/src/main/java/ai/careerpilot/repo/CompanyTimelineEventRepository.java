@@ -11,4 +11,7 @@ public interface CompanyTimelineEventRepository extends JpaRepository<CompanyTim
     List<CompanyTimelineEvent> findByCompanyKnowledgeIdAndEventTypeOrderByOccurredAtDesc(UUID companyKnowledgeId, String eventType);
     long countByCompanyKnowledgeIdAndEventType(UUID companyKnowledgeId, String eventType);
     long countByUserId(UUID userId);
+
+    /** Phase 10H — Career Timeline aggregation: every company-timeline event for this user, across all companies. */
+    List<CompanyTimelineEvent> findByUserIdOrderByOccurredAtDesc(UUID userId);
 }

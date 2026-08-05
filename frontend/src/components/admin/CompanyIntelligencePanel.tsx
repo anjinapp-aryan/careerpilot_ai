@@ -46,7 +46,7 @@ const FLAGS: { key: keyof CompanyDiagnostics; label: string }[] = [
 
 /** Phase 7.13 — admin health panel for the Company Knowledge Graph (counts-only diagnostics). */
 export function CompanyIntelligencePanel() {
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError } = useQuery({
     queryKey: ['diagnostics', 'company'],
     queryFn: async () => (await api.get<CompanyDiagnostics>('/api/diagnostics/company')).data,
     refetchInterval: 60_000,
@@ -63,7 +63,9 @@ export function CompanyIntelligencePanel() {
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-3">
-        {isLoading || !data ? (
+        {isError ? (
+          <p className="text-sm text-muted-foreground">Diagnostics unavailable right now.</p>
+        ) : isLoading || !data ? (
           <Skeleton className="h-20 w-full" />
         ) : (
           <>

@@ -80,8 +80,25 @@ class ApplicationExecutionServiceTest {
     }
 
     private ApplicationExecutionService service(boolean enabled) {
+        // Phase 12B — a fully-open rollout gate (100%) so every pre-existing test keeps asserting
+        // the same behaviour it always did. The gate's own blocking behaviour is covered separately
+        // by `guestApplyIsBlockedForAUserOutsideTheRolloutCohort` below and by BrowserRolloutGateTest.
+        return service(enabled, openRolloutGate());
+    }
+
+    private ApplicationExecutionService service(boolean enabled,
+                                                ai.careerpilot.execution.browser.rollout.BrowserRolloutGate gate) {
         return new ApplicationExecutionService(executions, audit, packages, jobs, connectors, browser,
-                guestApply, verification, recovery, new ApplicationExecutionMetrics(), enabled);
+                guestApply, verification, recovery, new ApplicationExecutionMetrics(), gate,
+                mock(org.springframework.beans.factory.ObjectProvider.class), enabled);
+    }
+
+    private static ai.careerpilot.execution.browser.rollout.BrowserRolloutGate openRolloutGate() {
+        return new ai.careerpilot.execution.browser.rollout.BrowserRolloutGate(100, "", "TEST_OPEN");
+    }
+
+    private static ai.careerpilot.execution.browser.rollout.BrowserRolloutGate closedRolloutGate() {
+        return new ai.careerpilot.execution.browser.rollout.BrowserRolloutGate(0, "", "TEST_CLOSED");
     }
 
     @Test
@@ -152,6 +169,28 @@ class ApplicationExecutionServiceTest {
         assertThat(e.getCompletedAt()).isNull(); // non-terminal — still in flight
     }
 
+    /**
+     * Phase 12B — the staged-rollout gate. A user outside the current cohort must take the exact
+     * pre-existing ABORTED path, and {@code GuestApplyAutomationService} must never be reached: the
+     * gate has to short-circuit <em>before</em> a browser is touched, not merely discard the result
+     * afterwards.
+     */
+    @Test
+    void guestApplyIsBlockedForAUserOutsideTheRolloutCohort() {
+        ATSConnector connector = mock(ATSConnector.class);
+        when(connector.isConfigured()).thenReturn(true);
+        when(connector.name()).thenReturn("greenhouse");
+        when(connectors.detect(any())).thenReturn(connector);
+        when(guestApply.isEligible(connector)).thenReturn(true);
+
+        ApplicationExecution e = service(true, closedRolloutGate()).execute(userId, jobId, pkgId).orElseThrow();
+
+        assertThat(e.getExecutionStatus()).isEqualTo(ApplicationExecution.STATUS_ABORTED);
+        assertThat(e.getFailureReason()).contains("rollout stage");
+        org.mockito.Mockito.verify(guestApply, org.mockito.Mockito.never())
+                .attemptFill(any(), any(), any());
+    }
+
     @Test
     void guestApplyCaptchaOrLoginWallAborts() {
         ATSConnector connector = mock(ATSConnector.class);
@@ -198,6 +237,10 @@ class ApplicationExecutionServiceTest {
         when(guestApply.isEligible(connector)).thenReturn(true);
         when(guestApply.finalizeSubmit(any(), any(), any()))
                 .thenReturn(GuestApplyAutomationService.AttemptOutcome.submitted("conf-123"));
+        // Phase 0 — SUBMITTED is now conditional on a VERIFIED verdict, so this test must supply one.
+        when(verification.verify(any(), any(), any())).thenReturn(
+                ai.careerpilot.execution.verification.VerificationResult.verified(
+                        "EVIDENCE_ADJUDICATION:CONFIRMED", "reference plus confirmation phrase"));
 
         service(true).finalizeGuestApplySubmit(execId);
 
@@ -208,8 +251,71 @@ class ApplicationExecutionServiceTest {
         org.mockito.Mockito.verify(verification).verify(awaiting, connector, "conf-123");
     }
 
+    /**
+     * Phase 0 — the gate. A submit click with an unverifiable outcome must NOT be reported as
+     * SUBMITTED. Before this phase the terminal transition ignored the verdict entirely.
+     */
     @Test
-    void finalizeGuestApplySubmit_verificationExceptionNeverBlocksSubmittedOutcome() {
+    void finalizeGuestApplySubmit_unverifiedVerdictDowngradesToSubmitUnverified() {
+        UUID execId = UUID.randomUUID();
+        ApplicationExecution awaiting = ApplicationExecution.builder()
+                .id(execId).userId(userId).jobId(jobId).applicationPackageId(pkgId)
+                .executionStatus(ApplicationExecution.STATUS_AWAITING_APPROVAL)
+                .executionType(ApplicationExecution.TYPE_ATS_CONNECTOR)
+                .attemptCount(1).build();
+        when(executions.findById(execId)).thenReturn(Optional.of(awaiting));
+        ATSConnector connector = mock(ATSConnector.class);
+        when(connector.isConfigured()).thenReturn(true);
+        when(connector.name()).thenReturn("greenhouse");
+        when(connectors.detect(any())).thenReturn(connector);
+        when(guestApply.isEligible(connector)).thenReturn(true);
+        when(guestApply.finalizeSubmit(any(), any(), any()))
+                .thenReturn(GuestApplyAutomationService.AttemptOutcome.submitted("some page text"));
+        when(verification.verify(any(), any(), any())).thenReturn(
+                ai.careerpilot.execution.verification.VerificationResult.unableToVerify(
+                        "EVIDENCE_ADJUDICATION:WEAK", "only one success signal"));
+
+        service(true).finalizeGuestApplySubmit(execId);
+
+        assertThat(awaiting.getExecutionStatus()).isEqualTo(ApplicationExecution.STATUS_SUBMIT_UNVERIFIED);
+        assertThat(awaiting.getExecutionStatus()).isNotEqualTo(ApplicationExecution.STATUS_SUBMITTED);
+    }
+
+    /** Phase 0 — a positively-detected failure page is likewise never promoted to SUBMITTED. */
+    @Test
+    void finalizeGuestApplySubmit_notVerifiedVerdictDowngradesToSubmitUnverified() {
+        UUID execId = UUID.randomUUID();
+        ApplicationExecution awaiting = ApplicationExecution.builder()
+                .id(execId).userId(userId).jobId(jobId).applicationPackageId(pkgId)
+                .executionStatus(ApplicationExecution.STATUS_AWAITING_APPROVAL)
+                .executionType(ApplicationExecution.TYPE_ATS_CONNECTOR)
+                .attemptCount(1).build();
+        when(executions.findById(execId)).thenReturn(Optional.of(awaiting));
+        ATSConnector connector = mock(ATSConnector.class);
+        when(connector.isConfigured()).thenReturn(true);
+        when(connector.name()).thenReturn("greenhouse");
+        when(connectors.detect(any())).thenReturn(connector);
+        when(guestApply.isEligible(connector)).thenReturn(true);
+        when(guestApply.finalizeSubmit(any(), any(), any()))
+                .thenReturn(GuestApplyAutomationService.AttemptOutcome.submitted("error page"));
+        when(verification.verify(any(), any(), any())).thenReturn(
+                ai.careerpilot.execution.verification.VerificationResult.notVerified(
+                        "EVIDENCE_ADJUDICATION:NONE", "failure indicator detected"));
+
+        service(true).finalizeGuestApplySubmit(execId);
+
+        assertThat(awaiting.getExecutionStatus()).isEqualTo(ApplicationExecution.STATUS_SUBMIT_UNVERIFIED);
+    }
+
+    /**
+     * Phase 0 — <b>deliberate inversion</b> of the previous
+     * {@code verificationExceptionNeverBlocksSubmittedOutcome} test. A crashing verification engine
+     * used to still yield SUBMITTED; it now fails closed to SUBMIT_UNVERIFIED. The request still
+     * must not throw — the click did happen and the row must be recorded — but an unprovable
+     * submission is never labelled a successful one.
+     */
+    @Test
+    void finalizeGuestApplySubmit_verificationExceptionFailsClosedToSubmitUnverified() {
         UUID execId = UUID.randomUUID();
         ApplicationExecution awaiting = ApplicationExecution.builder()
                 .id(execId).userId(userId).jobId(jobId).applicationPackageId(pkgId)
@@ -228,7 +334,8 @@ class ApplicationExecutionServiceTest {
 
         org.junit.jupiter.api.Assertions.assertDoesNotThrow(() -> service(true).finalizeGuestApplySubmit(execId));
 
-        assertThat(awaiting.getExecutionStatus()).isEqualTo(ApplicationExecution.STATUS_SUBMITTED);
+        assertThat(awaiting.getExecutionStatus()).isEqualTo(ApplicationExecution.STATUS_SUBMIT_UNVERIFIED);
+        assertThat(awaiting.getCompletedAt()).isNotNull();
     }
 
     @Test

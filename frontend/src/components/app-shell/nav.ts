@@ -11,6 +11,7 @@ import {
   Radar,
   Building2,
   Rocket,
+  History,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -107,8 +108,15 @@ export const NAV_GROUPS: NavGroup[] = [
         to: '/ai-memory',
         label: 'AI Learned About You',
         icon: Brain,
-        keywords: ['memory', 'preferences', 'confidence', 'timeline', 'trust', 'learned'],
+        keywords: ['memory', 'preferences', 'confidence', 'trust', 'learned'],
         description: 'What the AI knows, why, and how confident it is',
+      },
+      {
+        to: '/career-journey',
+        label: 'Career Journey',
+        icon: History,
+        keywords: ['timeline', 'journey', 'history', 'events', 'activity'],
+        description: 'Your complete professional journey, chronologically',
       },
       {
         to: '/companies',

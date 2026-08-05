@@ -22,6 +22,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -41,6 +42,12 @@ class GuestApplyAutomationServiceTest {
     private ExecutionScreenshotRepository screenshots;
     private UserRepository users;
     private GuestApplyAutomationService service;
+    /**
+     * Phase 12C — a disabled form engine, so every pre-existing assertion in this file keeps
+     * measuring exactly what it did before. The engine's own behaviour is covered by its dedicated
+     * suites; {@code formEngineBlockingGapAbortsBeforeAnyApproval} below covers the integration.
+     */
+    private ai.careerpilot.execution.browser.form.BrowserFormAutomationEngine formEngine;
 
     @BeforeEach
     void setUp() {
@@ -50,7 +57,17 @@ class GuestApplyAutomationServiceTest {
         approvalService = mock(ApprovalService.class);
         screenshots = mock(ExecutionScreenshotRepository.class);
         users = mock(UserRepository.class);
-        service = new GuestApplyAutomationService(browser, metrics, storage, approvalService, screenshots, users, true);
+        formEngine = mock(ai.careerpilot.execution.browser.form.BrowserFormAutomationEngine.class);
+        when(formEngine.isEnabled()).thenReturn(false);
+        service = new GuestApplyAutomationService(browser, metrics, storage, approvalService, screenshots, users,
+                formEngine,
+                mock(ai.careerpilot.repo.ApplicationPackageRepository.class),
+                mock(ai.careerpilot.repo.ResumeRepository.class),
+                mock(ai.careerpilot.repo.CoverLetterRepository.class),
+                mock(ai.careerpilot.repo.ApplicationSubmissionSessionRepository.class),
+                // Phase F3: absent orchestrator => single-page behaviour, unchanged.
+                mock(org.springframework.beans.factory.ObjectProvider.class),
+                true);
 
         when(browser.currentPageHtml()).thenReturn("<html><body>a normal apply form</body></html>");
         when(storage.uploadBytes(any(), anyString(), anyString(), anyString())).thenReturn("some/s3/key.png");
@@ -76,6 +93,85 @@ class GuestApplyAutomationServiceTest {
 
     private Job job() {
         return Job.builder().id(jobId).title("Eng").company("Acme").sourceUrl("https://example.com/apply").build();
+    }
+
+    // ── Phase 12C — universal form engine integration ──────────────────────────────────────────
+
+    private void enableFormEngineWith(
+            ai.careerpilot.execution.browser.form.BrowserFormAutomationEngine.FillOutcome outcome) {
+        when(formEngine.isEnabled()).thenReturn(true);
+        when(formEngine.fillForm(any(), any(), any())).thenReturn(outcome);
+    }
+
+    /**
+     * The single most important safety behaviour this phase adds. A form whose required resume
+     * field cannot be filled must NOT reach the human approval queue: asking someone to approve a
+     * screenshot of an incomplete form invites them to approve a submission that either fails the
+     * employer's own validation or is delivered incomplete under the candidate's real name.
+     */
+    @Test
+    void aBlockingGapAbortsBeforeAnyApprovalIsEnqueued() {
+        enableFormEngineWith(new ai.careerpilot.execution.browser.form.BrowserFormAutomationEngine.FillOutcome(
+                true, true, null, java.util.List.of("EMAIL"), java.util.Map.of(),
+                java.util.List.of("Resume: no tailored resume available in the application package"),
+                java.util.Map.of()));
+
+        GuestApplyAutomationService.AttemptOutcome outcome = service.attemptFill(exec(), job(), connector("greenhouse"));
+
+        assertThat(outcome.kind()).isEqualTo(GuestApplyAutomationService.AttemptOutcome.Kind.ABORTED);
+        assertThat(outcome.reason()).contains("could not be filled from verified data");
+        verify(approvalService, never()).enqueueFormScreenshot(any(), any(), any(), any(), any(), anyString());
+    }
+
+    /** The same refusal at finalize time, where the click would be irreversible. */
+    @Test
+    void aBlockingGapAtFinalizeRefusesToSubmit() {
+        ATSConnector connector = connector("greenhouse");
+        enableFormEngineWith(new ai.careerpilot.execution.browser.form.BrowserFormAutomationEngine.FillOutcome(
+                true, true, null, java.util.List.of(), java.util.Map.of(),
+                java.util.List.of("Resume: no tailored resume available"), java.util.Map.of()));
+
+        GuestApplyAutomationService.AttemptOutcome outcome = service.finalizeSubmit(exec(), job(), connector);
+
+        assertThat(outcome.kind()).isEqualTo(GuestApplyAutomationService.AttemptOutcome.Kind.ABORTED);
+        verify(connector, never()).submit(any(), any());
+    }
+
+    @Test
+    void aCleanFormEngineRunStillReachesTheApprovalGate() {
+        enableFormEngineWith(new ai.careerpilot.execution.browser.form.BrowserFormAutomationEngine.FillOutcome(
+                true, true, null, java.util.List.of("EMAIL", "RESUME_UPLOAD"), java.util.Map.of(),
+                java.util.List.of(), java.util.Map.of()));
+        when(approvalService.enqueueFormScreenshot(any(), any(), any(), any(), any(), anyString()))
+                .thenReturn(Optional.of(ApprovalQueueEntry.builder().id(UUID.randomUUID()).build()));
+
+        GuestApplyAutomationService.AttemptOutcome outcome = service.attemptFill(exec(), job(), connector("greenhouse"));
+
+        // Still parks for human approval — this phase widens what can be filled, never what can be sent.
+        assertThat(outcome.kind()).isEqualTo(GuestApplyAutomationService.AttemptOutcome.Kind.AWAITING_APPROVAL);
+    }
+
+    @Test
+    void aFormEngineFailureDegradesToTheConnectorOnlyBehaviour() {
+        when(formEngine.isEnabled()).thenReturn(true);
+        when(formEngine.fillForm(any(), any(), any())).thenThrow(new IllegalStateException("engine exploded"));
+        when(approvalService.enqueueFormScreenshot(any(), any(), any(), any(), any(), anyString()))
+                .thenReturn(Optional.of(ApprovalQueueEntry.builder().id(UUID.randomUUID()).build()));
+
+        GuestApplyAutomationService.AttemptOutcome outcome = service.attemptFill(exec(), job(), connector("greenhouse"));
+
+        // Exactly the Phase 12B outcome: the connector's own fields were filled and the run parks.
+        assertThat(outcome.kind()).isEqualTo(GuestApplyAutomationService.AttemptOutcome.Kind.AWAITING_APPROVAL);
+    }
+
+    @Test
+    void withTheEngineDisabledItIsNeverInvoked() {
+        when(approvalService.enqueueFormScreenshot(any(), any(), any(), any(), any(), anyString()))
+                .thenReturn(Optional.of(ApprovalQueueEntry.builder().id(UUID.randomUUID()).build()));
+
+        service.attemptFill(exec(), job(), connector("greenhouse"));
+
+        verify(formEngine, never()).fillForm(any(), any(), any());
     }
 
     @Test

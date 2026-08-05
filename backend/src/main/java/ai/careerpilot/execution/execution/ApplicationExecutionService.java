@@ -8,11 +8,14 @@ import ai.careerpilot.execution.ats.ATSConnector;
 import ai.careerpilot.execution.ats.ATSConnectorRegistry;
 import ai.careerpilot.execution.browser.BrowserAutomationProvider;
 import ai.careerpilot.execution.browser.GuestApplyAutomationService;
+import ai.careerpilot.execution.browser.multistep.MultiStepExecutionOrchestrator;
 import ai.careerpilot.execution.recovery.AutomationRecoveryService;
 import ai.careerpilot.execution.recovery.ExecutionCheckpoint;
 import ai.careerpilot.domain.ApplicationRetry;
 import ai.careerpilot.execution.retry.RetryDecision;
 import ai.careerpilot.execution.verification.SubmissionVerificationService;
+import ai.careerpilot.execution.verification.VerificationResult;
+import ai.careerpilot.execution.verification.VerificationStatus;
 import ai.careerpilot.repo.ApplicationExecutionAuditRepository;
 import ai.careerpilot.repo.ApplicationExecutionRepository;
 import ai.careerpilot.repo.ApplicationPackageRepository;
@@ -64,9 +67,13 @@ public class ApplicationExecutionService {
     private final ATSConnectorRegistry connectors;
     private final BrowserAutomationProvider browser;
     private final GuestApplyAutomationService guestApply;
+
+    /** Phase F3 — optional: the orchestrator carries its own independent flag. */
+    private final org.springframework.beans.factory.ObjectProvider<MultiStepExecutionOrchestrator> multiStep;
     private final SubmissionVerificationService verification;
     private final AutomationRecoveryService recovery;
     private final ApplicationExecutionMetrics metrics;
+    private final ai.careerpilot.execution.browser.rollout.BrowserRolloutGate rolloutGate;
     private final boolean enabled;
 
     public ApplicationExecutionService(ApplicationExecutionRepository executions,
@@ -79,6 +86,8 @@ public class ApplicationExecutionService {
                                        SubmissionVerificationService verification,
                                        AutomationRecoveryService recovery,
                                        ApplicationExecutionMetrics metrics,
+                                       ai.careerpilot.execution.browser.rollout.BrowserRolloutGate rolloutGate,
+                                       org.springframework.beans.factory.ObjectProvider<MultiStepExecutionOrchestrator> multiStep,
                                        @Value("${application.execution.enabled:false}") boolean enabled) {
         this.executions = executions;
         this.audit = audit;
@@ -90,6 +99,8 @@ public class ApplicationExecutionService {
         this.verification = verification;
         this.recovery = recovery;
         this.metrics = metrics;
+        this.rolloutGate = rolloutGate;
+        this.multiStep = multiStep;
         this.enabled = enabled;
     }
 
@@ -156,6 +167,14 @@ public class ApplicationExecutionService {
                 exec.setProvider(connector.name());
 
                 if (guestApply.isEligible(connector)) {
+                    // Phase 12B — staged rollout. A second, independent gate on top of
+                    // browser.automation.enabled: a user outside the current canary cohort takes the
+                    // pre-existing ABORTED path below, byte-identical to the dark build. Default is
+                    // 0%, so turning the master flag on alone still exposes nobody.
+                    if (!rolloutGate.isEnabledFor(exec.getUserId())) {
+                        return terminal(exec, ApplicationExecution.STATUS_ABORTED,
+                                "browser automation not enabled for this user in the current rollout stage", start);
+                    }
                     return runGuestApplyFill(exec, job, connector, start);
                 }
                 // Any other (login-required) connector: unchanged pre-Gap-D behavior.
@@ -228,23 +247,99 @@ public class ApplicationExecutionService {
         GuestApplyAutomationService.AttemptOutcome outcome = guestApply.finalizeSubmit(exec, job, connector);
         switch (outcome.kind()) {
             case SUBMITTED -> {
-                // Phase 7.16.1 — verify BEFORE reaching the terminal SUBMITTED state, so the
-                // execution's own evidence columns (confirmationNumber/verificationStatus/...)
-                // are already populated by the time any caller (e.g. the submission pipeline)
-                // reads this row back. Never blocks/fails the SUBMITTED outcome itself — the
-                // click already happened; verification only records what we can prove about it.
+                // Phase 7.16.1 — verify BEFORE the terminal state, so the execution's own evidence
+                // columns (confirmationNumber/verificationStatus/...) are already populated by the
+                // time any caller (e.g. the submission pipeline) reads this row back.
+                //
+                // Phase 0 (Browser Automation Platform) — the verdict is now a GATE, not just a
+                // record. Previously this transitioned to SUBMITTED unconditionally, so an
+                // unprovable or failed submission was still reported as success. A verification
+                // failure now downgrades the outcome to SUBMIT_UNVERIFIED rather than being
+                // swallowed. The click still happened either way — that is precisely why the
+                // distinction has to be preserved instead of collapsed into SUBMITTED.
                 exec.setCheckpoint(ExecutionCheckpoint.SUBMIT_CLICKED);
+                VerificationStatus verdict = VerificationStatus.UNKNOWN;
                 try {
-                    verification.verify(exec, connector, outcome.confirmationReference());
+                    VerificationResult result = verification.verify(exec, connector, outcome.confirmationReference());
+                    if (result != null && result.status() != null) {
+                        verdict = result.status();
+                    }
                 } catch (Exception e) {
+                    // Fail closed: an unverifiable submission is never promoted to SUBMITTED.
                     log.warn("APP_EXECUTION verification call failed execution={}: {}", exec.getId(), e.toString());
                 }
                 exec.setCheckpoint(ExecutionCheckpoint.VERIFICATION_COMPLETE);
-                terminal(exec, ApplicationExecution.STATUS_SUBMITTED, null, start);
+
+                if (verdict == VerificationStatus.VERIFIED) {
+                    terminal(exec, ApplicationExecution.STATUS_SUBMITTED, null, start);
+                } else {
+                    log.info("APP_EXECUTION submit unverified execution={} verdict={} — recorded as {} not SUBMITTED",
+                            exec.getId(), verdict, ApplicationExecution.STATUS_SUBMIT_UNVERIFIED);
+                    terminal(exec, ApplicationExecution.STATUS_SUBMIT_UNVERIFIED,
+                            "submit click completed but verification returned " + verdict, start);
+                }
             }
             case ABORTED -> terminal(exec, ApplicationExecution.STATUS_ABORTED, outcome.reason(), start);
             default -> terminal(exec, ApplicationExecution.STATUS_FAILED, outcome.reason(), start);
         }
+    }
+
+    /**
+     * Phase F3 — resume a multi-step run after a reviewer approved one page.
+     *
+     * <p>Invoked ONLY by {@code FormApprovalExecutionWorker}, and only when a multi-step
+     * {@code ExecutionStep} already exists for that approval. It is additive: nothing here changes
+     * {@link #finalizeGuestApplySubmit}, which still owns every single-page approval.
+     *
+     * <p>The step is marked approved <b>before</b> the next page runs, so the approval is recorded
+     * even if the following page fails — otherwise a browser crash on page 3 would lose the human's
+     * decision about page 2 and force them to review it again.
+     *
+     * <p>Reaching {@code READY_TO_SUBMIT} deliberately hands back to the existing
+     * {@link #finalizeGuestApplySubmit}: submission, verification and the SUBMITTED /
+     * SUBMIT_UNVERIFIED mapping stay in the one audited place rather than being reimplemented here.
+     * Never throws.
+     */
+    @Transactional
+    public void resumeMultiStepAfterApproval(UUID approvalQueueEntryId, UUID executionId) {
+        MultiStepExecutionOrchestrator orchestrator =
+                multiStep == null ? null : multiStep.getIfAvailable();
+        if (orchestrator == null || !orchestrator.isEnabled()) return;
+
+        ApplicationExecution exec = executions.findById(executionId).orElse(null);
+        if (exec == null) {
+            log.warn("APP_EXECUTION multi-step resume: execution {} not found", executionId);
+            return;
+        }
+        Job job = jobs.findById(exec.getJobId()).orElse(null);
+        if (job == null) {
+            log.warn("APP_EXECUTION multi-step resume: job for execution {} no longer exists", executionId);
+            return;
+        }
+
+        orchestrator.markApproved(approvalQueueEntryId);
+
+        MultiStepExecutionOrchestrator.StepOutcome outcome = guestApply.runMultiStep(exec, job);
+        log.info("APP_EXECUTION multi-step resume execution={} kind={} step={} reason={}",
+                executionId, outcome.kind(), outcome.stepNumber(), outcome.reason());
+
+        switch (outcome.kind()) {
+            case AWAITING_APPROVAL -> {
+                // Another page is parked on a human. The execution stays AWAITING_APPROVAL — its
+                // status is already correct, and rewriting it would only churn the audit trail.
+            }
+            case READY_TO_SUBMIT -> finalizeGuestApplySubmit(executionId);
+            case STOPPED -> exec.setLastError(truncate(outcome.reason()));
+            case WAITING, DISABLED -> {
+                // Nothing to do: either a page is still pending, or the feature was turned off
+                // between the approval and this callback.
+            }
+        }
+    }
+
+    private static String truncate(String reason) {
+        if (reason == null) return null;
+        return reason.length() <= 500 ? reason : reason.substring(0, 500);
     }
 
     public Optional<ApplicationExecution> status(UUID executionId, UUID userId) {

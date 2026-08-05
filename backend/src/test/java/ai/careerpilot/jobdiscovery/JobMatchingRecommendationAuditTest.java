@@ -61,6 +61,10 @@ class JobMatchingRecommendationAuditTest {
                 mock(ai.careerpilot.learning.recommendation.LearningRecommendationBooster.class),
                 mock(ai.careerpilot.companyintel.CompanyKnowledgeBooster.class),
                 mock(ai.careerpilot.memory.CareerMemoryBooster.class),
+                // Phase 13C — production-evidence booster disabled, so these suites keep asserting
+                // exactly the scores they did before. Its behaviour is covered by its own suite.
+                new ai.careerpilot.intelligence.ProductionIntelligenceBooster(false),
+                mock(ai.careerpilot.intelligence.ProductionIntelligenceService.class),
                 new InternationalEligibilityFilter(new SeniorityLevelClassifier(taxonomy), new InternationalRoleTaxonomy(taxonomy), false, false),
                 false, 0, 0, false, auditEnabled, false, 0, false);   // strict gate off + no relevance pre-gate so seeded job always qualifies
     }

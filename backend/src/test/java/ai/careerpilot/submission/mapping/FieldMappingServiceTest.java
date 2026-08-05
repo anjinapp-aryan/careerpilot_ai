@@ -18,7 +18,7 @@ class FieldMappingServiceTest {
 
     private final UserRepository users = mock(UserRepository.class);
     private final CandidateProfileRepository profiles = mock(CandidateProfileRepository.class);
-    private final FieldMappingService service = new FieldMappingService(users, profiles);
+    private final FieldMappingService service = new FieldMappingService(users, profiles, disabledAtsProfiles());
 
     private MappedField find(FieldMappingResult result, String name) {
         return result.fields().stream().filter(f -> f.fieldName().equals(name)).findFirst()
@@ -170,11 +170,33 @@ class FieldMappingServiceTest {
     }
 
     @Test
-    void totalFieldCountIsElevenCanonicalFields() {
+    /**
+     * <b>Count updated by Phase C.</b> The mapper emitted 11 canonical fields; it now additionally
+     * emits one per {@code AtsProfileField} plus the three legacy aliases. Pinning the count to the
+     * catalogue rather than a literal means adding a field cannot silently skip the mapper — the
+     * failure mode this assertion exists to catch.
+     */
+    void everyAtsProfileFieldIsEmittedAlongsideTheOriginalCanonicalSet() {
         UUID userId = UUID.randomUUID();
         when(users.findById(userId)).thenReturn(Optional.empty());
         when(profiles.findByUserId(userId)).thenReturn(Optional.empty());
+
         FieldMappingResult result = service.map(userId);
-        assertEquals(11, result.fields().size());
+
+        int originalCanonicalFields = 7;   // fullName, email, yearsExperience, skills, visaRequired, salaryTarget, location
+        int legacyAliases = 3;             // linkedin, github, portfolio
+        assertEquals(originalCanonicalFields
+                        + ai.careerpilot.service.profile.ats.AtsProfileField.values().length
+                        + legacyAliases,
+                result.fields().size());
+    }
+
+    /**
+     * Phase C added an ATS-profile source to the mapper. These pre-Phase-C tests deliberately pass a
+     * DISABLED one: with the flag off the mapper must behave exactly as it did before the phase, so
+     * every assertion below doubles as a backward-compatibility check.
+     */
+    private static ai.careerpilot.service.profile.ats.CandidateAtsProfileService disabledAtsProfiles() {
+        return new ai.careerpilot.service.profile.ats.CandidateAtsProfileService(org.mockito.Mockito.mock(ai.careerpilot.repo.CandidateAtsProfileRepository.class), false);
     }
 }

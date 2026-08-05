@@ -129,11 +129,26 @@ public class ApplicationPackageService {
             boolean complete = coverLetter != null && ats != null && gap != null && explanation != null;
             String status = complete ? ApplicationPackage.STATUS_ASSEMBLED : ApplicationPackage.STATUS_INCOMPLETE;
 
+            // Claim the head row conflict-tolerantly instead of find-then-insert.
+            //
+            // This method is reached from three independent paths (the async Phase 2D pipeline,
+            // the submission session, and package intelligence), so two runs for one (user, job)
+            // genuinely overlap. Both previously observed no head, both inserted, and the loser
+            // died on uq_application_package_user_job — taking the whole pipeline down with a
+            // DataIntegrityViolationException. Letting the database arbitrate is what makes the
+            // race resolve to "one head exists" rather than an exception; a freshly claimed row
+            // arrives at version 0 and is populated below exactly as a found one would be.
+            packages.claimHeadIfAbsent(userId, jobId);
             ApplicationPackage head = packages.findByUserIdAndJobId(userId, jobId).orElse(null);
-            int nextVersion = head == null ? 1 : head.getPackageVersion() + 1;
             if (head == null) {
-                head = ApplicationPackage.builder().userId(userId).jobId(jobId).build();
+                // Genuinely unreachable after a successful claim; treated as a failure rather than
+                // falling back to an insert that would reintroduce the race.
+                metrics.recordFailure();
+                record(userId, jobId, null, null, ApplicationPackageAuditEntry.OUTCOME_ERROR,
+                        "package head could not be claimed");
+                return Optional.empty();
             }
+            int nextVersion = head.getPackageVersion() + 1;
             head.setApplicationId(applicationId);
             head.setResumeId(tailoring.getOriginalResumeId());
             head.setResumeTailoringId(tailoring.getId());

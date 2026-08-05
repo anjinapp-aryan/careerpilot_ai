@@ -25,9 +25,14 @@ class ATSConnectorRegistryTest {
 
     private final PlaywrightAutomationProvider unconfiguredBrowser = mock(PlaywrightAutomationProvider.class);
     private final PlaywrightAutomationProvider configuredBrowser = mock(PlaywrightAutomationProvider.class);
+    /** Phase 0 — real collaborator (pure, no I/O); this test asserts routing, not verification. */
+    private final ai.careerpilot.execution.verification.evidence.ConfirmationPageVerifier verifier =
+            new ai.careerpilot.execution.verification.evidence.ConfirmationPageVerifier(
+                    new ai.careerpilot.execution.verification.evidence.ConfirmationPageAnalyzer(),
+                    new ai.careerpilot.execution.verification.evidence.VerificationAdjudicator());
 
     private final List<ATSConnector> connectors = List.of(
-            new GreenhouseConnector(unconfiguredBrowser), new LeverConnector(unconfiguredBrowser),
+            new GreenhouseConnector(unconfiguredBrowser, verifier), new LeverConnector(unconfiguredBrowser, verifier),
             new WorkdayConnector(), new LinkedInConnector(), new SmartRecruitersConnector(),
             new AshbyConnector(), new BambooHrConnector());
     private final ATSConnectorRegistry registry = new ATSConnectorRegistry(connectors);
@@ -50,8 +55,8 @@ class ATSConnectorRegistryTest {
     @Test
     void greenhouseAndLeverBecomeConfiguredWhenBrowserIsConfigured() {
         when(configuredBrowser.isConfigured()).thenReturn(true);
-        GreenhouseConnector gh = new GreenhouseConnector(configuredBrowser);
-        LeverConnector lever = new LeverConnector(configuredBrowser);
+        GreenhouseConnector gh = new GreenhouseConnector(configuredBrowser, verifier);
+        LeverConnector lever = new LeverConnector(configuredBrowser, verifier);
         assertThat(gh.isConfigured()).isTrue();
         assertThat(lever.isConfigured()).isTrue();
     }
@@ -111,7 +116,7 @@ class ATSConnectorRegistryTest {
 
     @Test
     void greenhouseAndLeverStillThrowOnAuthenticateAndTrack_neverLoginNeverStatusApi() {
-        GreenhouseConnector gh = new GreenhouseConnector(unconfiguredBrowser);
+        GreenhouseConnector gh = new GreenhouseConnector(unconfiguredBrowser, verifier);
         org.assertj.core.api.Assertions.assertThatThrownBy(() -> gh.authenticate(java.util.Map.of()))
                 .isInstanceOf(UnsupportedOperationException.class);
         org.assertj.core.api.Assertions.assertThatThrownBy(() -> gh.track("ref"))
@@ -120,14 +125,14 @@ class ATSConnectorRegistryTest {
 
     @Test
     void greenhouseExtractFormReturnsRealSchemaNotFabricatedValues() {
-        GreenhouseConnector gh = new GreenhouseConnector(unconfiguredBrowser);
+        GreenhouseConnector gh = new GreenhouseConnector(unconfiguredBrowser, verifier);
         var schema = gh.extractForm(jobWithUrl("https://boards.greenhouse.io/acme/jobs/1"));
         assertThat(schema).containsValues("first_name", "last_name", "email");
     }
 
     @Test
     void leverExtractFormReturnsRealSchemaNotFabricatedValues() {
-        LeverConnector lever = new LeverConnector(unconfiguredBrowser);
+        LeverConnector lever = new LeverConnector(unconfiguredBrowser, verifier);
         var schema = lever.extractForm(jobWithUrl("https://jobs.lever.co/acme/123"));
         assertThat(schema).containsValues("name", "email");
     }

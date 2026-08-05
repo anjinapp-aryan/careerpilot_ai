@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
+import { Link } from 'react-router-dom';
 import { Building2, Network } from 'lucide-react';
 import { Bar, BarChart, CartesianGrid, Cell, ResponsiveContainer, Tooltip as RTooltip, XAxis, YAxis } from 'recharts';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
@@ -61,13 +62,16 @@ export function CompanyIntelligenceWidget() {
 
   return (
     <Card>
-      <CardHeader className="pb-2">
+      <CardHeader className="flex-row items-center justify-between pb-2">
         <CardTitle className="flex items-center gap-2 text-base">
           <Network className="h-4 w-4 text-primary" />
           Company intelligence
           <Badge tone="neutral">{data.companies} companies</Badge>
           <Badge tone="neutral">{data.graphEdges} signals</Badge>
         </CardTitle>
+        <Link to="/companies" className="text-sm font-medium text-primary hover:underline">
+          View all
+        </Link>
       </CardHeader>
       <CardContent className="space-y-4">
         {data.topCompanies.length > 0 && (

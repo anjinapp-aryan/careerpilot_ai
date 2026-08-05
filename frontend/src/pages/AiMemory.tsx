@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { motion } from 'framer-motion';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Activity,
@@ -612,7 +613,13 @@ export default function AiMemory() {
               ) : visibleMemories.length === 0 ? (
                 <EmptyState compact icon={Brain} title="No memories match" />
               ) : (
-                <div className="grid gap-3 sm:grid-cols-2">
+                <motion.div
+                  key={categoryFilter ?? 'all'}
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  transition={{ duration: 0.25, ease: 'easeOut' }}
+                  className="grid gap-3 sm:grid-cols-2"
+                >
                   {visibleMemories.map((m) => {
                     const isOpen = expanded.has(m.id);
                     const impact = recommendationImpact(m);
@@ -639,6 +646,7 @@ export default function AiMemory() {
                         <button
                           type="button"
                           onClick={() => toggleExpanded(m.id)}
+                          aria-expanded={isOpen}
                           className="mt-3 flex items-center gap-1 text-xs font-medium text-primary hover:underline"
                         >
                           {isOpen ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
@@ -704,7 +712,7 @@ export default function AiMemory() {
                       </div>
                     );
                   })}
-                </div>
+                </motion.div>
               )}
             </CardContent>
           </Card>

@@ -426,7 +426,19 @@ public class ApplicationSubmissionSessionService {
         // ready, but the user must complete submission themselves. This intentionally replaces the
         // prior "treat ABORTED as SUBMITTED, matching autopilot's safe semantics" behavior, which
         // mislabeled the vast majority of runs (every ATS except Greenhouse/Lever) as submitted.
+        //
+        // Phase 0 (Browser Automation Platform) — a third outcome now exists. SUBMIT_UNVERIFIED
+        // means the click genuinely happened but the evidence didn't certify delivery. That must
+        // NOT fall into the WAITING_MANUAL_SUBMISSION branch below: telling the user to submit
+        // manually an application that may already be with the employer is how duplicates are
+        // created. It gets its own honest state and proceeds to tracking.
         boolean genuinelySubmitted = ApplicationExecution.STATUS_SUBMITTED.equals(executionStatus);
+        boolean submittedUnverified = ApplicationExecution.STATUS_SUBMIT_UNVERIFIED.equals(executionStatus);
+        if (submittedUnverified) {
+            advance(session, ApplicationSubmissionSession.STATUS_SUBMIT_UNVERIFIED);
+            trackAndComplete(session, userId, jobId);
+            return;
+        }
         if (!genuinelySubmitted) {
             advance(session, ApplicationSubmissionSession.STATUS_WAITING_MANUAL_SUBMISSION);
             return;
@@ -448,6 +460,16 @@ public class ApplicationSubmissionSessionService {
                 ? ApplicationSubmissionSession.STATUS_VERIFIED
                 : ApplicationSubmissionSession.STATUS_VERIFICATION_FAILED);
 
+        trackAndComplete(session, userId, jobId);
+    }
+
+    /**
+     * Steps 12-13, extracted unchanged in Phase 0 so both terminal submit outcomes — verified
+     * {@code SUBMITTED} and unproven {@code SUBMIT_UNVERIFIED} — share one tracking path. An
+     * unverified submission still needs the kanban card and the lifecycle transition: the
+     * application very likely does exist, and hiding it would be its own kind of dishonesty.
+     */
+    private void trackAndComplete(ApplicationSubmissionSession session, UUID userId, UUID jobId) {
         // Step 12 — tracking via the canonical lifecycle service, plus the kanban Application row so
         // the completed submission actually lands in the "Applied" column. Update the existing card
         // if one exists (e.g. the job was saved first); otherwise CREATE one — a native pipeline Apply

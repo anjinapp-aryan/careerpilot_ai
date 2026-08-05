@@ -61,6 +61,8 @@ public class JobMatchingService {
     private final LearningRecommendationBooster learningBooster;
     private final ai.careerpilot.companyintel.CompanyKnowledgeBooster companyBooster;
     private final ai.careerpilot.memory.CareerMemoryBooster careerMemoryBooster;
+    private final ai.careerpilot.intelligence.ProductionIntelligenceBooster productionBooster;
+    private final ai.careerpilot.intelligence.ProductionIntelligenceService productionIntelligence;
     private final InternationalEligibilityFilter internationalEligibility;
     private final ObjectMapper mapper = new ObjectMapper();
 
@@ -117,6 +119,8 @@ public class JobMatchingService {
                               LearningRecommendationBooster learningBooster,
                               ai.careerpilot.companyintel.CompanyKnowledgeBooster companyBooster,
                               ai.careerpilot.memory.CareerMemoryBooster careerMemoryBooster,
+                              ai.careerpilot.intelligence.ProductionIntelligenceBooster productionBooster,
+                              ai.careerpilot.intelligence.ProductionIntelligenceService productionIntelligence,
                               InternationalEligibilityFilter internationalEligibility,
                               @Value("${jobs.recommendation.strict-gate-enabled:true}") boolean strictGateEnabled,
                               @Value("${jobs.recommendation.gate-min-score:70}") int gateMinScore,
@@ -143,6 +147,8 @@ public class JobMatchingService {
         this.learningBooster = learningBooster;
         this.companyBooster = companyBooster;
         this.careerMemoryBooster = careerMemoryBooster;
+        this.productionBooster = productionBooster;
+        this.productionIntelligence = productionIntelligence;
         this.internationalEligibility = internationalEligibility;
         this.strictGateEnabled = strictGateEnabled;
         this.gateMinScore = gateMinScore;
@@ -208,6 +214,13 @@ public class JobMatchingService {
         java.util.concurrent.atomic.AtomicInteger cHardPref = new java.util.concurrent.atomic.AtomicInteger();
         java.util.concurrent.atomic.AtomicInteger cRoleSim = new java.util.concurrent.atomic.AtomicInteger();
         java.util.concurrent.atomic.AtomicInteger cGate = new java.util.concurrent.atomic.AtomicInteger();
+        // Phase 13C — resolved ONCE for the whole pool, never inside the stream. A per-job lookup
+        // here would be four repository reads multiplied by the pool size; this way the production
+        // -evidence adjustment costs the same whether the pool holds ten jobs or a thousand.
+        // Null when the booster is dark, so no snapshot is even built on a stock deployment.
+        final ai.careerpilot.intelligence.ProductionOptimizationSnapshot productionSnapshot =
+                productionBooster.isActive() ? safeProductionSnapshot(userId) : null;
+
         List<Scored> scored = pool.stream()
                 .filter(j -> { boolean ok = !isRoleExcluded(j, excludedRoles); if (!ok) cRoleExcl.incrementAndGet(); return ok; })
                 .filter(j -> { boolean ok = !isIndustryExcluded(j, candidateFamily); if (!ok) cIndustryExcl.incrementAndGet(); return ok; })
@@ -219,8 +232,9 @@ public class JobMatchingService {
                     if (!ok) cRoleSim.incrementAndGet();
                     return ok;
                 })
-                .map(j -> new Scored(j, applyCareerMemoryBoost(userId, j, applyCompanyKnowledgeBoost(userId, j,
-                        applyLearningBoost(userId, j, scoring.scoreV2(j, effectiveSkills(j, enrichedSkills), ctx, prefs))))))
+                .map(j -> new Scored(j, applyProductionIntelligenceBoost(productionSnapshot, j,
+                        applyCareerMemoryBoost(userId, j, applyCompanyKnowledgeBoost(userId, j,
+                        applyLearningBoost(userId, j, scoring.scoreV2(j, effectiveSkills(j, enrichedSkills), ctx, prefs)))))))
                 .filter(s -> { boolean ok = passesGate(s.result()); if (!ok) cGate.incrementAndGet(); return ok; })
                 .toList();
         log.info("RECO_MATCH_DEBUG pool={} droppedRoleExcl={} droppedIndustry={} droppedHardPref={} droppedRoleSim={} droppedGate={} survived={}",
@@ -321,6 +335,42 @@ public class JobMatchingService {
         return new JobScoring.ScoreResultV2(adjusted, base.matchedSkills(), base.missingSkills(),
                 base.breakdown().withLearningBoost(boost), base.confidence(),
                 base.matchedSkillFamilyCount(), base.matchedRoleCount());
+    }
+
+    /**
+     * Phase 13C — applies the production-evidence adjustment (±10 max) on top of the career-memory
+     * boost, the fourth link in this same chain and the same clamping as its three predecessors.
+     * Returns {@code base} unchanged (same object) when the booster is dark or the snapshot has
+     * nothing actionable, so stock ranking is byte-for-byte identical until
+     * {@code jobs.matching.production-intelligence-boost.enabled} is explicitly turned on.
+     *
+     * <p>Takes the snapshot rather than a {@code userId} deliberately: it is resolved once for the
+     * whole pool by the caller, so this method issues no query per job.
+     */
+    private JobScoring.ScoreResultV2 applyProductionIntelligenceBoost(
+            ai.careerpilot.intelligence.ProductionOptimizationSnapshot snapshot,
+            Job job, JobScoring.ScoreResultV2 base) {
+        if (snapshot == null) return base;
+        int boost = productionBooster.computeBoost(snapshot, job);
+        if (boost == 0) return base;
+        int adjusted = Math.min(100, Math.max(0, base.matchScore() + boost));
+        return new JobScoring.ScoreResultV2(adjusted, base.matchedSkills(), base.missingSkills(),
+                base.breakdown(), base.confidence(),
+                base.matchedSkillFamilyCount(), base.matchedRoleCount());
+    }
+
+    /**
+     * Resolves the snapshot for one refresh. Try/catch isolated: a failure in the intelligence
+     * layer must degrade ranking to its pre-13C behaviour, never abort a recommendation refresh
+     * the user is waiting on.
+     */
+    private ai.careerpilot.intelligence.ProductionOptimizationSnapshot safeProductionSnapshot(UUID userId) {
+        try {
+            return productionIntelligence.getSnapshot(userId);
+        } catch (Exception e) {
+            log.warn("RECO_MATCH production intelligence unavailable user={}: {}", userId, e.toString());
+            return null;
+        }
     }
 
     /**

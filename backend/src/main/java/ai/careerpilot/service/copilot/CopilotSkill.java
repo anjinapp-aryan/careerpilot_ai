@@ -38,7 +38,9 @@ public enum CopilotSkill {
     EXPLAIN_APPLICATION_STATUS("explain_application_status", "Explain application status"),
     // Gap B — Offer Intelligence & Salary Negotiation
     EXPLAIN_OFFER("explain_offer", "Explain offer"),
-    COMPARE_OFFERS("compare_offers", "Compare offers");
+    COMPARE_OFFERS("compare_offers", "Compare offers"),
+    // Phase 11B — Intelligent Actions & Cross-System Queries
+    DAILY_PRIORITY_BRIEFING("daily_priority_briefing", "What should I do today");
 
     private final String key;
     private final String displayName;

@@ -41,6 +41,18 @@ public class ApplicationSubmissionSession {
     public static final String STATUS_VERIFICATION_FAILED = "VERIFICATION_FAILED";
     /** Phase 7.16.5 — reached from SUBMITTING instead of SUBMITTED whenever no genuine automated submission occurred (no configured/eligible execution backend, or the Gap D guest-apply form-screenshot approval is still pending). Never render this as "Submitted"/"Completed" — the package is real and ready, but the user must complete submission themselves. */
     public static final String STATUS_WAITING_MANUAL_SUBMISSION = "WAITING_MANUAL_SUBMISSION";
+    /**
+     * Phase 0 (Browser Automation Platform) — the automation genuinely clicked submit, but the
+     * evidence was not strong enough to certify it reached the employer (the linked
+     * {@code ApplicationExecution} is {@code SUBMIT_UNVERIFIED}).
+     *
+     * <p>Deliberately distinct from both {@link #STATUS_SUBMITTED} and
+     * {@link #STATUS_WAITING_MANUAL_SUBMISSION}. Rendering it as "Submitted" would overstate what
+     * we know; routing it to WAITING_MANUAL_SUBMISSION would tell the user to re-apply to a job
+     * they may already have applied to, which is how duplicate applications reach an employer.
+     * The honest instruction is "we submitted this — please confirm it arrived".
+     */
+    public static final String STATUS_SUBMIT_UNVERIFIED = "SUBMIT_UNVERIFIED";
     public static final String STATUS_TRACKING = "TRACKING";
     public static final String STATUS_COMPLETED = "COMPLETED";
     public static final String STATUS_FAILED = "FAILED";

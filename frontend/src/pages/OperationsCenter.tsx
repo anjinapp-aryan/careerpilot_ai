@@ -20,11 +20,15 @@ import { Badge, type BadgeTone } from '@/components/ui/badge';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Skeleton } from '@/components/ui/skeleton';
 import { KpiCard } from '@/components/dashboard/KpiCard';
+import { BrowserValidationPanel } from '@/components/execution/BrowserValidationPanel';
 
 const TABS = [
   { value: 'dashboard', label: 'Dashboard' },
   { value: 'fleet', label: 'Fleet View' },
   { value: 'queues', label: 'Queue Monitor' },
+  // Phase 12C.5 — the browser validation harness. Placed here rather than on a route of its own:
+  // this page is already admin-only and already the home for automation observability.
+  { value: 'validation', label: 'Browser Validation' },
 ];
 
 interface OperationsSummary {
@@ -111,6 +115,10 @@ export default function OperationsCenter() {
       {tab === 'dashboard' && <DashboardTab data={summary.data} loading={summary.isLoading} />}
       {tab === 'fleet' && <FleetTab data={fleet.data} loading={fleet.isLoading} />}
       {tab === 'queues' && <QueuesTab data={queues.data} loading={queues.isLoading} />}
+      {/* Not gated by application.operations.enabled: the validation harness has its own flag
+          (browser.validation.enabled) and its own disabled state, so it stays usable even when
+          the operations aggregation view is dark. */}
+      {tab === 'validation' && <BrowserValidationPanel />}
     </div>
   );
 }

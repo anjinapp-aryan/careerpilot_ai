@@ -187,6 +187,142 @@ public class SkillContext {
         return sb.toString();
     }
 
+    // ── Phase 13B — production optimization evidence ───────────────────────────────────────────
+    //
+    // Deliberately a SECOND context block rather than fields added to CareerContext. The two answer
+    // different questions and have different failure modes: career context is "what is happening"
+    // and is safe to state loosely; this is "what the evidence says works" and every line of it
+    // must be defensible. Merging them would let a soft operational statement sit in the same
+    // section as a hard evidential claim.
+
+    private java.util.List<ai.careerpilot.intelligence.OptimizationRecommendationService.Recommendation>
+            optimizationRecommendations = java.util.List.of();
+
+    public void optimizationRecommendations(
+            java.util.List<ai.careerpilot.intelligence.OptimizationRecommendationService.Recommendation> r) {
+        this.optimizationRecommendations = r == null ? java.util.List.of() : java.util.List.copyOf(r);
+        if (!this.optimizationRecommendations.isEmpty()) sources.add("Production Intelligence");
+    }
+
+    /**
+     * Phase 13B — rendered once, centrally, in {@code CopilotService}, same convention as the other
+     * blocks here.
+     *
+     * <p>The instruction text matters as much as the data. Each line already carries its own
+     * citation from {@link ai.careerpilot.intelligence.Evidence#cite()}, and the model is told to
+     * quote those figures rather than characterise them — the failure mode being guarded against is
+     * an answer that says "your resume is performing well" when the evidence says "3 interviews
+     * from 40 applications".
+     */
+    public String optimizationBlock() {
+        if (optimizationRecommendations.isEmpty()) return "";
+        StringBuilder sb = new StringBuilder(
+                "\n\nPRODUCTION OPTIMIZATION EVIDENCE (measured from this user's own outcomes)\n");
+        sb.append("Every line below is backed by real counts. When answering questions about what "
+                + "performs best, cite these figures verbatim. Do NOT characterise them as "
+                + "'strong'/'weak' without stating the numbers, do NOT extrapolate a trend from "
+                + "them, and do NOT invent a confidence percentage — the confidence band shown is "
+                + "derived from sample size only.\n");
+        sb.append("If a question asks about a dimension not listed here, say "
+                + "\"No verified data available.\" rather than reasoning from general knowledge.\n");
+        for (var r : optimizationRecommendations) {
+            sb.append("- [").append(r.category()).append("] ").append(r.render()).append('\n');
+        }
+        return sb.toString();
+    }
+
+    private ai.careerpilot.service.CareerContextService.CareerContext careerContext;
+    public ai.careerpilot.service.CareerContextService.CareerContext careerContext() { return careerContext; }
+    public void careerContext(ai.careerpilot.service.CareerContextService.CareerContext c) {
+        this.careerContext = c;
+        if (c != null) sources.add("Career Context");
+    }
+
+    /**
+     * Phase 11A — rendered once, centrally, in {@code CopilotService}, same convention as {@link
+     * #candidateProfileBlock()}/{@link #memoriesBlock()}. Every field is optional; only non-null,
+     * non-empty sections are rendered, so a partially-populated context (e.g. no active mission but
+     * real workflow/application data) never prints a misleading "no data" line for the parts that
+     * are actually present.
+     */
+    public String careerContextBlock() {
+        if (careerContext == null) return "";
+        var c = careerContext;
+        StringBuilder sb = new StringBuilder("\n\nCAREER CONTEXT (real, verified data — never invent numbers beyond this)\n");
+
+        if (c.mission() != null) {
+            var m = c.mission();
+            sb.append("Active mission: target role '").append(m.targetRole()).append("'");
+            if (m.targetLevel() != null) sb.append(" (").append(m.targetLevel()).append(")");
+            sb.append(", status ").append(m.status());
+            if (m.timelineMonths() != null) sb.append(", ").append(m.timelineMonths()).append(" month timeline");
+            sb.append(".\n");
+            if (m.recommendedNext() != null && !m.recommendedNext().isEmpty()) {
+                sb.append("Orchestrator-recommended next workflows: ");
+                sb.append(m.recommendedNext().stream()
+                        .map(d -> d.workflowId() + " (" + d.reason() + ")")
+                        .reduce((a, b) -> a + "; " + b).orElse(""));
+                sb.append("\n");
+            }
+        }
+
+        if (c.workflow() != null) {
+            var w = c.workflow();
+            sb.append("Workflow runs: latest status ").append(w.latestStatus())
+                    .append(", ").append(w.runningCount()).append(" running, ")
+                    .append(w.failedCount()).append(" failed, ")
+                    .append(w.interruptedCount()).append(" awaiting approval.\n");
+        }
+
+        if (c.applications() != null) {
+            var a = c.applications();
+            sb.append("Applications: ").append(a.total()).append(" total, breakdown ").append(a.countByStatus());
+            if (a.waitingManualSubmission() > 0) {
+                sb.append(", ").append(a.waitingManualSubmission()).append(" waiting on manual submission");
+            }
+            sb.append(".\n");
+        }
+
+        if (c.interviews() != null) {
+            var i = c.interviews();
+            sb.append("Interviews: ").append(i.total()).append(" total, ").append(i.passed()).append(" passed, ")
+                    .append(i.failed()).append(" failed. Most recent: ").append(i.latestType()).append(".\n");
+        }
+
+        if (c.topCompanies() != null && !c.topCompanies().isEmpty()) {
+            sb.append("Top tracked companies: ");
+            sb.append(c.topCompanies().stream()
+                    .map(co -> co.companyName() + " (hiring probability " + co.hiringProbability() + ")")
+                    .reduce((a, b) -> a + "; " + b).orElse(""));
+            sb.append("\n");
+        }
+
+        if (c.recentTimeline() != null && !c.recentTimeline().isEmpty()) {
+            sb.append("Recent activity: ");
+            sb.append(c.recentTimeline().stream()
+                    .map(t -> t.title() + " (" + t.category() + ")")
+                    .reduce((a, b) -> a + "; " + b).orElse(""));
+            sb.append("\n");
+        }
+
+        if (c.analyticsNote() != null) {
+            sb.append("Historical trend data: ").append(c.analyticsNote()).append("\n");
+        }
+
+        if (c.recommendedActions() != null && !c.recommendedActions().isEmpty()) {
+            sb.append("\nRECOMMENDED ACTIONS (deterministic, priority-ordered, derived only from the verified "
+                    + "data above — when you suggest next steps, prefer these over inventing your own; "
+                    + "never present an action here as more certain than its reason states)\n");
+            int rank = 1;
+            for (var action : c.recommendedActions()) {
+                sb.append(rank++).append(". [").append(action.category()).append("] ")
+                        .append(action.title()).append(" — ").append(action.reason()).append("\n");
+            }
+        }
+
+        return sb.toString();
+    }
+
     public Set<String> sources() { return sources; }
     public void addSource(String source) { sources.add(source); }
     public String sourcesBlock() {

@@ -34,7 +34,14 @@ public final class SubmissionStateMachine {
             // form-screenshot approval still pending) routes to WAITING_MANUAL_SUBMISSION instead —
             // a deliberate dead end for now (like WAITING_APPROVAL, resting until a future
             // manual-confirm action), never silently relabeled SUBMITTED.
-            Map.entry(STATUS_SUBMITTING, Set.of(STATUS_SUBMITTED, STATUS_WAITING_MANUAL_SUBMISSION)),
+            // Phase 0 (Browser Automation Platform) — SUBMIT_UNVERIFIED is the third outcome of a
+            // submit attempt: the click happened but could not be verified. It proceeds to
+            // TRACKING (the application probably does exist, so it must be tracked) without ever
+            // being labelled SUBMITTED, and without being routed to WAITING_MANUAL_SUBMISSION,
+            // which would invite a duplicate application.
+            Map.entry(STATUS_SUBMITTING, Set.of(STATUS_SUBMITTED, STATUS_SUBMIT_UNVERIFIED,
+                    STATUS_WAITING_MANUAL_SUBMISSION)),
+            Map.entry(STATUS_SUBMIT_UNVERIFIED, Set.of(STATUS_TRACKING)),
             Map.entry(STATUS_WAITING_MANUAL_SUBMISSION, Set.of()),
             // Phase 7.16.1 — VERIFYING inserted so VERIFIED is never a bare transition; it can
             // only be reached after a real evidence check. VERIFICATION_FAILED is deliberately

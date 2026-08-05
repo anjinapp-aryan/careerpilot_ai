@@ -10,5 +10,8 @@ public interface ApplicationTimelineRepository extends JpaRepository<Application
 
     List<ApplicationTimeline> findByUserIdAndJobIdOrderByOccurredAtDesc(UUID userId, UUID jobId);
 
+    /** Phase 10H — Career Timeline aggregation: every application event for this user, across all jobs. */
+    List<ApplicationTimeline> findByUserIdOrderByOccurredAtDesc(UUID userId);
+
     long count();
 }

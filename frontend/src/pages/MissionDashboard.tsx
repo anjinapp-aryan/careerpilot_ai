@@ -1106,8 +1106,12 @@ function CareerMemoryCard({ memories, isLoading }: { memories: CareerDecisionMem
   const values = memories.map((m) => m.value).filter((v): v is string => !!v);
   return (
     <Card>
-      <CardHeader>
+      <CardHeader className="flex-row items-center justify-between">
         <CardTitle className="flex items-center gap-2"><Brain className="h-4 w-4 text-primary" /> CareerPilot remembers</CardTitle>
+        {/* Links into the full "AI Learned About You" dashboard (/ai-memory) — search, filter, confirm/forget, timeline, analytics. This card is deliberately just a teaser. */}
+        <Link to="/ai-memory" className="text-sm font-medium text-primary hover:underline">
+          View all
+        </Link>
       </CardHeader>
       <CardContent>
         {isLoading ? (

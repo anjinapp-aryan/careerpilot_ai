@@ -45,6 +45,10 @@ public class ExecutionDiagnosticsController {
     private final ATSConnectorRegistry atsRegistry;
     private final GuestApplyAutomationService guestApply;
     private final OperationsService operations;
+    private final ai.careerpilot.execution.browser.pool.BrowserLeasePool leasePool;
+    private final ai.careerpilot.execution.browser.pool.BrowserPoolMetrics poolMetrics;
+    private final ai.careerpilot.execution.browser.pool.BrowserLaunchOptionsFactory launchOptions;
+    private final ai.careerpilot.execution.browser.BrowserHealthService browserHealth;
 
     private final ThreadPoolTaskExecutor executionExecutor;
     private final ThreadPoolTaskExecutor browserExecutor;
@@ -72,6 +76,10 @@ public class ExecutionDiagnosticsController {
             ATSConnectorRegistry atsRegistry,
             GuestApplyAutomationService guestApply,
             OperationsService operations,
+            ai.careerpilot.execution.browser.pool.BrowserLeasePool leasePool,
+            ai.careerpilot.execution.browser.pool.BrowserPoolMetrics poolMetrics,
+            ai.careerpilot.execution.browser.pool.BrowserLaunchOptionsFactory launchOptions,
+            ai.careerpilot.execution.browser.BrowserHealthService browserHealth,
             @Qualifier(ExecutionExecutorsConfig.APPLICATION_EXECUTION_EXECUTOR) ThreadPoolTaskExecutor executionExecutor,
             @Qualifier(ExecutionExecutorsConfig.BROWSER_AUTOMATION_EXECUTOR) ThreadPoolTaskExecutor browserExecutor,
             @Qualifier(ExecutionExecutorsConfig.ATS_CONNECTOR_EXECUTOR) ThreadPoolTaskExecutor atsExecutor,
@@ -88,6 +96,10 @@ public class ExecutionDiagnosticsController {
         this.atsRegistry = atsRegistry;
         this.guestApply = guestApply;
         this.operations = operations;
+        this.leasePool = leasePool;
+        this.poolMetrics = poolMetrics;
+        this.launchOptions = launchOptions;
+        this.browserHealth = browserHealth;
         this.executionExecutor = executionExecutor;
         this.browserExecutor = browserExecutor;
         this.atsExecutor = atsExecutor;
@@ -102,6 +114,23 @@ public class ExecutionDiagnosticsController {
                 (Long) m.get("applicationExecutionTotal"), (Long) m.get("applicationExecutionFailures"));
     }
 
+    /**
+     * Phase 12B — the browser stage's report is now assembled by {@link
+     * ai.careerpilot.execution.browser.BrowserHealthService} rather than inline here, because it
+     * grew past what a controller method should own (runtime/ARM derivation, installation probe,
+     * launch lifecycle, rollout stage, capacity, outcomes, and a composite verdict).
+     *
+     * <p><b>Every pre-Phase-12B key is preserved at its exact path</b> — {@code enabled},
+     * {@code browserTotal}, {@code browserFailures}, {@code pool}, the {@code pool*} counters, the
+     * executor keys, {@code launchOptions}, {@code guestApplyOnlyFlag} and the rest — so no existing
+     * consumer of this endpoint breaks. The new material is additive: {@code rollout},
+     * {@code runtime}, {@code installation}, {@code session} and {@code lifecycle}.
+     *
+     * <p>{@code health} is deliberately overwritten by the health service's richer verdict rather
+     * than left as {@link #stage}'s queue-depth-only one: a browser that cannot launch at all was
+     * previously reported {@code UP} as long as its executor queue was empty, which is exactly the
+     * wrong answer for the failure mode this phase exists to catch.
+     */
     @GetMapping("/browser")
     public Map<String, Object> browser() {
         Map<String, Object> m = browserMetrics.snapshot();
@@ -110,10 +139,17 @@ public class ExecutionDiagnosticsController {
         // Gap D — diagnostics-visibility flag only; real enforcement is GuestApplyEligibility below.
         out.put("guestApplyOnlyFlag", guestApply.isGuestApplyOnlyFlagEnabled());
         out.put("guestApplyEligibleConnectors", java.util.List.of("greenhouse", "lever"));
+        // Enterprise Browser Automation — live capacity state. `pool.saturated` plus
+        // `poolAcquireTimeouts` is the demand-exceeds-memory-budget signal, and `poolLeasesExpired`
+        // is the release-leak signal; both were entirely unobservable before the pool existed.
+        out.put("pool", leasePool.snapshot());
+        out.putAll(poolMetrics.snapshot());
+        out.put("launchOptions", launchOptions.describe());
         out.put("browserRealSubmissions", m.get("browserRealSubmissions"));
         out.put("browserSimulatedSubmissions", m.get("browserSimulatedSubmissions"));
         out.put("captchaOrLoginWallDetected", m.get("browserCaptchaOrLoginWallDetected"));
         out.put("formScreenshotApprovalsPending", m.get("browserFormScreenshotApprovalsPending"));
+        out.putAll(browserHealth.report());
         return out;
     }
 

@@ -4,6 +4,7 @@ import ai.careerpilot.domain.Job;
 import ai.careerpilot.execution.ats.AbstractStubConnector;
 import ai.careerpilot.execution.browser.PlaywrightAutomationProvider;
 import ai.careerpilot.execution.verification.VerificationResult;
+import ai.careerpilot.execution.verification.evidence.ConfirmationPageVerifier;
 import org.springframework.stereotype.Component;
 
 import java.util.Map;
@@ -22,9 +23,11 @@ import java.util.Map;
 public class LeverConnector extends AbstractStubConnector {
 
     private final PlaywrightAutomationProvider browser;
+    private final ConfirmationPageVerifier verifier;
 
-    public LeverConnector(PlaywrightAutomationProvider browser) {
+    public LeverConnector(PlaywrightAutomationProvider browser, ConfirmationPageVerifier verifier) {
         this.browser = browser;
+        this.verifier = verifier;
     }
 
     @Override public String name() { return "lever"; }
@@ -56,19 +59,10 @@ public class LeverConnector extends AbstractStubConnector {
         }
     }
 
-    /** Same honest, non-fabricated signal as {@code GreenhouseConnector.verifySubmission} — see its javadoc. */
+    /** Phase 0 — same real evidence adjudication as {@code GreenhouseConnector.verifySubmission}; see its javadoc. */
     @Override
     public VerificationResult verifySubmission(String confirmationReference) {
-        if (confirmationReference == null || confirmationReference.isBlank()) {
-            return VerificationResult.unableToVerify("POST_SUBMIT_PAGE_CAPTURE",
-                    "no post-submit page content was captured");
-        }
-        if (confirmationReference.trim().length() < 50) {
-            return VerificationResult.unableToVerify("POST_SUBMIT_PAGE_CAPTURE",
-                    "captured content too short to be a real confirmation page");
-        }
-        return VerificationResult.verified("POST_SUBMIT_PAGE_CAPTURE",
-                "a substantial page was rendered after the submit click");
+        return verifier.verify(confirmationReference);
     }
 
     private static String truncate(String s, int max) {

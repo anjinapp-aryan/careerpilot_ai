@@ -3,15 +3,19 @@ package ai.careerpilot.execution.execution;
 import ai.careerpilot.domain.ApprovalQueueEntry;
 import ai.careerpilot.execution.approval.ApprovalService;
 import ai.careerpilot.execution.config.ExecutionExecutorsConfig;
+import ai.careerpilot.execution.browser.multistep.MultiStepExecutionOrchestrator;
 import ai.careerpilot.execution.event.ApprovalGrantedEvent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
+
+import java.util.UUID;
 
 /**
  * Gap D — reacts to {@link ApprovalGrantedEvent} exactly like {@code ApplicationExecutionWorker}
@@ -39,9 +43,14 @@ public class FormApprovalExecutionWorker {
     private final ApplicationExecutionService executionService;
     private final ThreadPoolTaskExecutor executor;
 
+    /** Phase F3 — optional; absent or disabled leaves this worker's behaviour unchanged. */
+    private final ObjectProvider<MultiStepExecutionOrchestrator> multiStep;
+
     public FormApprovalExecutionWorker(ApprovalService approvalService,
                                        ApplicationExecutionService executionService,
-                                       @Qualifier(ExecutionExecutorsConfig.BROWSER_AUTOMATION_EXECUTOR) ThreadPoolTaskExecutor executor) {
+                                       @Qualifier(ExecutionExecutorsConfig.BROWSER_AUTOMATION_EXECUTOR) ThreadPoolTaskExecutor executor,
+                                       ObjectProvider<MultiStepExecutionOrchestrator> multiStep) {
+        this.multiStep = multiStep;
         this.approvalService = approvalService;
         this.executionService = executionService;
         this.executor = executor;
@@ -58,6 +67,22 @@ public class FormApprovalExecutionWorker {
             }
             if (entry.getExecutionId() == null) {
                 log.warn("FORM_APPROVAL_EXECUTION approval {} has no executionId — cannot finalize", entry.getId());
+                return;
+            }
+            // ── Phase F3 — the only new branch on this path ──
+            //
+            // A multi-step run parks one approval per page, so an approval that belongs to a
+            // recorded ExecutionStep must advance the wizard rather than submit. Everything else —
+            // every single-page approval, and every approval at all when the flag is off — takes
+            // the pre-F3 route below, unchanged.
+            //
+            // isMultiStepApproval() short-circuits on the disabled flag BEFORE touching the
+            // repository, so a deployment with multi-step off issues no extra query here.
+            MultiStepExecutionOrchestrator orchestrator = multiStep.getIfAvailable();
+            if (orchestrator != null && orchestrator.isMultiStepApproval(entry.getId())) {
+                UUID approvalId = entry.getId();
+                UUID executionId = entry.getExecutionId();
+                executor.execute(() -> executionService.resumeMultiStepAfterApproval(approvalId, executionId));
                 return;
             }
             executor.execute(() -> executionService.finalizeGuestApplySubmit(entry.getExecutionId()));

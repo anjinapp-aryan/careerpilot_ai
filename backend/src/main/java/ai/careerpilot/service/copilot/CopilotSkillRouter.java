@@ -48,6 +48,7 @@ public class CopilotSkillRouter {
             SubmissionStatusHandler submissionStatus,
             ExplainApplicationStatusHandler explainApplicationStatus,
             OfferIntelligenceHandler offerIntelligence,
+            DailyPriorityBriefingHandler dailyPriorityBriefing,
             GeneralAssistantHandler generalAssistant) {
 
         this.handlers = new EnumMap<>(CopilotSkill.class);
@@ -81,6 +82,7 @@ public class CopilotSkillRouter {
         this.handlers.put(CopilotSkill.EXPLAIN_APPLICATION_STATUS, explainApplicationStatus);
         this.handlers.put(CopilotSkill.EXPLAIN_OFFER, offerIntelligence);
         this.handlers.put(CopilotSkill.COMPARE_OFFERS, offerIntelligence);
+        this.handlers.put(CopilotSkill.DAILY_PRIORITY_BRIEFING, dailyPriorityBriefing);
 
         this.fallback = generalAssistant;
 
@@ -118,6 +120,18 @@ public class CopilotSkillRouter {
      */
     private CopilotSkill inferSkillFromMessage(String message) {
         String lower = message.toLowerCase();
+
+        // Phase 11B — the cross-system "what should I do" query, checked first: its phrasing
+        // ("today", "priority", "blocking", "focus") is specific enough not to collide with any
+        // skill below, and it should win over e.g. a bare "mission"/"application" match.
+        if (lower.contains("what should i do today") || lower.contains("what should i do this week")
+                || lower.contains("daily briefing") || lower.contains("daily priority")
+                || lower.contains("top priority") || lower.contains("my priorit")
+                || lower.contains("next best action") || lower.contains("what should i focus on")
+                || lower.contains("what's blocking") || lower.contains("whats blocking")
+                || (lower.contains("blocking") && lower.contains("mission"))) {
+            return CopilotSkill.DAILY_PRIORITY_BRIEFING;
+        }
 
         // Applications Page command-center intents — checked first (specific phrasing) so they win
         // over the more generic INTERVIEW_PREPARATION/APPLICATION_STRATEGY branches below.

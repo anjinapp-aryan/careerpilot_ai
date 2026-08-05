@@ -32,15 +32,75 @@ public class ExecutionController {
     private final ApplicationExecutionService execution;
     private final ApplicationTrackingService tracking;
     private final OperationsService operations;
+    private final ai.careerpilot.execution.browser.validation.BrowserValidationHarness validationHarness;
+    private final ai.careerpilot.execution.browser.validation.ValidationHistoryService validationHistory;
 
     @Value("${application.operations.enabled:false}") private boolean operationsEnabled;
 
     public ExecutionController(ApprovalService approval, ApplicationExecutionService execution,
-                               ApplicationTrackingService tracking, OperationsService operations) {
+                               ApplicationTrackingService tracking, OperationsService operations,
+                               ai.careerpilot.execution.browser.validation.BrowserValidationHarness validationHarness,
+                               ai.careerpilot.execution.browser.validation.ValidationHistoryService validationHistory) {
         this.approval = approval;
         this.execution = execution;
         this.tracking = tracking;
         this.operations = operations;
+        this.validationHarness = validationHarness;
+        this.validationHistory = validationHistory;
+    }
+
+    /**
+     * Phase 12C.5 — validate automation against a real employer page <b>without submitting</b>.
+     * Opens the page, discovers and classifies every control, produces an automation plan and a
+     * confidence score, captures a screenshot, and stops. Nothing is uploaded, answered or sent.
+     *
+     * <p><b>This lives on the authenticated controller, not on {@code /api/diagnostics}, for a
+     * specific reason:</b> the harness takes a caller-supplied URL and makes the server fetch it
+     * with a full browser. On an unauthenticated endpoint that is a server-side request forgery
+     * primitive — anyone could point it at the internal Docker network or the cloud metadata
+     * service and get a screenshot back. Authentication is the first control;
+     * {@code ValidationUrlPolicy} (scheme, host allow-list, resolved-address check) is the second,
+     * and applies regardless of who is calling.
+     *
+     * <p>Validation <em>results</em> are exposed on the existing unauthenticated
+     * {@code GET /api/diagnostics/browser} as the phase requires — reading a past result is safe,
+     * triggering a fetch is not.
+     */
+    @PostMapping("/validate-page")
+    public ResponseEntity<Map<String, Object>> validatePage(AuthenticatedUser user,
+                                                            @RequestBody Map<String, Object> body) {
+        String url = body == null ? null : String.valueOf(body.get("url"));
+        UUID sessionId = parseUuid(body == null ? null : body.get("sessionId"));
+        boolean resume = Boolean.TRUE.equals(body == null ? null : body.get("resumeAvailable"));
+        boolean coverLetter = Boolean.TRUE.equals(body == null ? null : body.get("coverLetterAvailable"));
+
+        var report = validationHarness.validate(url, user.userId(), sessionId,
+                new ai.careerpilot.execution.browser.validation.BrowserValidationHarness
+                        .DocumentAvailability(resume, coverLetter));
+
+        // A refusal is a client-side problem (disabled feature, disallowed URL), so it is a 400 —
+        // distinguishable from a page that genuinely could not be validated, which is a 200 with a
+        // FAILED status and a reason, because that IS the diagnostic answer.
+        if (report.status() == ai.careerpilot.execution.browser.validation.ValidationReport.Status.REFUSED) {
+            return ResponseEntity.badRequest().body(report.snapshot());
+        }
+
+        // Phase 13A — persist the run and compare it against this posting's own baseline. Done here
+        // rather than inside the harness so neither the harness nor ValidationReport changes shape;
+        // the drift verdict is merged into the response so an operator learns about a regression in
+        // the response that caused it, not from a dashboard hours later.
+        Map<String, Object> body2 = new java.util.LinkedHashMap<>(report.snapshot());
+        body2.put("drift", validationHistory.record(report, user.userId()).snapshot());
+        return ResponseEntity.ok(body2);
+    }
+
+    private static UUID parseUuid(Object value) {
+        if (value == null) return null;
+        try {
+            return UUID.fromString(String.valueOf(value));
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
     }
 
     /** Pending approval queue for the current user. */

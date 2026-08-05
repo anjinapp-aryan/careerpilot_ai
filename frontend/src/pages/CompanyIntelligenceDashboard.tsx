@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { Building2, Clock, Cpu, GitCompare, Search, Users } from 'lucide-react';
 import { api } from '@/lib/api';
@@ -34,8 +35,16 @@ function scoreTone(v?: number | null): BadgeTone {
  * off means the search list and every panel render an EmptyState instead of an error.
  */
 export default function CompanyIntelligenceDashboard() {
+  // Deep-link support: CompanyIntelPanel (job/application drawers) links here with
+  // ?company=<name>&jobId=<id> so a user can jump straight to a specific company's full
+  // profile, with the Candidate Fit section intact — a jobId-less visit here otherwise
+  // never has a jobId to render Candidate Fit at all.
+  const [searchParams] = useSearchParams();
+  const deepLinkCompany = searchParams.get('company');
+  const deepLinkJobId = searchParams.get('jobId');
+
   const [tab, setTab] = useState('overview');
-  const [query, setQuery] = useState('');
+  const [query, setQuery] = useState(deepLinkCompany ?? '');
   const [selected, setSelected] = useState<CompanySummary | null>(null);
   const [compareB, setCompareB] = useState<CompanySummary | null>(null);
 
@@ -45,6 +54,15 @@ export default function CompanyIntelligenceDashboard() {
     staleTime: 30_000,
     retry: false,
   });
+
+  // Auto-select the deep-linked company once its search result arrives (once only —
+  // afterwards the user's own clicks take over, matching this page's existing selection model).
+  useEffect(() => {
+    if (!deepLinkCompany || selected || !search.data) return;
+    const match = search.data.find((c) => c.companyName.toLowerCase() === deepLinkCompany.toLowerCase()) ?? search.data[0];
+    if (match) setSelected(match);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [deepLinkCompany, search.data]);
 
   return (
     <div className="space-y-4">
@@ -97,7 +115,9 @@ export default function CompanyIntelligenceDashboard() {
       ) : (
         <>
           <Tabs items={TABS} value={tab} onChange={setTab} />
-          {tab === 'overview' && <CompanyIntelPanel companyName={selected.companyName} showTimeline />}
+          {tab === 'overview' && (
+            <CompanyIntelPanel companyName={selected.companyName} jobId={deepLinkJobId} showTimeline />
+          )}
           {tab === 'hiring' && <HiringTab companyId={selected.id} />}
           {tab === 'interview' && <InterviewTab companyId={selected.id} />}
           {tab === 'technology' && <TechnologyTab companyId={selected.id} />}

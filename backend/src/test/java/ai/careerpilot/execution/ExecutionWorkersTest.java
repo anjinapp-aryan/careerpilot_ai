@@ -176,7 +176,7 @@ class ExecutionWorkersTest {
         ApprovalQueueEntry formEntry = ApprovalQueueEntry.builder()
                 .id(approvalId).approvalType(ApprovalQueueEntry.TYPE_FORM_SCREENSHOT).executionId(executionId).build();
         when(approvalService.findById(approvalId)).thenReturn(Optional.of(formEntry));
-        new FormApprovalExecutionWorker(approvalService, execution, inlineExecutor())
+        new FormApprovalExecutionWorker(approvalService, execution, inlineExecutor(), noMultiStep())
                 .onApprovalGranted(new ApprovalGrantedEvent(userId, jobId, pkgId, approvalId, "boss"));
         verify(execution).finalizeGuestApplySubmit(executionId);
     }
@@ -190,7 +190,7 @@ class ExecutionWorkersTest {
         ApprovalQueueEntry pkgEntry = ApprovalQueueEntry.builder()
                 .id(approvalId).approvalType(ApprovalQueueEntry.TYPE_APPLICATION_PACKAGE).build();
         when(approvalService.findById(approvalId)).thenReturn(Optional.of(pkgEntry));
-        new FormApprovalExecutionWorker(approvalService, execution, inlineExecutor())
+        new FormApprovalExecutionWorker(approvalService, execution, inlineExecutor(), noMultiStep())
                 .onApprovalGranted(new ApprovalGrantedEvent(userId, jobId, pkgId, approvalId, "boss"));
         verify(execution, never()).finalizeGuestApplySubmit(any());
     }
@@ -200,7 +200,7 @@ class ExecutionWorkersTest {
         ApprovalService approvalService = mock(ApprovalService.class);
         ApplicationExecutionService execution = mock(ApplicationExecutionService.class);
         when(execution.isEnabled()).thenReturn(false);
-        new FormApprovalExecutionWorker(approvalService, execution, inlineExecutor())
+        new FormApprovalExecutionWorker(approvalService, execution, inlineExecutor(), noMultiStep())
                 .onApprovalGranted(new ApprovalGrantedEvent(userId, jobId, pkgId, UUID.randomUUID(), "boss"));
         verify(execution, never()).finalizeGuestApplySubmit(any());
         verifyNoInteractions(approvalService);
@@ -269,7 +269,22 @@ class ExecutionWorkersTest {
                 .id(UUID.randomUUID()).approvalType(ApprovalQueueEntry.TYPE_FORM_SCREENSHOT)
                 .executionId(UUID.randomUUID()).build();
         when(approvalService.findById(any())).thenReturn(Optional.of(formEntry));
-        new FormApprovalExecutionWorker(approvalService, execution, boom)
+        new FormApprovalExecutionWorker(approvalService, execution, boom, noMultiStep())
                 .onApprovalGranted(new ApprovalGrantedEvent(userId, jobId, pkgId, UUID.randomUUID(), "boss"));
+    }
+
+    /**
+     * Phase F3 added an optional multi-step orchestrator to this worker. These pre-F3 tests supply
+     * an ABSENT one, so every assertion below doubles as a check that routing without it is the
+     * original single-page behaviour.
+     */
+    @SuppressWarnings("unchecked")
+    private static org.springframework.beans.factory.ObjectProvider<
+            ai.careerpilot.execution.browser.multistep.MultiStepExecutionOrchestrator> noMultiStep() {
+        org.springframework.beans.factory.ObjectProvider<
+                ai.careerpilot.execution.browser.multistep.MultiStepExecutionOrchestrator> p =
+                org.mockito.Mockito.mock(org.springframework.beans.factory.ObjectProvider.class);
+        org.mockito.Mockito.when(p.getIfAvailable()).thenReturn(null);
+        return p;
     }
 }

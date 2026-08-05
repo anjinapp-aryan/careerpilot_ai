@@ -40,6 +40,24 @@ public class ApplicationExecution {
      * rejection of the form does not retry automatically).
      */
     public static final String STATUS_AWAITING_APPROVAL = "AWAITING_APPROVAL";
+    /**
+     * Phase 0 (Browser Automation Platform) — the submit click genuinely happened, but the
+     * collected evidence was not strong enough to certify that the application reached the
+     * employer (see {@code VerificationAdjudicator} / {@code ConfidenceLevel}).
+     *
+     * <p>Terminal, and deliberately NOT {@code SUBMITTED}: before this phase the terminal SUBMITTED
+     * transition ran unconditionally with verification best-effort inside a try/catch, so an
+     * unprovable — or even failed — submission was reported to the user as a success. This status
+     * is the honest middle ground between "we know it worked" and "we know it didn't".
+     *
+     * <p>Never auto-retried: re-clicking submit on an attempt that may already have succeeded is
+     * how duplicate applications are created. {@code RetryPolicyService} already classifies this
+     * situation as {@code CONFIRMATION_MISSING} and correctly decides PAUSE.
+     *
+     * <p>17 characters — fits the existing {@code execution_status VARCHAR(20)} column with margin,
+     * so this phase needs no migration.
+     */
+    public static final String STATUS_SUBMIT_UNVERIFIED = "SUBMIT_UNVERIFIED";
 
     public static final String TYPE_BROWSER = "BROWSER";
     public static final String TYPE_ATS_CONNECTOR = "ATS_CONNECTOR";

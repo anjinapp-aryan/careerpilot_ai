@@ -24,10 +24,14 @@ class PlaywrightAutomationProviderTest {
 
     private final BrowserAutomationMetrics metrics = new BrowserAutomationMetrics();
 
+    private ai.careerpilot.execution.browser.pool.BrowserLeasePool leasePool =
+            mock(ai.careerpilot.execution.browser.pool.BrowserLeasePool.class);
+
     private PlaywrightAutomationProvider provider(boolean flagEnabled, boolean sessionManagerEnabled) {
         BrowserSessionManager sessionManager = mock(BrowserSessionManager.class);
         when(sessionManager.isEnabled()).thenReturn(sessionManagerEnabled);
-        return new PlaywrightAutomationProvider(sessionManager, metrics, flagEnabled);
+        leasePool = mock(ai.careerpilot.execution.browser.pool.BrowserLeasePool.class);
+        return new PlaywrightAutomationProvider(sessionManager, leasePool, metrics, flagEnabled);
     }
 
     @Test
@@ -91,5 +95,78 @@ class PlaywrightAutomationProviderTest {
     void logoutIsSafeToCallWithoutAnyPriorNavigate() {
         PlaywrightAutomationProvider p = provider(true, true);
         p.logout(); // must not throw
+    }
+
+    // ── Enterprise Browser Automation — lease lifecycle ──
+
+    private ai.careerpilot.execution.browser.pool.ContextLease stubLease() {
+        var lease = mock(ai.careerpilot.execution.browser.pool.ContextLease.class);
+        when(lease.id()).thenReturn(java.util.UUID.randomUUID());
+        when(lease.page()).thenReturn(mock(com.microsoft.playwright.Page.class));
+        return lease;
+    }
+
+    @Test
+    void navigateAcquiresALeaseAndLogoutReleasesIt() {
+        PlaywrightAutomationProvider p = provider(true, true);
+        var lease = stubLease();
+        when(leasePool.acquire()).thenReturn(lease);
+
+        p.navigate("https://example.com");
+        org.mockito.Mockito.verify(leasePool).acquire();
+
+        p.logout();
+        org.mockito.Mockito.verify(lease).close();
+    }
+
+    /**
+     * The leak this refactor fixes. Previously {@code navigate()} overwrote the thread's context
+     * holder unconditionally, so a caller that threw before {@code logout()} orphaned a live
+     * Chromium context on a pooled thread — invisible, and permanently consuming memory.
+     */
+    @Test
+    void navigateReleasesAnUnclosedPriorLeaseInsteadOfOrphaningIt() {
+        PlaywrightAutomationProvider p = provider(true, true);
+        var first = stubLease();
+        var second = stubLease();
+        when(leasePool.acquire()).thenReturn(first, second);
+
+        p.navigate("https://example.com/one");
+        // No logout() — simulates a caller that threw mid-session on a pooled thread.
+        p.navigate("https://example.com/two");
+
+        org.mockito.Mockito.verify(first).close();
+        org.mockito.Mockito.verify(leasePool, org.mockito.Mockito.times(2)).acquire();
+    }
+
+    @Test
+    void navigateFailureReleasesTheLeaseRatherThanHoldingCapacity() {
+        PlaywrightAutomationProvider p = provider(true, true);
+        var lease = mock(ai.careerpilot.execution.browser.pool.ContextLease.class);
+        when(lease.id()).thenReturn(java.util.UUID.randomUUID());
+        com.microsoft.playwright.Page page = mock(com.microsoft.playwright.Page.class);
+        when(lease.page()).thenReturn(page);
+        org.mockito.Mockito.doThrow(new IllegalStateException("navigation failed"))
+                .when(page).navigate(org.mockito.ArgumentMatchers.anyString(),
+                        org.mockito.ArgumentMatchers.any());
+        when(leasePool.acquire()).thenReturn(lease);
+
+        assertThatThrownBy(() -> p.navigate("https://example.com"))
+                .isInstanceOf(IllegalStateException.class);
+
+        org.mockito.Mockito.verify(lease).close();
+    }
+
+    @Test
+    void capacityExhaustionPropagatesAsARetryableSignalNotAnOom() {
+        PlaywrightAutomationProvider p = provider(true, true);
+        when(leasePool.acquire()).thenThrow(
+                new ai.careerpilot.execution.browser.pool.BrowserLeasePool
+                        .BrowserCapacityUnavailableException("no browser capacity within 30s"));
+
+        assertThatThrownBy(() -> p.navigate("https://example.com"))
+                .isInstanceOf(ai.careerpilot.execution.browser.pool.BrowserLeasePool
+                        .BrowserCapacityUnavailableException.class)
+                .hasMessageContaining("no browser capacity");
     }
 }

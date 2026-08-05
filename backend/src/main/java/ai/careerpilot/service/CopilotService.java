@@ -39,6 +39,11 @@ import java.util.function.Consumer;
  * Every skill also receives the candidate's canonical profile automatically here (not in any
  * individual handler) via {@code contextRetriever.getCandidateProfileContext}, gated by
  * {@code copilot.candidate-profile-context.enabled} — see {@link SkillContext#candidateProfileBlock()}.
+ *
+ * <p>Phase 11A adds a fourth centralized block the same way: cross-subsystem awareness (Mission,
+ * Career Timeline, Workflow lifecycle, Applications, Interviews, Company Intelligence) via {@link
+ * CareerContextService}, gated by {@code copilot.career-context.enabled} — see {@link
+ * SkillContext#careerContextBlock()}.
  */
 @Service
 public class CopilotService {
@@ -51,9 +56,13 @@ public class CopilotService {
     private final AgentOrchestrator orchestrator;
     private final CareerContextRetriever contextRetriever;
     private final ApplicationEventPublisher events;
+    private final CareerContextService careerContextService;
     private final boolean candidateProfileContextEnabled;
     private final boolean careerMemoryContextEnabled;
     private final int careerMemoryContextLimit;
+    private final boolean careerContextEnabled;
+    private final ai.careerpilot.intelligence.OptimizationRecommendationService optimizationRecommendations;
+    private final boolean productionIntelligenceEnabled;
     private final ObjectProvider<CapabilityEngine> capabilityEngineProvider;
     private final ObjectProvider<CapabilityAwareChatService> capabilityAwareChatServiceProvider;
     private final ObjectProvider<CapabilityMetrics> capabilityMetricsProvider;
@@ -62,6 +71,7 @@ public class CopilotService {
     public CopilotService(AiGatewayService ai, ConversationMemory memory,
                           CopilotSkillRouter skillRouter, AgentOrchestrator orchestrator,
                           CareerContextRetriever contextRetriever,
+                          CareerContextService careerContextService,
                           ApplicationEventPublisher events,
                           @org.springframework.beans.factory.annotation.Value(
                                   "${copilot.candidate-profile-context.enabled:false}") boolean candidateProfileContextEnabled,
@@ -69,6 +79,11 @@ public class CopilotService {
                                   "${copilot.career-memory-context.enabled:false}") boolean careerMemoryContextEnabled,
                           @org.springframework.beans.factory.annotation.Value(
                                   "${copilot.career-memory-context.limit:5}") int careerMemoryContextLimit,
+                          @org.springframework.beans.factory.annotation.Value(
+                                  "${copilot.career-context.enabled:false}") boolean careerContextEnabled,
+                          ai.careerpilot.intelligence.OptimizationRecommendationService optimizationRecommendations,
+                          @org.springframework.beans.factory.annotation.Value(
+                                  "${copilot.production.enabled:false}") boolean productionIntelligenceEnabled,
                           ObjectProvider<CapabilityEngine> capabilityEngineProvider,
                           ObjectProvider<CapabilityAwareChatService> capabilityAwareChatServiceProvider,
                           ObjectProvider<CapabilityMetrics> capabilityMetricsProvider,
@@ -79,10 +94,14 @@ public class CopilotService {
         this.skillRouter = skillRouter;
         this.orchestrator = orchestrator;
         this.contextRetriever = contextRetriever;
+        this.careerContextService = careerContextService;
         this.events = events;
         this.candidateProfileContextEnabled = candidateProfileContextEnabled;
         this.careerMemoryContextEnabled = careerMemoryContextEnabled;
         this.careerMemoryContextLimit = careerMemoryContextLimit;
+        this.careerContextEnabled = careerContextEnabled;
+        this.optimizationRecommendations = optimizationRecommendations;
+        this.productionIntelligenceEnabled = productionIntelligenceEnabled;
         this.capabilityEngineProvider = capabilityEngineProvider;
         this.capabilityAwareChatServiceProvider = capabilityAwareChatServiceProvider;
         this.capabilityMetricsProvider = capabilityMetricsProvider;
@@ -145,8 +164,34 @@ public class CopilotService {
             }
         }
 
+        // Phase 11A — same centralized, no-handler-touches-it pattern: cross-subsystem awareness
+        // (Mission, Career Timeline, Workflow lifecycle, Applications, Interviews, Company
+        // Intelligence) assembled once per turn regardless of which skill handled it. Separate
+        // flag from every underlying subsystem's own gate — CareerContextService only ever
+        // surfaces what those subsystems already expose, never bypasses their flags.
+        if (careerContextEnabled) {
+            try {
+                skillCtx.careerContext(careerContextService.getCareerContext(user));
+            } catch (Exception e) {
+                log.debug("No career context available: {}", e.getMessage());
+            }
+        }
+
+        // Phase 13B — production optimization evidence, same centralized pattern. Composed with
+        // career context rather than merged into it: that one describes what is happening, this one
+        // describes what this user's own measured outcomes say works. Every line arrives with its
+        // own citation, and the recommendation service emits nothing that lacks one.
+        if (productionIntelligenceEnabled) {
+            try {
+                skillCtx.optimizationRecommendations(optimizationRecommendations.recommend(user.userId()));
+            } catch (Exception e) {
+                log.debug("No production optimization evidence available: {}", e.getMessage());
+            }
+        }
+
         String system = handler.systemPrompt(skillCtx);
-        String contextBlock = handler.contextBlock(skillCtx) + skillCtx.candidateProfileBlock() + skillCtx.memoriesBlock();
+        String contextBlock = handler.contextBlock(skillCtx) + skillCtx.candidateProfileBlock()
+                + skillCtx.memoriesBlock() + skillCtx.careerContextBlock() + skillCtx.optimizationBlock();
         String sourcesBlock = skillCtx.sourcesBlock();
 
         List<ChatMessage> turns = buildTurns(conv.getId(), contextBlock);

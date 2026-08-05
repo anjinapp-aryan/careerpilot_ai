@@ -42,6 +42,7 @@ class CopilotServiceTest {
     private final CopilotSkillRouter skillRouter = mock(CopilotSkillRouter.class);
     private final AgentOrchestrator orchestrator = mock(AgentOrchestrator.class);
     private final CareerContextRetriever contextRetriever = mock(CareerContextRetriever.class);
+    private final CareerContextService careerContextService = mock(CareerContextService.class);
     private final ApplicationEventPublisher events = mock(ApplicationEventPublisher.class);
     private final CapabilityEngine capabilityEngine = mock(CapabilityEngine.class);
     private final CapabilityAwareChatService capabilityAwareChatService = mock(CapabilityAwareChatService.class);
@@ -57,8 +58,11 @@ class CopilotServiceTest {
     private CopilotService newService(boolean capabilityIntegrationEnabled,
                                        ObjectProvider<CapabilityEngine> engineProvider,
                                        ObjectProvider<CapabilityAwareChatService> chatServiceProvider) {
-        return new CopilotService(ai, memory, skillRouter, orchestrator, contextRetriever, events,
-                false, false, 5,
+        return new CopilotService(ai, memory, skillRouter, orchestrator, contextRetriever, careerContextService, events,
+                false, false, 5, false,
+                // Phase 13B — production intelligence off, so this suite keeps asserting exactly
+                // what it did before. Its own behaviour is covered by the intelligence test suites.
+                org.mockito.Mockito.mock(ai.careerpilot.intelligence.OptimizationRecommendationService.class), false,
                 engineProvider, chatServiceProvider, providerFor(capabilityMetrics),
                 capabilityIntegrationEnabled);
     }

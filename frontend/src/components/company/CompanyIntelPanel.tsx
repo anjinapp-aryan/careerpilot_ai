@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
-import { Building2, Clock, Target } from 'lucide-react';
+import { Link, useLocation } from 'react-router-dom';
+import { Building2, Clock, ExternalLink, Target } from 'lucide-react';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { Badge, type BadgeTone } from '@/components/ui/badge';
 import { companyIntel, type CandidateFit } from '@/lib/companyIntel';
@@ -102,19 +103,27 @@ export function CompanyIntelPanel({
   });
 
   const company = detail.data;
+  const location = useLocation();
+  const onDedicatedPage = location.pathname === '/companies';
   if (!company) return null; // dark flag, unknown company, or still loading — stay invisible
 
   const scores = company.scores as unknown as Record<string, number | null | undefined>;
   const sections = Object.entries(company.knowledge ?? {}).filter(([k]) => SECTION_LABELS[k]);
+  const fullPageHref = `/companies?company=${encodeURIComponent(company.companyName)}${jobId ? `&jobId=${encodeURIComponent(jobId)}` : ''}`;
 
   return (
     <Card>
-      <CardHeader className="pb-2">
+      <CardHeader className="flex-row items-center justify-between pb-2">
         <CardTitle className="flex items-center gap-2 text-base">
           <Building2 className="h-4 w-4 text-primary" />
           Company intelligence — {company.companyName}
           <Badge tone="neutral">v{company.knowledgeVersion}</Badge>
         </CardTitle>
+        {!onDedicatedPage && (
+          <Link to={fullPageHref} className="flex items-center gap-1 text-sm font-medium text-primary hover:underline">
+            Full profile <ExternalLink className="h-3.5 w-3.5" />
+          </Link>
+        )}
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="flex flex-wrap gap-2">

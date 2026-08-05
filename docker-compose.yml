@@ -2,10 +2,41 @@
 # The local `postgres` service was removed; Flyway will baseline against the existing Neon
 # schema (V1__init.sql already applied manually). To return to a local Postgres later,
 # re-add the postgres service block and switch DATABASE_URL back to jdbc:postgresql://postgres:5432/...
+#
+# ── Phase 12A — resource limits ───────────────────────────────────────────────
+# Until this phase NO service had a memory limit, so every container could expand
+# into the whole host and the JVM sized its heap off total host RAM. Limits below are
+# derived from MEASURED usage on the production VM (2026-08-03), not estimates:
+#
+#   service         measured    limit    headroom rationale
+#   backend           621 MiB   2048m    must also cover the Chromium child process
+#                                        Playwright launches INSIDE this container
+#   kafka             768 MiB    900m    steady-state broker, low headroom needed
+#   zookeeper         372 MiB    448m    steady-state
+#   minio             101 MiB    256m    grows with object count
+#   agent-service      36 MiB    512m    Python/LangGraph can spike per run
+#   redis              10 MiB    128m    tiny, but unbounded without maxmemory
+#   frontend            1 MiB     64m    static nginx
+#                                ─────
+#                                4356m   vs ~4.3 GiB free after OS/nginx/dockerd
+#
+# Limits are ceilings, not reservations — real combined usage is ~1.9 GiB, so this
+# leaves genuine slack plus 4 GiB of swap as a shock absorber.
+#
+# Deliberately NO `cpus:` caps anywhere. The VM has 1 vCPU; hard-capping fractional
+# CPU on a single core reliably makes contention worse, not better. CPU is the real
+# constraint here, and it is managed by keeping BrowserLeasePool at max-leases=1 —
+# not by throttling containers against each other.
+#
+# `restart: unless-stopped` added to every service. Previously there was none, so a
+# single OOM-killed container stayed down while systemd's RemainAfterExit=yes unit
+# still reported the stack "active".
 
 services:
   redis:
     image: redis:7-alpine
+    restart: unless-stopped
+    mem_limit: 128m
     # No host port published: only the backend container needs Redis, reached
     # internally at redis:6379. Publishing 6379 to the VM's public interface
     # would expose an unauthenticated Redis instance to the internet.
@@ -17,9 +48,14 @@ services:
 
   zookeeper:
     image: confluentinc/cp-zookeeper:7.5.0
+    restart: unless-stopped
+    mem_limit: 448m
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
       ZOOKEEPER_TICK_TIME: 2000
+      # Cap the ZK heap explicitly — measured 372 MiB with no bound at all, so it was
+      # sizing against total host RAM like every other JVM here.
+      KAFKA_HEAP_OPTS: "-Xms128m -Xmx256m"
     # Checks ZooKeeper's own AdminServer `ruok` endpoint (port 8080 inside this
     # container only — not published, no clash with the backend's host 8080).
     # curl ships in the cp-zookeeper image. Previous check invoked
@@ -37,6 +73,8 @@ services:
 
   kafka:
     image: confluentinc/cp-kafka:7.5.0
+    restart: unless-stopped
+    mem_limit: 900m
     depends_on:
       zookeeper:
         condition: service_healthy
@@ -52,6 +90,10 @@ services:
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      # Measured 768 MiB with no heap bound. This codebase currently has zero
+      # @KafkaListener consumers (see CLAUDE.md "Provisioned-but-unused"), so the
+      # broker only ever accepts producer writes — it does not need a large heap.
+      KAFKA_HEAP_OPTS: "-Xms256m -Xmx512m"
     # kafka-broker-api-versions ships inside the cp-kafka image (bundled Kafka
     # admin CLI; Confluent images strip the upstream .sh suffix — /usr/bin/
     # kafka-broker-api-versions, NOT ...-versions.sh) — a real protocol-level
@@ -68,6 +110,8 @@ services:
 
   minio:
     image: minio/minio:latest
+    restart: unless-stopped
+    mem_limit: 256m
     command: server /data --console-address ":9001"
     # The official minio/minio image requires exactly these two names — imposed by the
     # image itself, not our choice, so this is the one genuine "deployment-specific
@@ -99,6 +143,8 @@ services:
 
   agent-service:
     build: ./agent-service
+    restart: unless-stopped
+    mem_limit: 512m
     # config.py's pydantic-settings BaseSettings fields already match these var names
     # 1:1 case-insensitively (gemini_api_key <-> GEMINI_API_KEY, etc.), so this is a
     # pure maintainability change, not a bug fix — same canonical env file as backend.
@@ -133,6 +179,23 @@ services:
 
   backend:
     build: ./backend
+    restart: unless-stopped
+    # Covers the JVM (768m heap + ~450m non-heap) AND the Chromium child process
+    # (~600m peak) that Playwright launches inside this container. See the heap
+    # rationale in backend/Dockerfile — the two limits are set as a pair.
+    mem_limit: 2048m
+    # Chromium maps renderer shared memory into /dev/shm. Docker's default is 64 MiB
+    # (verified on the VM), which crashes tabs on any non-trivial page. The launch
+    # flags also pass --disable-dev-shm-usage as belt-and-braces, but raising this is
+    # the correct primary fix; relying on the flag alone pushes that traffic to /tmp.
+    shm_size: 256m
+    # Chromium spawns many short-lived child processes and file descriptors per page.
+    # The default nofile ceiling is generous on this host, but pinning it makes the
+    # requirement explicit rather than inherited from whatever the daemon defaults to.
+    ulimits:
+      nofile:
+        soft: 8192
+        hard: 8192
     depends_on:
       redis:
         condition: service_healthy
@@ -157,13 +220,12 @@ services:
     # directly reachable from the internet; Nginx now sits in front of it.
     ports:
       - "127.0.0.1:8080:8080"
-    # eclipse-temurin:25-jre-alpine is built FROM the official alpine base image,
-    # which ships BusyBox by default — wget is one of BusyBox's applets, already
-    # present at /usr/bin/wget with zero extra install (not the same as apk add
-    # wget/curl). --spider makes it a HEAD-style check-only request, no body
-    # download. Verify on the actual VM before relying on this in prod
-    # (`docker compose exec backend which wget`) — some minimal image variants
-    # strip BusyBox applets further than the stock alpine base does.
+    # Phase 12A — this previously relied on BusyBox's built-in wget from the Alpine
+    # base. The runtime is now debian:bookworm-slim, which does NOT ship wget, so
+    # backend/Dockerfile installs it explicitly for exactly this probe. If that apt
+    # line is ever pruned as "unused", this healthcheck fails and the container is
+    # reported unhealthy forever — the two are coupled on purpose.
+    # --spider makes it a HEAD-style check-only request, no body download.
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/actuator/health"]
       interval: 15s
@@ -176,6 +238,8 @@ services:
       context: ./frontend
       args:
         VITE_API_BASE_URL: ${VITE_API_BASE_URL}
+    restart: unless-stopped
+    mem_limit: 64m
     # Loopback-only publish (production hardening) — reachable at
     # localhost:5173 by the host-level Nginx reverse proxy (/ route) and
     # nothing else. Previously "5173:80" (bound 0.0.0.0:5173, directly

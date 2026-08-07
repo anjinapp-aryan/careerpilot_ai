@@ -41,6 +41,24 @@ public interface ApplicationPackageRepository extends JpaRepository<ApplicationP
     int claimHeadIfAbsent(@org.springframework.data.repository.query.Param("userId") UUID userId,
                           @org.springframework.data.repository.query.Param("jobId") UUID jobId);
 
+    /** Row shape for {@link #findRefsByUserIdAndJobIdIn}: just the identity a card needs. */
+    interface PackageRef {
+        UUID getId();
+        UUID getJobId();
+    }
+
+    /**
+     * Bulk form of {@link #findByUserIdAndJobId} for card assembly — the card needs only "does a
+     * package exist" plus its id (to look up a review), so this projects two columns rather than
+     * loading the metadata/summary text blobs for a whole page.
+     */
+    @org.springframework.data.jpa.repository.Query(
+            "select p.id as id, p.jobId as jobId from ApplicationPackage p "
+                    + "where p.userId = :userId and p.jobId in :jobIds")
+    java.util.List<PackageRef> findRefsByUserIdAndJobIdIn(
+            @org.springframework.data.repository.query.Param("userId") UUID userId,
+            @org.springframework.data.repository.query.Param("jobIds") java.util.Collection<UUID> jobIds);
+
     Optional<ApplicationPackage> findFirstByApplicationIdOrderByPackageVersionDesc(UUID applicationId);
 
     java.util.List<ApplicationPackage> findByUserIdOrderByUpdatedAtDesc(UUID userId);

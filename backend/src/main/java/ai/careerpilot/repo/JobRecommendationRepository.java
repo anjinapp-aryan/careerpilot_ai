@@ -12,4 +12,7 @@ public interface JobRecommendationRepository extends JpaRepository<JobRecommenda
     List<JobRecommendation> findByUserIdOrderByMatchScoreDesc(UUID userId);
 
     Optional<JobRecommendation> findByUserIdAndJobId(UUID userId, UUID jobId);
+
+    /** Bulk form of {@link #findByUserIdAndJobId} — one query for a whole page of cards. */
+    List<JobRecommendation> findByUserIdAndJobIdIn(UUID userId, java.util.Collection<UUID> jobIds);
 }

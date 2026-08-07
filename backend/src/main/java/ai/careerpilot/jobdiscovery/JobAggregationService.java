@@ -4,7 +4,6 @@ import ai.careerpilot.domain.Job;
 import ai.careerpilot.domain.JobFetchAudit;
 import ai.careerpilot.jobdiscovery.provider.JobProvider;
 import ai.careerpilot.jobdiscovery.provider.RawJob;
-import ai.careerpilot.kafka.WorkflowEventProducer;
 import ai.careerpilot.repo.JobFetchAuditRepository;
 import ai.careerpilot.repo.JobRepository;
 import org.slf4j.Logger;
@@ -15,7 +14,6 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -33,20 +31,17 @@ public class JobAggregationService {
     private final JobNormalizer normalizer;
     private final JobRepository jobs;
     private final JobFetchAuditRepository audits;
-    private final WorkflowEventProducer events;
     private final JobDiscoveryHealthTracker health;
 
     public JobAggregationService(List<JobProvider> providers,
                                  JobNormalizer normalizer,
                                  JobRepository jobs,
                                  JobFetchAuditRepository audits,
-                                 WorkflowEventProducer events,
                                  JobDiscoveryHealthTracker health) {
         this.providers = providers;
         this.normalizer = normalizer;
         this.jobs = jobs;
         this.audits = audits;
-        this.events = events;
         this.health = health;
     }
 
@@ -80,8 +75,6 @@ public class JobAggregationService {
             totalPersisted += one.totalPersisted();
         }
         DiscoverySummary summary = new DiscoverySummary(providersRun, totalFetched, totalPersisted);
-        events.publishJobEvent("job-discovery", "job.discovery.completed",
-                Map.of("providersRun", providersRun, "fetched", totalFetched, "persisted", totalPersisted));
         log.info("Job discovery run complete: {}", summary);
         return summary;
     }

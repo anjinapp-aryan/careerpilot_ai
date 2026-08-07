@@ -6,11 +6,10 @@ import ai.careerpilot.applications.ApplicationRecommendationService.Recommendati
 import ai.careerpilot.applications.dto.ApplicationCardDtos.ApplicationCardResponse;
 import ai.careerpilot.domain.Application;
 import ai.careerpilot.domain.ApplicationLifecycle;
-import ai.careerpilot.domain.ApplicationPackage;
-import ai.careerpilot.domain.ApplicationStatusHistory;
 import ai.careerpilot.domain.ApplicationExecution;
 import ai.careerpilot.domain.CandidateProfile;
 import ai.careerpilot.domain.Job;
+import ai.careerpilot.domain.JobRecommendation;
 import ai.careerpilot.repo.ApplicationExecutionRepository;
 import ai.careerpilot.repo.ApplicationRetryRepository;
 import ai.careerpilot.repo.ApplicationLifecycleRepository;
@@ -26,9 +25,14 @@ import ai.careerpilot.repo.ResumeTailoringRepository;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 /**
  * Application Command Center — assembles one {@link ApplicationCardResponse} per {@link Application}
@@ -89,40 +93,63 @@ public class ApplicationCardService {
         this.retries = retries;
     }
 
+    /**
+     * Assemble one card per application using a <b>fixed</b> number of queries, independent of how
+     * many applications there are.
+     *
+     * <p><b>Why this is batched.</b> This used to be {@code applications.stream().map(a ->
+     * assemble(userId, a))}, and {@link #assemble} issues roughly a dozen lookups. Against the
+     * remote (Neon) database that is a dozen network round-trips per row: a single card was measured
+     * at ~5.6s, so a real account with 20 applications could not finish inside any client timeout —
+     * {@code GET /api/applications/cards} simply hung. Prefetching once and assembling in memory
+     * removes the row multiplier entirely.
+     */
     public List<ApplicationCardResponse> assembleAll(UUID userId, List<Application> applications) {
-        return applications.stream().map(a -> assemble(userId, a)).toList();
+        if (applications.isEmpty()) return List.of();
+        JoinedData data = prefetch(userId, applications);
+        return applications.stream().map(a -> assemble(a, data)).toList();
     }
 
+    /**
+     * Single-card assembly. Deliberately routed through the same {@link #prefetch}/{@link
+     * #assemble(Application, JoinedData)} pair as {@link #assembleAll} rather than keeping a second
+     * per-row implementation — one code path means the list and the detail view cannot drift.
+     */
     public ApplicationCardResponse assemble(UUID userId, Application app) {
-        Job job = jobs.findById(app.getJobId()).orElse(null);
+        return assemble(app, prefetch(userId, List.of(app)));
+    }
+
+    private ApplicationCardResponse assemble(Application app, JoinedData data) {
+        UUID jobId = app.getJobId();
+        Job job = data.jobs().get(jobId);
 
         Integer matchScore = app.getMatchScore();
         Integer atsScore = app.getAtsScore();
 
-        var reco = jobRecommendations.findByUserIdAndJobId(userId, app.getJobId()).orElse(null);
-        if (matchScore == null && reco != null) matchScore = reco.getMatchScore();
+        Integer recoScore = data.recommendationScores().get(jobId);
+        if (matchScore == null && recoScore != null) matchScore = recoScore;
 
-        boolean resumeTailored = resumeTailorings.findFirstByUserIdAndJobIdOrderByTailoringVersionDesc(userId, app.getJobId()).isPresent();
+        boolean resumeTailored = data.tailoredJobIds().contains(jobId);
 
-        var latestAts = atsAnalyses.findFirstByUserIdAndJobIdOrderByCreatedAtDesc(userId, app.getJobId()).orElse(null);
-        if (atsScore == null && latestAts != null) atsScore = latestAts.getAtsScore();
+        Integer latestAtsScore = data.latestAtsScores().get(jobId);
+        boolean atsAnalysisReady = data.latestAtsScores().containsKey(jobId);
+        if (atsScore == null && latestAtsScore != null) atsScore = latestAtsScore;
 
-        boolean coverLetterReady = coverLetters.findByUserIdAndJobId(userId, app.getJobId()).isPresent();
+        boolean coverLetterReady = data.coverLetterJobIds().contains(jobId);
 
-        ApplicationPackage pkg = applicationPackages.findByUserIdAndJobId(userId, app.getJobId()).orElse(null);
-        boolean applicationPackageReady = pkg != null;
-        boolean applicationReviewReady = pkg != null && applicationReviews.findByApplicationPackageId(pkg.getId()).isPresent();
+        UUID packageId = data.packageIdsByJob().get(jobId);
+        boolean applicationPackageReady = packageId != null;
+        boolean applicationReviewReady = packageId != null && data.reviewedPackageIds().contains(packageId);
 
-        CandidateProfile profile = candidateProfiles.findByUserId(userId).orElse(null);
-        Boolean visaRequired = profile == null ? null : profile.getVisaRequired();
+        Boolean visaRequired = data.profile() == null ? null : data.profile().getVisaRequired();
 
-        // Phase 3A lifecycle (dark unless workflow.tracking.enabled — findByUserIdAndJobId then returns empty).
-        Optional<ApplicationLifecycle> lifecycle = lifecycles.findByUserIdAndJobId(userId, app.getJobId());
+        // Phase 3A lifecycle (dark unless workflow.tracking.enabled — the lifecycle map is then empty).
+        Optional<ApplicationLifecycle> lifecycle = Optional.ofNullable(data.lifecycles().get(jobId));
         String lifecycleStatus = lifecycle.map(ApplicationLifecycle::getCurrentStatus).orElse(null);
         Instant lastStatusChangeAt = lifecycle
                 .map(l -> {
-                    List<ApplicationStatusHistory> history = statusHistory.findByLifecycleIdOrderByChangedAtDesc(l.getId());
-                    return history.isEmpty() ? l.getUpdatedAt() : history.get(0).getChangedAt();
+                    Instant latestChange = data.lastStatusChangeByLifecycle().get(l.getId());
+                    return latestChange == null ? l.getUpdatedAt() : latestChange;
                 })
                 .orElse(null);
 
@@ -141,16 +168,14 @@ public class ApplicationCardService {
         NextAction nextAction = nextActionService.suggest(lifecycleStatus, app.getStatus());
 
         // Phase 7.16.3 — Automation Recovery Center visibility. Dark unless application.execution.enabled
-        // (findFirstByUserIdAndJobIdOrderByCreatedAtDesc then returns empty); retryCount counts only
-        // against the LATEST attempt row, not the cumulative retry chain, since each retry creates a
-        // new ApplicationExecution row (see ApplicationExecution's class javadoc).
-        ApplicationExecution latestExecution = executions
-                .findFirstByUserIdAndJobIdOrderByCreatedAtDesc(userId, app.getJobId())
-                .orElse(null);
+        // (the execution map is then empty); retryCount counts only against the LATEST attempt row,
+        // not the cumulative retry chain, since each retry creates a new ApplicationExecution row
+        // (see ApplicationExecution's class javadoc).
+        ApplicationExecution latestExecution = data.latestExecutions().get(jobId);
         String executionStatus = latestExecution == null ? null : latestExecution.getExecutionStatus();
         String automationHealth = deriveAutomationHealth(latestExecution);
         Integer retryCount = latestExecution == null ? null
-                : (int) retries.countByApplicationExecutionId(latestExecution.getId());
+                : data.retryCounts().getOrDefault(latestExecution.getId(), 0L).intValue();
         String verificationStatus = latestExecution == null ? null : latestExecution.getVerificationStatus();
 
         return new ApplicationCardResponse(
@@ -166,7 +191,7 @@ public class ApplicationCardService {
                 job == null ? null : job.getSource(),
                 job == null ? null : job.getExternalUrl(),
                 job == null ? null : job.getSponsorshipAvailable(),
-                resumeTailored, latestAts != null, coverLetterReady, applicationPackageReady, applicationReviewReady,
+                resumeTailored, atsAnalysisReady, coverLetterReady, applicationPackageReady, applicationReviewReady,
                 visaRequired,
                 health.status(), health.score(), health.reasoning(),
                 recommendation.action(), recommendation.reasoning(),
@@ -175,6 +200,89 @@ public class ApplicationCardService {
                 latestExecution == null ? null : latestExecution.getId(),
                 executionStatus, automationHealth, retryCount, verificationStatus
         );
+    }
+
+    /**
+     * Everything {@link #assemble(Application, JoinedData)} joins against, loaded up front. Each
+     * field is keyed so lookup is a map hit rather than a query; presence-only joins are sets, and
+     * the two "latest row per job" joins keep the same ordering their per-row finders use.
+     */
+    private record JoinedData(Map<UUID, Job> jobs,
+                              Map<UUID, Integer> recommendationScores,
+                              Set<UUID> tailoredJobIds,
+                              Map<UUID, Integer> latestAtsScores,
+                              Set<UUID> coverLetterJobIds,
+                              Map<UUID, UUID> packageIdsByJob,
+                              Set<UUID> reviewedPackageIds,
+                              CandidateProfile profile,
+                              Map<UUID, ApplicationLifecycle> lifecycles,
+                              Map<UUID, Instant> lastStatusChangeByLifecycle,
+                              Map<UUID, ApplicationExecution> latestExecutions,
+                              Map<UUID, Long> retryCounts) {
+    }
+
+    /**
+     * One query per join, regardless of how many applications are being assembled.
+     *
+     * <p>The dependent joins (review-by-package, retries-by-execution, history-by-lifecycle) are
+     * skipped entirely when their parent set is empty — most of them are dark by default, so the
+     * common case issues fewer queries than the field count suggests, and an {@code IN ()} with no
+     * values is never generated.
+     */
+    private JoinedData prefetch(UUID userId, List<Application> applications) {
+        Set<UUID> jobIds = applications.stream().map(Application::getJobId)
+                .filter(Objects::nonNull).collect(Collectors.toSet());
+
+        Map<UUID, Job> jobsById = jobs.findAllById(jobIds).stream()
+                .collect(Collectors.toMap(Job::getId, j -> j, (a, b) -> a));
+
+        Map<UUID, Integer> recoScores = jobRecommendations.findByUserIdAndJobIdIn(userId, jobIds).stream()
+                .collect(Collectors.toMap(JobRecommendation::getJobId, JobRecommendation::getMatchScore, (a, b) -> a));
+
+        Set<UUID> tailored = Set.copyOf(resumeTailorings.findTailoredJobIds(userId, jobIds));
+
+        Map<UUID, Integer> atsScores = new HashMap<>();
+        for (var row : atsAnalyses.findLatestScoresByJob(userId, jobIds)) {
+            atsScores.put(row.getJobId(), row.getAtsScore());
+        }
+
+        Set<UUID> withCoverLetter = Set.copyOf(coverLetters.findJobIdsWithCoverLetter(userId, jobIds));
+
+        Map<UUID, UUID> packageIdsByJob = applicationPackages.findRefsByUserIdAndJobIdIn(userId, jobIds).stream()
+                .collect(Collectors.toMap(ApplicationPackageRepository.PackageRef::getJobId,
+                        ApplicationPackageRepository.PackageRef::getId, (a, b) -> a));
+        Set<UUID> reviewed = packageIdsByJob.isEmpty()
+                ? Set.of()
+                : Set.copyOf(applicationReviews.findReviewedPackageIds(packageIdsByJob.values()));
+
+        CandidateProfile profile = candidateProfiles.findByUserId(userId).orElse(null);
+
+        Map<UUID, ApplicationLifecycle> lifecyclesByJob = lifecycles.findByUserId(userId).stream()
+                .filter(l -> jobIds.contains(l.getJobId()))
+                .collect(Collectors.toMap(ApplicationLifecycle::getJobId, l -> l, (a, b) -> a));
+        Map<UUID, Instant> lastChange = new HashMap<>();
+        if (!lifecyclesByJob.isEmpty()) {
+            Set<UUID> lifecycleIds = lifecyclesByJob.values().stream()
+                    .map(ApplicationLifecycle::getId).collect(Collectors.toSet());
+            for (var row : statusHistory.findLatestChangePerLifecycle(lifecycleIds)) {
+                lastChange.put(row.getLifecycleId(), row.getChangedAt());
+            }
+        }
+
+        Map<UUID, ApplicationExecution> latestExecutions = executions.findLatestPerJob(userId, jobIds).stream()
+                .collect(Collectors.toMap(ApplicationExecution::getJobId, e -> e, (a, b) -> a));
+        Map<UUID, Long> retryCounts = new HashMap<>();
+        if (!latestExecutions.isEmpty()) {
+            Set<UUID> executionIds = latestExecutions.values().stream()
+                    .map(ApplicationExecution::getId).collect(Collectors.toSet());
+            for (var row : retries.countPerExecution(executionIds)) {
+                retryCounts.put(row.getExecutionId(), row.getCnt());
+            }
+        }
+
+        return new JoinedData(jobsById, recoScores, tailored, atsScores, withCoverLetter,
+                packageIdsByJob, reviewed, profile, lifecyclesByJob, lastChange,
+                latestExecutions, retryCounts);
     }
 
     /**

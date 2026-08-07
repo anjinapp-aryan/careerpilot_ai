@@ -17,6 +17,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -267,4 +268,61 @@ class BrowserLeasePoolTest {
         assertThat((Long) snap.get("poolOutstanding")).isZero();
     }
 
+    // ── P4 WI4 — a context counted but never handed out must still be uncounted ───────────────
+    //
+    // newContext() increments the session manager's open-context counter the moment it returns.
+    // A failure AFTER that (newPage, setDefaultTimeout) previously returned the permit and closed
+    // the context but never called contextClosed(), so the counter drifted up by one per failed
+    // acquire and never came back down. At five it makes isZombie() permanently true — the
+    // maintenance sweep then restarts a healthy browser every minute — and it pins recycleIfDue()
+    // at DEFERRED_CONTEXT_OPEN, silently disabling idle shutdown with no error anywhere.
+
+    @Test
+    void aFailureAfterContextCreationStillNotifiesContextClosed() {
+        BrowserContext ctx = mock(BrowserContext.class);
+        when(ctx.newPage()).thenThrow(new IllegalStateException("Target page, context or browser has been closed"));
+        when(sessionManager.newContext()).thenReturn(ctx);
+
+        BrowserLeasePool pool = pool(1, 60, 1);
+
+        assertThatThrownBy(pool::acquire).isInstanceOf(IllegalStateException.class);
+
+        // The counter is restored...
+        verify(sessionManager, times(1)).contextClosed();
+        // ...the context is destroyed...
+        verify(ctx, times(1)).close();
+        // ...and the permit is back, so the pool has not lost capacity either.
+        assertThat(pool.availablePermits()).isEqualTo(1);
+        assertThat(pool.activeLeases()).isZero();
+    }
+
+    @Test
+    void repeatedFailedAcquiresNeverAccumulateContextCount() {
+        BrowserContext ctx = mock(BrowserContext.class);
+        when(ctx.newPage()).thenThrow(new IllegalStateException("renderer crashed"));
+        when(sessionManager.newContext()).thenReturn(ctx);
+
+        BrowserLeasePool pool = pool(1, 60, 1);
+        for (int i = 0; i < 5; i++) {
+            assertThatThrownBy(pool::acquire).isInstanceOf(IllegalStateException.class);
+        }
+
+        // One decrement per failed acquire — the counter cannot drift toward the zombie threshold.
+        verify(sessionManager, times(5)).contextClosed();
+        assertThat(pool.availablePermits()).isEqualTo(1);
+    }
+
+    @Test
+    void aFailureBeforeContextCreationDoesNotNotifyContextClosed() {
+        // newContext() itself threw, so nothing was ever counted — notifying would push the
+        // counter negative-ward and is just as wrong as not notifying when it was.
+        when(sessionManager.newContext()).thenThrow(new IllegalStateException("browser not launched"));
+
+        BrowserLeasePool pool = pool(1, 60, 1);
+
+        assertThatThrownBy(pool::acquire).isInstanceOf(IllegalStateException.class);
+
+        verify(sessionManager, never()).contextClosed();
+        assertThat(pool.availablePermits()).isEqualTo(1);
+    }
 }

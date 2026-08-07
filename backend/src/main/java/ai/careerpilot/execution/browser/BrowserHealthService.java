@@ -59,6 +59,10 @@ public class BrowserHealthService {
     private final boolean automationEnabled;
     private final String configuredExecutablePath;
 
+    /** Optional: retention is a separate concern with its own flag, so it may be absent. */
+    private final org.springframework.beans.factory.ObjectProvider<
+            ai.careerpilot.retention.ScreenshotRetentionService> screenshotRetention;
+
     public BrowserHealthService(BrowserSessionManager sessionManager,
                                 BrowserLeasePool leasePool,
                                 BrowserPoolMetrics poolMetrics,
@@ -70,8 +74,11 @@ public class BrowserHealthService {
                                 ai.careerpilot.execution.browser.validation.BrowserValidationMetrics validationMetrics,
                                 ai.careerpilot.execution.browser.validation.ValidationUrlPolicy urlPolicy,
                                 ai.careerpilot.execution.browser.validation.ValidationHistoryService validationHistory,
+                                org.springframework.beans.factory.ObjectProvider<
+                                        ai.careerpilot.retention.ScreenshotRetentionService> screenshotRetention,
                                 @Value("${browser.automation.enabled:false}") boolean automationEnabled,
                                 @Value("${browser.automation.launch.executable-path:}") String configuredExecutablePath) {
+        this.screenshotRetention = screenshotRetention;
         this.sessionManager = sessionManager;
         this.leasePool = leasePool;
         this.poolMetrics = poolMetrics;
@@ -113,6 +120,11 @@ public class BrowserHealthService {
         // operator has a single place to look before advancing a rollout stage.
         out.put("validation", safelyMap(validationMetrics::snapshot));
         out.put("validationPolicy", safelyMap(urlPolicy::describe));
+        // P2 WI3 — screenshot retention, on the same page as the screenshots it governs.
+        out.put("screenshotRetention", safelyMap(() -> {
+            var retention = screenshotRetention.getIfAvailable();
+            return retention == null ? java.util.Map.of("enabled", false) : retention.snapshot();
+        }));
         // Phase 13A — the ATS Validation Campaign dashboard: pages tested, average confidence,
         // control quality and trend per platform, from durable history rather than the in-memory
         // latest-only map above. Aggregates only — no URL, no user id on this public endpoint.
@@ -209,6 +221,19 @@ public class BrowserHealthService {
         out.put("openPagesNote", "one page per lease by construction — same number as activeLeases");
         Object lastOpened = sessionManager.lastContextOpenedAt();
         out.put("lastContextOpenedAt", lastOpened == null ? null : lastOpened.toString());
+        // P3 — recycle state. Added to the existing session section rather than a new one so every
+        // pre-existing key keeps its exact path. `launchedAt == null` while `launched` is true is
+        // impossible; both are null-safe here so an operator reading a dark deployment sees nulls
+        // rather than a 500.
+        java.time.Instant launchedAt = sessionManager.launchedAt();
+        java.time.Instant lastActivity = sessionManager.lastActivityAt();
+        out.put("launchedAt", launchedAt == null ? null : launchedAt.toString());
+        out.put("lastActivityAt", lastActivity == null ? null : lastActivity.toString());
+        out.put("contextsSinceLaunch", sessionManager.contextsSinceLaunch());
+        out.put("uptimeSeconds", launchedAt == null
+                ? null : java.time.Duration.between(launchedAt, java.time.Instant.now()).toSeconds());
+        out.put("idleSeconds", lastActivity == null
+                ? null : java.time.Duration.between(lastActivity, java.time.Instant.now()).toSeconds());
         out.put("zombie", safeZombie());
         return out;
     }

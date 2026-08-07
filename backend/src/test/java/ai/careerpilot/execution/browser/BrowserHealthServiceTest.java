@@ -25,6 +25,14 @@ class BrowserHealthServiceTest {
     private final BrowserLifecycleMetrics lifecycleMetrics = new BrowserLifecycleMetrics();
     private final BrowserAutomationMetrics automationMetrics = new BrowserAutomationMetrics();
 
+    @SuppressWarnings("unchecked")
+    private static org.springframework.beans.factory.ObjectProvider<
+            ai.careerpilot.retention.ScreenshotRetentionService> absentRetention() {
+        var provider = mock(org.springframework.beans.factory.ObjectProvider.class);
+        when(provider.getIfAvailable()).thenReturn(null);
+        return provider;
+    }
+
     private BrowserHealthService service(boolean enabled, String executablePath, String channel) {
         return new BrowserHealthService(sessionManager, leasePool, poolMetrics, lifecycleMetrics,
                 automationMetrics,
@@ -37,6 +45,9 @@ class BrowserHealthServiceTest {
                 new ai.careerpilot.execution.browser.validation.ValidationHistoryService(
                         mock(ai.careerpilot.repo.AtsValidationRunRepository.class),
                         new ai.careerpilot.execution.browser.validation.SelectorDriftDetector(10, 2), false),
+                // P2 WI3 — retention is optional and has its own flag; absent here, so this suite
+                // keeps measuring exactly what it did before.
+                absentRetention(),
                 enabled, executablePath);
     }
 

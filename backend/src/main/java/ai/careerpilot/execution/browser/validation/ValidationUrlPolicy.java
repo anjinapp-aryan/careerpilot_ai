@@ -21,7 +21,7 @@ import java.util.stream.Collectors;
  * <p><b>This class exists because the harness is a server-side request forgery primitive.</b> It
  * takes a URL from a caller and makes the server fetch it with a full browser — cookies, JavaScript
  * execution, and access to whatever the container can reach on the internal Docker network
- * ({@code redis}, {@code kafka}, {@code minio}) and to cloud metadata endpoints. Without a policy,
+ * ({@code redis}, {@code minio}) and to cloud metadata endpoints. Without a policy,
  * "validate this careers page" is also "read my instance metadata and screenshot it for me".
  *
  * <p>Three independent checks, deliberately layered so defeating one is not enough:
@@ -59,8 +59,11 @@ public class ValidationUrlPolicy {
         this.allowListEnforced = allowListEnforced;
         this.requireHttps = requireHttps;
         this.extraAllowedHosts = parseHosts(extraAllowedHostsCsv);
-        log.info("BROWSER_VALIDATION url policy: allowListEnforced={} requireHttps={} extraHosts={}",
-                allowListEnforced, requireHttps, this.extraAllowedHosts.size());
+        // Names logged (not exposed on the unauthenticated diagnostics endpoint) so an operator can
+        // confirm which custom-domain entries actually loaded and which were rejected as unsafe.
+        log.info("BROWSER_VALIDATION url policy: allowListEnforced={} requireHttps={} extraHosts={} {}",
+                allowListEnforced, requireHttps, this.extraAllowedHosts.size(),
+                this.extraAllowedHosts.stream().sorted().toList());
     }
 
     /** The verdict. {@code allowed=false} always carries a reason, for the report and the log. */
@@ -148,13 +151,56 @@ public class ValidationUrlPolicy {
         return null;
     }
 
+    /**
+     * Entries too broad to be a company's ATS front-end. Adding one of these would silently turn the
+     * allow-list into "allow everything", because {@link #isExplicitlyAllowed} matches subdomains.
+     */
+    private static final Set<String> FORBIDDEN_BROAD_SUFFIXES = Set.of(
+            "com", "net", "org", "io", "co", "dev", "app", "ai", "jobs", "careers", "cloud",
+            "co.uk", "com.au", "co.in", "com.br", "co.jp", "de", "fr", "nl", "eu", "us");
+
+    /**
+     * P1 — parse the operator-supplied custom-domain list, refusing entries that would defeat the
+     * control they are being added to.
+     *
+     * <p>Custom ATS front-ends are the reason this list exists: measured in the F5 audit, 7 of 16
+     * sampled Greenhouse employers serve their board from their own domain
+     * ({@code careers.airbnb.com}, {@code jobs.dropbox.com}, {@code stripe.com}, …), so 24% of real
+     * postings were refused. The fix is to name those hosts here — deliberately, one at a time.
+     *
+     * <p>The guard exists because matching is suffix-based: an entry of {@code com} would admit
+     * every host on the internet including internal ones behind a public CNAME, converting an SSRF
+     * control into an SSRF vector. A bad entry is dropped with a warning rather than failing
+     * startup, matching how {@code BrowserRolloutGate} handles a malformed allow-list uuid — an
+     * operator typo must not take the service down, but it must not silently widen access either.
+     */
     private static Set<String> parseHosts(String csv) {
         if (csv == null || csv.isBlank()) return Set.of();
         return Arrays.stream(csv.split(","))
                 .map(String::trim)
                 .filter(s -> !s.isEmpty())
                 .map(s -> s.toLowerCase(Locale.ROOT))
+                .filter(ValidationUrlPolicy::isSafeAllowListEntry)
                 .collect(Collectors.toUnmodifiableSet());
+    }
+
+    private static boolean isSafeAllowListEntry(String host) {
+        if (host.contains("/") || host.contains(":") || host.contains("*")) {
+            log.warn("BROWSER_VALIDATION ignoring allowed-host '{}': entries are bare hostnames, "
+                    + "not URLs, ports or wildcards", host);
+            return false;
+        }
+        if (!host.contains(".")) {
+            log.warn("BROWSER_VALIDATION ignoring allowed-host '{}': single-label entry would match "
+                    + "every subdomain of a bare TLD", host);
+            return false;
+        }
+        if (FORBIDDEN_BROAD_SUFFIXES.contains(host)) {
+            log.warn("BROWSER_VALIDATION ignoring allowed-host '{}': too broad — suffix matching "
+                    + "would admit every host under it, defeating the allow-list", host);
+            return false;
+        }
+        return true;
     }
 
     /** Diagnostics. Lists the policy, not any URL a caller has tried. */
@@ -166,6 +212,9 @@ public class ValidationUrlPolicy {
                 .filter(p -> p != AtsPlatform.UNKNOWN)
                 .flatMap(p -> p.hostTokens().stream())
                 .toList());
+        // Size only, never the names. This endpoint is unauthenticated, and the configured hosts
+        // are the employers this deployment targets — that list is not public information. An
+        // operator verifying which entries loaded reads the startup log, which is access-controlled.
         out.put("extraAllowedHosts", extraAllowedHosts.size());
         return out;
     }

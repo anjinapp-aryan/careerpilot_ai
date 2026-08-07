@@ -55,17 +55,92 @@ public record ValidationReport(
     }
 
     public enum Status {
-        /** Ran to completion. Says nothing about whether the page is automatable — see confidence. */
+        /**
+         * Ran to completion against a page {@link AtsPageVerifier} confirmed is an application form.
+         * Says nothing about whether the page is automatable — see confidence.
+         */
         COMPLETED,
         /** Refused before opening a browser (URL policy, feature flag). */
         REFUSED,
         /** Started and failed (navigation, discovery, browser). */
-        FAILED
+        FAILED,
+
+        // ── Phase F4 — verification rejections. Discovery and planning never ran. ──
+        // Each is a distinct answer to "why can't you automate this?", which is the entire reason
+        // they are separate statuses rather than one INVALID: "the job was deleted", "you need to
+        // log in" and "you pasted the careers homepage" call for three different operator actions.
+
+        /** Right posting, page loaded, but no application form is present on it. */
+        INVALID_APPLICATION_PAGE,
+        /** The posting does not exist: the ATS redirected away from it, or flagged an error. */
+        INVALID_POSTING,
+        /** The URL left the site entirely and landed somewhere that is not an application. */
+        REDIRECTED_TO_NON_APPLICATION,
+        /** An authentication wall stands between the URL and any form. Never bypassed. */
+        LOGIN_REQUIRED,
+        /** The posting existed but is closed, filled, expired, or no longer accepting applications. */
+        JOB_REMOVED,
+        /** Not a recognised ATS application surface — homepage, search page, maintenance page. */
+        UNSUPPORTED_PAGE;
+
+        /** True for every Phase F4 rejection: the page was proven not to be an application form. */
+        public boolean isVerificationRejection() {
+            return this == INVALID_APPLICATION_PAGE || this == INVALID_POSTING
+                    || this == REDIRECTED_TO_NON_APPLICATION || this == LOGIN_REQUIRED
+                    || this == JOB_REMOVED || this == UNSUPPORTED_PAGE;
+        }
+
+        /** True when discovery and planning were deliberately skipped. */
+        public boolean skippedDiscovery() {
+            return this == REFUSED || isVerificationRejection();
+        }
     }
 
     public ValidationReport {
         fields = fields == null ? List.of() : List.copyOf(fields);
         notes = notes == null ? List.of() : List.copyOf(notes);
+    }
+
+    /**
+     * P0 — the five stages kept deliberately separate, because conflating them is what produced a
+     * CAPTCHA-guarded page reporting {@code ready=true}.
+     *
+     * <p>Each answers a different question, and an earlier one succeeding says nothing about a
+     * later one:
+     *
+     * <ul>
+     *   <li><b>DISCOVERY</b> — were controls found on the page?</li>
+     *   <li><b>CLASSIFICATION</b> — was it understood what each control is?</li>
+     *   <li><b>PLANNING</b> — could a fill plan be produced from verified data?</li>
+     *   <li><b>AUTOMATION</b> — <i>can the system actually execute here?</i> This is the only stage
+     *       {@code ready} describes. It is {@code BLOCKED} whenever any {@link AutomationBlocker}
+     *       exists, however well the three stages above went.</li>
+     *   <li><b>SUBMISSION</b> — always {@code NOT_ATTEMPTED} from validation. The harness has no
+     *       code path to a submit; this states that in the payload rather than leaving it inferred.</li>
+     * </ul>
+     */
+    public enum PhaseOutcome { SUCCEEDED, SKIPPED, BLOCKED, NOT_ATTEMPTED }
+
+    /** Deterministic per-stage outcome derived from the report itself — never set by hand. */
+    public Map<String, Object> phases() {
+        boolean skipped = status.skippedDiscovery();
+        boolean discovered = !skipped && !fields.isEmpty();
+        boolean blocked = confidence != null && confidence.blocked();
+
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("discovery", (skipped ? PhaseOutcome.SKIPPED
+                : discovered ? PhaseOutcome.SUCCEEDED : PhaseOutcome.NOT_ATTEMPTED).name());
+        out.put("classification", (skipped || !discovered ? PhaseOutcome.SKIPPED
+                : PhaseOutcome.SUCCEEDED).name());
+        out.put("planning", (skipped || !discovered ? PhaseOutcome.SKIPPED
+                : PhaseOutcome.SUCCEEDED).name());
+        // The load-bearing line: analysis succeeding never implies automation can run.
+        out.put("automation", (skipped ? PhaseOutcome.SKIPPED
+                : blocked ? PhaseOutcome.BLOCKED
+                : confidence != null && confidence.ready() ? PhaseOutcome.SUCCEEDED
+                : PhaseOutcome.BLOCKED).name());
+        out.put("submission", PhaseOutcome.NOT_ATTEMPTED.name());
+        return out;
     }
 
     /**
@@ -173,6 +248,33 @@ public record ValidationReport(
                 AutomationConfidence.none(reason), PageEnvironment.unknown(), null, List.of());
     }
 
+    /**
+     * Phase F4 — the page was reached but is not an application form.
+     *
+     * <p>Confidence is {@link AutomationConfidence#none} carrying the rejection reason, and coverage
+     * is {@link SelectorCoverage#empty}, because <b>discovery never ran</b>. That is the point: a
+     * score computed from a board index is a misleading number, and the fix is to have no number
+     * rather than a wrong one. {@code discoveryDurationMs}/{@code planningDurationMs} are 0 for the
+     * same reason, so "skipped" is visible in the timings and not only in the status.
+     *
+     * @param navigationMs real — navigation genuinely happened, and how long it took is diagnostic
+     */
+    public static ValidationReport invalidPage(String url, AtsPlatform platform,
+                                               AtsPageVerifier.Outcome outcome, Instant startedAt,
+                                               long durationMs, long navigationMs,
+                                               PageEnvironment environment, String screenshotKey,
+                                               List<String> notes) {
+        List<String> allNotes = new java.util.ArrayList<>(notes == null ? List.of() : notes);
+        allNotes.addAll(outcome.evidence());
+        allNotes.add("Discovery and planning were skipped — this page was not an application form, "
+                + "so any confidence score computed from it would be misleading.");
+        return new ValidationReport(url, platform, outcome.status(), outcome.reason(),
+                startedAt, durationMs, navigationMs, 0, 0, List.of(), SelectorCoverage.empty(),
+                AutomationConfidence.none(outcome.reason()),
+                environment == null ? PageEnvironment.unknown() : environment,
+                screenshotKey, allNotes);
+    }
+
     /** Full detail, for the API response. */
     public Map<String, Object> snapshot() {
         Map<String, Object> out = summary();
@@ -203,6 +305,18 @@ public record ValidationReport(
         out.put("confidence", confidence == null ? Map.of() : confidence.snapshot());
         out.put("environment", environment == null ? Map.of() : environment.snapshot());
         out.put("screenshotKey", screenshotKey);
+        // Phase F4 — stated explicitly so a client never has to infer "was this page even an
+        // application form?" from the presence or absence of fields. A rejected page reports
+        // pageVerified=false with discovery/planning explicitly skipped.
+        out.put("pageVerified", status == Status.COMPLETED);
+        out.put("discoverySkipped", status.skippedDiscovery());
+        out.put("planningSkipped", status.skippedDiscovery());
+        out.put("invalidPosting", status.isVerificationRejection());
+        // P0 — the five stages, kept separate so "analysed successfully" can never be read as
+        // "executable". automationBlocked is hoisted to the top level because it is the single
+        // fact a dashboard must not miss.
+        out.put("phases", phases());
+        out.put("automationBlocked", confidence != null && confidence.blocked());
         // Stated on every single report so no consumer can mistake this for a submission record.
         out.put("submitted", false);
         out.put("documentsUploaded", false);

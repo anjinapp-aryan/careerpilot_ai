@@ -74,6 +74,8 @@ public class ApplicationExecutionService {
     private final AutomationRecoveryService recovery;
     private final ApplicationExecutionMetrics metrics;
     private final ai.careerpilot.execution.browser.rollout.BrowserRolloutGate rolloutGate;
+    /** P5 — observability only. Every method on it is total; it can never alter an outcome. */
+    private final ai.careerpilot.execution.timeline.ExecutionTimelineRecorder timeline;
     private final boolean enabled;
 
     public ApplicationExecutionService(ApplicationExecutionRepository executions,
@@ -88,6 +90,7 @@ public class ApplicationExecutionService {
                                        ApplicationExecutionMetrics metrics,
                                        ai.careerpilot.execution.browser.rollout.BrowserRolloutGate rolloutGate,
                                        org.springframework.beans.factory.ObjectProvider<MultiStepExecutionOrchestrator> multiStep,
+                                       ai.careerpilot.execution.timeline.ExecutionTimelineRecorder timeline,
                                        @Value("${application.execution.enabled:false}") boolean enabled) {
         this.executions = executions;
         this.audit = audit;
@@ -101,6 +104,7 @@ public class ApplicationExecutionService {
         this.metrics = metrics;
         this.rolloutGate = rolloutGate;
         this.multiStep = multiStep;
+        this.timeline = timeline;
         this.enabled = enabled;
     }
 
@@ -210,6 +214,12 @@ public class ApplicationExecutionService {
             case AWAITING_APPROVAL -> awaitingApproval(exec, start);
             case ABORTED -> terminal(exec, ApplicationExecution.STATUS_ABORTED, outcome.reason(), start);
             case SUBMITTED -> terminal(exec, ApplicationExecution.STATUS_SUBMITTED, null, start);
+            // attemptFill never clicks submit, so this is unreachable today. Handled explicitly
+            // rather than left to fall through: if a future change ever did make the fill phase
+            // capable of it, the safe mapping is the never-auto-retried status, not an exception
+            // at the top of an irreversible workflow.
+            case SUBMIT_UNVERIFIED ->
+                    terminal(exec, ApplicationExecution.STATUS_SUBMIT_UNVERIFIED, outcome.reason(), start);
             case ERROR -> terminal(exec, ApplicationExecution.STATUS_FAILED, outcome.reason(), start);
         };
     }
@@ -220,30 +230,72 @@ public class ApplicationExecutionService {
      * unless the execution is genuinely still {@code AWAITING_APPROVAL} (so a duplicate/rejected
      * event can never re-fire a submit click). Never throws.
      */
-    @Transactional
     public void finalizeGuestApplySubmit(UUID executionId) {
         long start = System.currentTimeMillis();
+
+        // ── Transaction A: the atomic claim ───────────────────────────────────────────────────
+        //
+        // This replaces a check-then-act (read the row, compare the status, then submit) that two
+        // workers could both pass under READ COMMITTED — the single browser lease then serialised
+        // them into two consecutive REAL submissions. The conditional UPDATE is the transition, so
+        // only the caller that changes a row proceeds. `claimForSubmit` is a @Modifying repository
+        // method and therefore runs in its own short transaction; there is no self-invocation
+        // problem because this method is no longer @Transactional itself.
+        int claimed;
+        try {
+            claimed = executions.claimForSubmit(executionId);
+        } catch (Exception e) {
+            // Never throws out of this method — a failed claim is a refusal to submit, which is
+            // always the safe direction for an irreversible action.
+            log.warn("APP_EXECUTION finalizeGuestApplySubmit: claim failed for {}: {}", executionId, e.toString());
+            return;
+        }
+        if (claimed != 1) {
+            log.warn("APP_EXECUTION finalizeGuestApplySubmit refused: execution {} was not AWAITING_APPROVAL "
+                    + "(already claimed, rejected, or terminal) — no submit attempted", executionId);
+            return;
+        }
+
+        // ── No transaction is open from here on ───────────────────────────────────────────────
+        //
+        // The browser work below (navigate, fill, upload, click, verify) previously ran inside this
+        // method's @Transactional boundary, holding a Neon connection open for its whole duration.
+        // With no statement or idle-in-transaction timeout configured, a connection recycled by the
+        // serverless database mid-submit rolled back the terminal write — leaving the row at
+        // AWAITING_APPROVAL after a real submission, which a later retry would submit again. The
+        // claim above is committed before any of it starts.
         ApplicationExecution exec = executions.findById(executionId).orElse(null);
         if (exec == null) {
-            log.warn("APP_EXECUTION finalizeGuestApplySubmit: execution {} not found", executionId);
+            log.warn("APP_EXECUTION finalizeGuestApplySubmit: execution {} not found after claim", executionId);
             return;
         }
-        if (!ApplicationExecution.STATUS_AWAITING_APPROVAL.equals(exec.getExecutionStatus())) {
-            log.warn("APP_EXECUTION finalizeGuestApplySubmit refused: execution {} not AWAITING_APPROVAL (status={})",
-                    executionId, exec.getExecutionStatus());
-            return;
-        }
+
+        // P5 — from here every exit is recorded as a stage, so "where did it stop" is answerable
+        // without reading a log. The recorder never throws, so none of this can change an outcome.
+        var run = new ai.careerpilot.execution.timeline.ExecutionTimelineRecorder.RunContext(
+                executionId, exec.getUserId(), exec.getJobId());
+        timeline.mark(run, ai.careerpilot.execution.timeline.ExecutionStage.APPROVAL_GRANTED, null);
+        timeline.mark(run, ai.careerpilot.execution.timeline.ExecutionStage.CLAIMED_FOR_SUBMISSION, null);
+
         Job job = jobs.findById(exec.getJobId()).orElse(null);
         if (job == null) {
+            timeline.failed(
+                    timeline.started(run, ai.careerpilot.execution.timeline.ExecutionStage.ATS_IDENTIFIED),
+                    ai.careerpilot.execution.timeline.FailureCategory.PERSISTENCE, "job no longer exists");
             terminal(exec, ApplicationExecution.STATUS_FAILED, "job no longer exists", start);
             return;
         }
+        UUID atsStage = timeline.started(run, ai.careerpilot.execution.timeline.ExecutionStage.ATS_IDENTIFIED);
         ATSConnector connector = connectors.detect(job);
         if (connector == null || !guestApply.isEligible(connector)) {
+            timeline.failed(atsStage, ai.careerpilot.execution.timeline.FailureCategory.ATS_DETECTION,
+                    "resolved connector no longer guest-apply eligible at finalize time");
             terminal(exec, ApplicationExecution.STATUS_FAILED,
                     "resolved connector no longer guest-apply eligible at finalize time", start);
             return;
         }
+        timeline.completed(atsStage, java.util.Map.of("connector", connector.name()));
+
         GuestApplyAutomationService.AttemptOutcome outcome = guestApply.finalizeSubmit(exec, job, connector);
         switch (outcome.kind()) {
             case SUBMITTED -> {
@@ -278,6 +330,18 @@ public class ApplicationExecutionService {
                     terminal(exec, ApplicationExecution.STATUS_SUBMIT_UNVERIFIED,
                             "submit click completed but verification returned " + verdict, start);
                 }
+            }
+            // The submit click was issued and then the browser threw, so delivery is unknown. This
+            // must NOT become FAILED: only STATUS_FAILED enters terminal()'s recovery branch, and
+            // RetryPolicyService classifies a Playwright error as BROWSER_FAILURE -> RETRY, which
+            // would resubmit an application that may already exist. SUBMIT_UNVERIFIED bypasses that
+            // branch entirely and is already documented as never auto-retried.
+            case SUBMIT_UNVERIFIED -> {
+                exec.setCheckpoint(ExecutionCheckpoint.SUBMIT_CLICKED);
+                log.warn("APP_EXECUTION submit outcome unverified execution={} — recorded as {}, needs a human; "
+                                + "auto-retry is deliberately not attempted: {}",
+                        exec.getId(), ApplicationExecution.STATUS_SUBMIT_UNVERIFIED, outcome.reason());
+                terminal(exec, ApplicationExecution.STATUS_SUBMIT_UNVERIFIED, outcome.reason(), start);
             }
             case ABORTED -> terminal(exec, ApplicationExecution.STATUS_ABORTED, outcome.reason(), start);
             default -> terminal(exec, ApplicationExecution.STATUS_FAILED, outcome.reason(), start);
@@ -329,7 +393,7 @@ public class ApplicationExecutionService {
                 // status is already correct, and rewriting it would only churn the audit trail.
             }
             case READY_TO_SUBMIT -> finalizeGuestApplySubmit(executionId);
-            case STOPPED -> exec.setLastError(truncate(outcome.reason()));
+            case STOPPED -> exec.setFailureReason(truncate(outcome.reason()));
             case WAITING, DISABLED -> {
                 // Nothing to do: either a page is still pending, or the feature was turned off
                 // between the approval and this callback.

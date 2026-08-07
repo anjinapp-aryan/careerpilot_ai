@@ -511,6 +511,84 @@ public class ApplicationSubmissionSessionService {
         advance(session, ApplicationSubmissionSession.STATUS_COMPLETED);
     }
 
+    // ── Stranded-session recovery ──
+
+    /**
+     * Statuses a stranded session may safely be failed from: every stage strictly BEFORE any submit
+     * attempt. A session stuck here provably never reached an employer — no execute() call has run —
+     * so {@code FAILED} is an honest verdict.
+     *
+     * <p>Deliberately excludes everything from {@code SUBMITTING} onwards. Once a submit attempt has
+     * begun, the application may genuinely be with the employer, and relabelling that row
+     * {@code FAILED} would tell the user their application failed when it may have succeeded — the
+     * same fabrication {@code VerificationAdjudicator} and {@code STATUS_SUBMIT_UNVERIFIED} exist to
+     * prevent. Those rows are counted and logged for human attention instead.
+     *
+     * <p>Also excludes {@code WAITING_APPROVAL} (a human may legitimately take days) and
+     * {@code WAITING_MANUAL_SUBMISSION} (a documented dead end resting on a user action).
+     */
+    static final List<String> REAPABLE_PRE_SUBMIT_STATUSES = List.of(
+            ApplicationSubmissionSession.STATUS_CREATED,
+            ApplicationSubmissionSession.STATUS_VALIDATING,
+            ApplicationSubmissionSession.STATUS_PACKAGE_READY,
+            ApplicationSubmissionSession.STATUS_REVIEW_READY,
+            ApplicationSubmissionSession.STATUS_COMPANY_READY,
+            ApplicationSubmissionSession.STATUS_STAR_READY,
+            ApplicationSubmissionSession.STATUS_READY_FOR_SUBMISSION);
+
+    /**
+     * Fail sessions abandoned mid-pipeline, so no session can sit in an intermediate state forever.
+     *
+     * <p><b>The defect this closes.</b> {@link #runPipeline} is one straight-line method owned by a
+     * single thread on the bounded submission executor. Every status transition is written by that
+     * thread and nothing else. If the thread disappears — JVM killed mid-pipeline (observed: the
+     * process died during an in-flight AI Gateway call with no graceful-shutdown log at all),
+     * {@code executor.execute} rejected on a full queue, or an uncaught {@code Error} — the row's
+     * status column has no remaining writer. It is not "waiting" for an event; there is no event.
+     * The pipeline stops silently and the UI shows a spinner indefinitely.
+     *
+     * <p>This does not add a stage, an event, or a state: it drives the {@code -> FAILED} edge the
+     * state machine already allows from any active status, using the same {@link #fail} path a
+     * caught in-pipeline exception uses.
+     *
+     * @return number of sessions failed
+     */
+    public int reapStranded(Duration staleAfter) {
+        if (!enabled) return 0;
+        Instant cutoff = Instant.now().minus(staleAfter);
+        List<ApplicationSubmissionSession> stranded =
+                sessions.findByStatusInAndUpdatedAtBefore(REAPABLE_PRE_SUBMIT_STATUSES, cutoff);
+        int failed = 0;
+        for (ApplicationSubmissionSession session : stranded) {
+            try {
+                fail(session, "stranded: no pipeline progress since " + session.getUpdatedAt()
+                        + " (owning thread gone — likely a backend restart mid-pipeline); "
+                        + "nothing was submitted to any employer. Re-apply to retry.");
+                failed++;
+            } catch (Exception e) {
+                log.warn("APP_SUBMISSION reap failed session={}: {}", session.getId(), e.toString());
+            }
+        }
+        // Post-submit strandings are NOT auto-failed (see REAPABLE_PRE_SUBMIT_STATUSES) — surfaced
+        // so a human can adjudicate rather than silently ignored.
+        List<ApplicationSubmissionSession> postSubmit = sessions.findByStatusInAndUpdatedAtBefore(
+                List.of(ApplicationSubmissionSession.STATUS_SUBMITTING,
+                        ApplicationSubmissionSession.STATUS_SUBMITTED,
+                        ApplicationSubmissionSession.STATUS_VERIFYING,
+                        ApplicationSubmissionSession.STATUS_VERIFIED,
+                        ApplicationSubmissionSession.STATUS_VERIFICATION_FAILED,
+                        ApplicationSubmissionSession.STATUS_SUBMIT_UNVERIFIED,
+                        ApplicationSubmissionSession.STATUS_TRACKING), cutoff);
+        if (!postSubmit.isEmpty()) {
+            log.warn("APP_SUBMISSION {} stranded post-submit session(s) need human review (not auto-failed): {}",
+                    postSubmit.size(), postSubmit.stream().map(s -> s.getId() + "=" + s.getStatus()).toList());
+        }
+        if (failed > 0) {
+            log.info("APP_SUBMISSION reaped {} stranded pre-submit session(s) older than {}", failed, staleAfter);
+        }
+        return failed;
+    }
+
     // ── State-machine helpers ──
 
     private void advance(ApplicationSubmissionSession session, String newStatus) {

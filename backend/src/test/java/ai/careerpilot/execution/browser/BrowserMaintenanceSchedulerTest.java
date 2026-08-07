@@ -21,7 +21,7 @@ class BrowserMaintenanceSchedulerTest {
     private final BrowserSessionManager sessionManager = mock(BrowserSessionManager.class);
 
     private BrowserMaintenanceScheduler scheduler(boolean maintenance, boolean automation, boolean zombieRestart) {
-        return new BrowserMaintenanceScheduler(pool, sessionManager, maintenance, automation, zombieRestart);
+        return new BrowserMaintenanceScheduler(pool, sessionManager, maintenance, automation, zombieRestart, true);
     }
 
     @Test
@@ -71,5 +71,50 @@ class BrowserMaintenanceSchedulerTest {
         when(sessionManager.restartIfZombie()).thenThrow(new IllegalStateException("boom"));
         // A scheduled method that throws is logged and silently retried forever — never useful.
         scheduler(true, true, true).sweep();
+    }
+
+    // ── P3 — the third, independently-isolated half of the sweep ──────────────────────────────
+
+    private BrowserMaintenanceScheduler scheduler(boolean maintenance, boolean automation,
+                                                  boolean zombieRestart, boolean lifecycle) {
+        return new BrowserMaintenanceScheduler(pool, sessionManager, maintenance, automation,
+                zombieRestart, lifecycle);
+    }
+
+    @Test
+    void sweepAsksTheSessionManagerToRecycleWhenLifecycleIsEnabled() {
+        when(sessionManager.recycleIfDue()).thenReturn(BrowserSessionManager.RecycleOutcome.IDLE);
+        scheduler(true, true, true, true).sweep();
+        verify(sessionManager).recycleIfDue();
+    }
+
+    @Test
+    void lifecycleCanBeTurnedOffWithoutDisablingReclaimOrZombieRecovery() {
+        scheduler(true, true, true, false).sweep();
+        verify(pool).reclaimExpired();
+        verify(sessionManager).restartIfZombie();
+        verify(sessionManager, never()).recycleIfDue();
+    }
+
+    @Test
+    void aThrowingRecycleNeverEscapesTheSweep() {
+        when(sessionManager.recycleIfDue()).thenThrow(new IllegalStateException("boom"));
+        scheduler(true, true, true, true).sweep();   // must not throw
+        verify(sessionManager).recycleIfDue();
+    }
+
+    @Test
+    void aThrowingZombieCheckStillLetsTheRecycleRun() {
+        // Each half is isolated so one broken subsystem cannot disable another's recovery.
+        when(sessionManager.restartIfZombie()).thenThrow(new IllegalStateException("boom"));
+        when(sessionManager.recycleIfDue()).thenReturn(BrowserSessionManager.RecycleOutcome.NOT_DUE);
+        scheduler(true, true, true, true).sweep();
+        verify(sessionManager).recycleIfDue();
+    }
+
+    @Test
+    void aDarkDeploymentNeverReachesTheRecycleCheck() {
+        scheduler(true, false, true, true).sweep();
+        verifyNoInteractions(sessionManager);
     }
 }

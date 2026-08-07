@@ -152,6 +152,42 @@ public class BrowserValidationHarness {
                         + "Discovery results below may be from the interstitial rather than the form.");
             }
 
+            // ── Phase F4 — prove this is an application form BEFORE discovery runs against it ──
+            //
+            // The bug: https://boards.greenhouse.io/gitlab/jobs/12345 is not a real posting, but
+            // Greenhouse answers it with HTTP 200 after redirecting to the company's board index.
+            // Navigation succeeded, so discovery ran on an index page and the harness reported
+            // COMPLETED with a confidence score. A score derived from a page that was never an
+            // application form is worse than no score, because an operator will act on it.
+            //
+            // This runs before discovery, not after, so a rejected page produces no coverage and no
+            // confidence at all rather than numbers that would have to be explained away.
+            AtsPageVerifier.PageIdentity identity = null;
+            try {
+                identity = FormDiscoveryScript.parsePageIdentity(
+                        browser.evaluate(FormDiscoveryScript.DISCOVER_PAGE_IDENTITY), url);
+            } catch (Exception e) {
+                notes.add("page identity probe failed, proceeding to discovery: " + e);
+            }
+            AtsPageVerifier.Outcome verification = AtsPageVerifier.verify(identity, verdict.platform());
+            if (!verification.valid()) {
+                // The screenshot is still captured: "what did it actually load?" is exactly the
+                // question an operator asks about a rejection, and answering it costs one image.
+                ValidationReport.PageEnvironment rejectedEnv = environment(notes, List.of());
+                String rejectedShot = captureScreenshot ? captureEvidence(url, notes) : null;
+                long rejectedMs = System.currentTimeMillis() - start;
+                ValidationReport report = ValidationReport.invalidPage(url, verdict.platform(),
+                        verification, startedAt, rejectedMs, navigationMs, rejectedEnv,
+                        rejectedShot, notes);
+                metrics.recordInvalidPage(report);
+                log.warn("BROWSER_VALIDATION rejected url={} finalUrl={} status={} reason={}",
+                        url, identity == null ? "(unknown)" : identity.finalUrl(),
+                        verification.status(), verification.reason());
+                return report;
+            }
+            notes.add("Page verified as an application form (signal score "
+                    + verification.signalScore() + "/5).");
+
             long discoveryStart = System.currentTimeMillis();
             Object rawDiscovery = browser.evaluate(FormDiscoveryScript.DISCOVER_FIELDS);
             // Phase B — reduction runs here rather than in the page, so the rule that decides a
@@ -173,7 +209,15 @@ public class BrowserValidationHarness {
             long planningMs = System.currentTimeMillis() - planStart;
 
             SelectorCoverage coverage = SelectorCoverage.from(discovered, classified, plan);
-            AutomationConfidence confidence = AutomationConfidence.from(coverage);
+            // P0 — what stops execution, computed separately from how well the page was analysed.
+            List<AutomationBlocker> blockers = blockers(captchaOrLogin, environment, coverage, discovered);
+            AutomationConfidence confidence = AutomationConfidence.from(coverage, blockers);
+            if (!blockers.isEmpty()) {
+                notes.add("AUTOMATION BLOCKED: " + blockers.stream()
+                        .map(b -> b.reason().name() + " (" + b.detail() + ")")
+                        .collect(java.util.stream.Collectors.joining("; ")));
+                metrics.recordBlocked(blockers);
+            }
             List<ValidationReport.FieldEntry> entries = fieldEntries(discovered, classified, plan);
             String screenshotKey = captureScreenshot ? captureEvidence(url, notes) : null;
 
@@ -204,7 +248,60 @@ public class BrowserValidationHarness {
             } catch (Exception e) {
                 log.warn("BROWSER_VALIDATION lease release failed: {}", e.toString());
             }
+            // The console buffer is drained on the success path only. A run that threw earlier —
+            // navigation failure, page-identity probe failure — otherwise left page-derived text
+            // bound to this pooled request thread indefinitely.
+            try {
+                browser.clearConsoleCapture();
+            } catch (Exception e) {
+                log.warn("BROWSER_VALIDATION console buffer cleanup failed: {}", e.toString());
+            }
         }
+    }
+
+    /**
+     * P0 — everything that makes execution impossible, derived only from evidence already gathered.
+     *
+     * <p>Nothing here is new detection: CAPTCHA/login come from the existing {@code
+     * CaptchaLoginDetector} and environment probe, missing required data from the plan the coverage
+     * already summarises, cross-origin frames from the environment counts. The defect was never
+     * that these facts were unknown — they were all on the report already — but that none of them
+     * reached the readiness verdict.
+     *
+     * <p>Order is severity-first so {@code blockedReason} names the most fundamental obstacle: a
+     * page behind a CAPTCHA cannot be executed even if every field were fillable.
+     */
+    private static List<AutomationBlocker> blockers(boolean captchaOrLogin,
+                                                    ValidationReport.PageEnvironment environment,
+                                                    SelectorCoverage coverage,
+                                                    List<DiscoveredField> discovered) {
+        List<AutomationBlocker> out = new ArrayList<>();
+
+        if (environment != null && environment.captchaDetected()) {
+            out.add(AutomationBlocker.of(AutomationBlocker.Reason.CAPTCHA,
+                    "a CAPTCHA provider is present in the page; this platform detects and reports "
+                            + "CAPTCHAs and never solves them, so a submission cannot complete here"));
+        } else if (captchaOrLogin) {
+            // The HTML detector fires on either; without a provider script in the environment probe
+            // the more likely explanation is a sign-in wall.
+            out.add(AutomationBlocker.of(AutomationBlocker.Reason.LOGIN_WALL,
+                    "a CAPTCHA or sign-in wall was detected in the page HTML"));
+        }
+
+        if (discovered.isEmpty()) {
+            int iframes = environment == null ? 0 : environment.iframeCount();
+            out.add(iframes > 0
+                    ? AutomationBlocker.of(AutomationBlocker.Reason.CROSS_ORIGIN_FRAME,
+                            "no controls in the top document, but " + iframes
+                                    + " iframe(s) are present — the form is most likely inside one, "
+                                    + "which the browser prevents reading across")
+                    : AutomationBlocker.of(AutomationBlocker.Reason.NO_FORM));
+        } else if (coverage.missingRequiredValues() > 0) {
+            out.add(AutomationBlocker.of(AutomationBlocker.Reason.MISSING_REQUIRED_DATA,
+                    coverage.missingRequiredValues() + " required field(s) have no verified value; "
+                            + "values are never fabricated, so the form cannot be completed"));
+        }
+        return out;
     }
 
     private ValidationReport.PageEnvironment environment(List<String> notes, List<DiscoveredField> discovered) {

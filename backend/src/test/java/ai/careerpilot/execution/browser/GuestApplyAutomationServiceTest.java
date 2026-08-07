@@ -67,6 +67,10 @@ class GuestApplyAutomationServiceTest {
                 mock(ai.careerpilot.repo.ApplicationSubmissionSessionRepository.class),
                 // Phase F3: absent orchestrator => single-page behaviour, unchanged.
                 mock(org.springframework.beans.factory.ObjectProvider.class),
+                // P5: recorder present but disabled — instrumentation must not alter any outcome.
+                new ai.careerpilot.execution.timeline.ExecutionTimelineRecorder(
+                        mock(ai.careerpilot.repo.ExecutionStageEventRepository.class),
+                        new ai.careerpilot.execution.timeline.ExecutionStageMetrics(), false),
                 true);
 
         when(browser.currentPageHtml()).thenReturn("<html><body>a normal apply form</body></html>");
@@ -199,14 +203,22 @@ class GuestApplyAutomationServiceTest {
         assertThat(captor.getValue().getPhase()).isEqualTo("AFTER_SUBMIT");
     }
 
+    /**
+     * P4 WI1 — DELIBERATELY INVERTED. This previously asserted {@code Kind.ERROR}, i.e. "the submit
+     * failed, retry it". A throw from {@code connector.submit(...)} happens at or after the click,
+     * so the application may already exist at the employer; reporting it as a retryable error is
+     * how the same application gets sent twice. The screenshot assertion is unchanged.
+     */
     @Test
-    void finalizeSubmitCapturesFailureScreenshotOnError() {
+    void finalizeSubmitCapturesFailureScreenshotOnPostClickFailure() {
         ATSConnector connector = connector("greenhouse");
         when(connector.submit(any(), any())).thenThrow(new RuntimeException("ats rejected"));
 
         var outcome = service.finalizeSubmit(exec(), job(), connector);
 
-        assertThat(outcome.kind()).isEqualTo(GuestApplyAutomationService.AttemptOutcome.Kind.ERROR);
+        assertThat(outcome.kind())
+                .isEqualTo(GuestApplyAutomationService.AttemptOutcome.Kind.SUBMIT_UNVERIFIED);
+        assertThat(outcome.reason()).contains("submit click was issued");
         ArgumentCaptor<ExecutionScreenshot> captor = ArgumentCaptor.forClass(ExecutionScreenshot.class);
         verify(screenshots).save(captor.capture());
         assertThat(captor.getValue().getPhase()).isEqualTo("FAILURE");
@@ -224,5 +236,32 @@ class GuestApplyAutomationServiceTest {
     private void doThrowOnCaptureScreenshot() {
         org.mockito.Mockito.doThrow(new IllegalStateException("no active page"))
                 .when(browser).captureScreenshot(any(Path.class));
+    }
+
+    // ── P4 WI1 — the click/no-click boundary ─────────────────────────────────────────────────
+
+    @Test
+    void aFailureBeforeTheClickIsStillAnOrdinaryRetryableError() {
+        // Navigation threw, so nothing was ever submitted. This must stay ERROR: downgrading every
+        // failure to "unverified" would strand genuinely-failed attempts that are safe to retry.
+        ATSConnector connector = connector("greenhouse");
+        org.mockito.Mockito.doThrow(new RuntimeException("net::ERR_CONNECTION_RESET"))
+                .when(browser).navigate(any());
+
+        var outcome = service.finalizeSubmit(exec(), job(), connector);
+
+        assertThat(outcome.kind()).isEqualTo(GuestApplyAutomationService.AttemptOutcome.Kind.ERROR);
+    }
+
+    @Test
+    void theBrowserLeaseIsReleasedOnEveryPostClickFailure() {
+        ATSConnector connector = connector("greenhouse");
+        when(connector.submit(any(), any()))
+                .thenThrow(new RuntimeException("Execution context was destroyed"));
+
+        service.finalizeSubmit(exec(), job(), connector);
+
+        // A validation or submit that keeps the single permit starves every later execution.
+        verify(browser).logout();
     }
 }

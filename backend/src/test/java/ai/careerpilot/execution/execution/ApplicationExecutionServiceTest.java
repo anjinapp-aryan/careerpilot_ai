@@ -65,6 +65,10 @@ class ApplicationExecutionServiceTest {
         // the STATUS_FAILED branch of terminal(), which none of the pre-existing (pre-7.16.3) tests
         // exercise — tests that need it stub it locally, and tests that assert
         // verifyNoInteractions(recovery) rely on this method staying genuinely untouched.
+        // The approval->submit gate is now an atomic conditional UPDATE rather than a read-and-
+        // compare, so every finalize test needs the claim to succeed. The refusal test overrides
+        // this with 0, which is what a caller that lost the race actually observes.
+        when(executions.claimForSubmit(any())).thenReturn(1);
         when(executions.save(any(ApplicationExecution.class))).thenAnswer(inv -> {
             ApplicationExecution e = inv.getArgument(0);
             if (e.getId() == null) e.setId(UUID.randomUUID());
@@ -86,11 +90,19 @@ class ApplicationExecutionServiceTest {
         return service(enabled, openRolloutGate());
     }
 
+    /** Observability is off in these tests: it must never influence an execution outcome. */
+    private static ai.careerpilot.execution.timeline.ExecutionTimelineRecorder disabledTimelineRecorder() {
+        return new ai.careerpilot.execution.timeline.ExecutionTimelineRecorder(
+                mock(ai.careerpilot.repo.ExecutionStageEventRepository.class),
+                new ai.careerpilot.execution.timeline.ExecutionStageMetrics(), false);
+    }
+
     private ApplicationExecutionService service(boolean enabled,
                                                 ai.careerpilot.execution.browser.rollout.BrowserRolloutGate gate) {
         return new ApplicationExecutionService(executions, audit, packages, jobs, connectors, browser,
                 guestApply, verification, recovery, new ApplicationExecutionMetrics(), gate,
-                mock(org.springframework.beans.factory.ObjectProvider.class), enabled);
+                mock(org.springframework.beans.factory.ObjectProvider.class),
+                disabledTimelineRecorder(), enabled);
     }
 
     private static ai.careerpilot.execution.browser.rollout.BrowserRolloutGate openRolloutGate() {
@@ -215,6 +227,8 @@ class ApplicationExecutionServiceTest {
                 .executionType(ApplicationExecution.TYPE_ATS_CONNECTOR)
                 .attemptCount(1).build();
         when(executions.findById(execId)).thenReturn(Optional.of(notAwaiting));
+        // Not AWAITING_APPROVAL => the conditional UPDATE matches no row.
+        when(executions.claimForSubmit(execId)).thenReturn(0);
 
         service(true).finalizeGuestApplySubmit(execId);
 
@@ -560,5 +574,112 @@ class ApplicationExecutionServiceTest {
         when(executions.findByIdAndUserId(execId, userId)).thenReturn(Optional.of(paused));
 
         assertThat(service(true).requestManualReview(execId, userId, "again")).isFalse();
+    }
+
+    // ── P4 — the approval claim and the never-retry-a-submit rule ─────────────────────────────
+
+    /**
+     * WI2. Two workers observing the same approved execution must produce exactly ONE submission.
+     * The single browser lease does not save us: it serialises them into two consecutive REAL
+     * submissions. The conditional UPDATE is the claim, so only the caller that changes a row runs.
+     */
+    @Test
+    void concurrentFinalizeProducesExactlyOneBrowserSubmission() {
+        UUID execId = UUID.randomUUID();
+        ApplicationExecution awaiting = ApplicationExecution.builder()
+                .id(execId).userId(userId).jobId(jobId).applicationPackageId(pkgId)
+                .executionStatus(ApplicationExecution.STATUS_AWAITING_APPROVAL)
+                .executionType(ApplicationExecution.TYPE_ATS_CONNECTOR)
+                .attemptCount(1).build();
+        when(executions.findById(execId)).thenReturn(Optional.of(awaiting));
+        // First caller wins the row; every later caller sees zero rows affected.
+        when(executions.claimForSubmit(execId)).thenReturn(1, 0, 0);
+        ATSConnector connector = mock(ATSConnector.class);
+        when(connector.isConfigured()).thenReturn(true);
+        when(connector.name()).thenReturn("greenhouse");
+        when(connectors.detect(any())).thenReturn(connector);
+        when(guestApply.isEligible(connector)).thenReturn(true);
+        when(guestApply.finalizeSubmit(any(), any(), any()))
+                .thenReturn(GuestApplyAutomationService.AttemptOutcome.submitted("conf-1"));
+        when(verification.verify(any(), any(), any())).thenReturn(
+                ai.careerpilot.execution.verification.VerificationResult.verified(
+                        "EVIDENCE_ADJUDICATION:CONFIRMED", "confirmed"));
+
+        ApplicationExecutionService svc = service(true);
+        svc.finalizeGuestApplySubmit(execId);
+        svc.finalizeGuestApplySubmit(execId);
+        svc.finalizeGuestApplySubmit(execId);
+
+        org.mockito.Mockito.verify(guestApply, org.mockito.Mockito.times(1))
+                .finalizeSubmit(any(), any(), any());
+    }
+
+    @Test
+    void aFailingClaimNeverSubmitsAndNeverThrows() {
+        UUID execId = UUID.randomUUID();
+        when(executions.claimForSubmit(execId)).thenThrow(new IllegalStateException("db down"));
+
+        service(true).finalizeGuestApplySubmit(execId);   // must not throw
+
+        org.mockito.Mockito.verify(guestApply, org.mockito.Mockito.never()).finalizeSubmit(any(), any(), any());
+        org.mockito.Mockito.verify(executions, org.mockito.Mockito.never()).findById(execId);
+    }
+
+    /**
+     * WI1/WI3. A browser exception AFTER the click must never be reported as FAILED: only
+     * STATUS_FAILED enters the recovery branch, where RetryPolicyService classifies a Playwright
+     * error as BROWSER_FAILURE -> RETRY, and the retry would resubmit an application that may
+     * already exist at the employer.
+     */
+    @Test
+    void aPostClickBrowserFailureBecomesSubmitUnverifiedAndIsNeverOfferedToRecovery() {
+        UUID execId = UUID.randomUUID();
+        ApplicationExecution awaiting = ApplicationExecution.builder()
+                .id(execId).userId(userId).jobId(jobId).applicationPackageId(pkgId)
+                .executionStatus(ApplicationExecution.STATUS_AWAITING_APPROVAL)
+                .executionType(ApplicationExecution.TYPE_ATS_CONNECTOR)
+                .attemptCount(1).build();
+        when(executions.findById(execId)).thenReturn(Optional.of(awaiting));
+        ATSConnector connector = mock(ATSConnector.class);
+        when(connector.isConfigured()).thenReturn(true);
+        when(connector.name()).thenReturn("greenhouse");
+        when(connectors.detect(any())).thenReturn(connector);
+        when(guestApply.isEligible(connector)).thenReturn(true);
+        when(guestApply.finalizeSubmit(any(), any(), any())).thenReturn(
+                GuestApplyAutomationService.AttemptOutcome.submitUnverified(
+                        "submit click was issued but the browser failed before delivery could be "
+                                + "confirmed: Element is not attached to the DOM"));
+
+        service(true).finalizeGuestApplySubmit(execId);
+
+        assertThat(awaiting.getExecutionStatus())
+                .isEqualTo(ApplicationExecution.STATUS_SUBMIT_UNVERIFIED);
+        assertThat(awaiting.getFailureReason()).contains("submit click was issued");
+        // The recovery/retry branch is reachable only from STATUS_FAILED — never consulted here.
+        org.mockito.Mockito.verify(recovery, org.mockito.Mockito.never())
+                .attemptRecovery(any(), any());
+    }
+
+    /** A failure BEFORE any click is still an ordinary, retryable failure — unchanged behaviour. */
+    @Test
+    void aPreClickFailureIsStillAnOrdinaryFailure() {
+        UUID execId = UUID.randomUUID();
+        ApplicationExecution awaiting = ApplicationExecution.builder()
+                .id(execId).userId(userId).jobId(jobId).applicationPackageId(pkgId)
+                .executionStatus(ApplicationExecution.STATUS_AWAITING_APPROVAL)
+                .executionType(ApplicationExecution.TYPE_ATS_CONNECTOR)
+                .attemptCount(1).build();
+        when(executions.findById(execId)).thenReturn(Optional.of(awaiting));
+        ATSConnector connector = mock(ATSConnector.class);
+        when(connector.isConfigured()).thenReturn(true);
+        when(connector.name()).thenReturn("greenhouse");
+        when(connectors.detect(any())).thenReturn(connector);
+        when(guestApply.isEligible(connector)).thenReturn(true);
+        when(guestApply.finalizeSubmit(any(), any(), any()))
+                .thenReturn(GuestApplyAutomationService.AttemptOutcome.error("navigation timed out"));
+
+        service(true).finalizeGuestApplySubmit(execId);
+
+        assertThat(awaiting.getExecutionStatus()).isEqualTo(ApplicationExecution.STATUS_FAILED);
     }
 }

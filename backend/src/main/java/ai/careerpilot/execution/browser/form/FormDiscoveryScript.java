@@ -378,6 +378,94 @@ public final class FormDiscoveryScript {
             }
             """;
 
+    /**
+     * Phase F4 — page identity, read <b>before</b> any discovery so an invalid page can be rejected
+     * without ever being scored.
+     *
+     * <p>Read-only, like every other script here. Two deliberate choices:
+     *
+     * <ul>
+     *   <li><b>{@code innerText}, not {@code outerHTML}.</b> Measured on GitLab's ordinary board
+     *       index, the literal string {@code 404} appears inside asset filenames in the markup. A
+     *       raw-HTML match would "detect" a removed job on a page that has none, so the verifier is
+     *       given visible text only.</li>
+     *   <li><b>Structural form signals counted here</b> rather than inferred from prose, so a page
+     *       whose wording is unfamiliar is still recognisable as a form by having a file input, an
+     *       email input, several text inputs and a submit button.</li>
+     * </ul>
+     *
+     * <p>Text is capped so an enormous page cannot bloat the payload; the phrases that matter appear
+     * near the top of a rejection page by construction.
+     */
+    public static final String DISCOVER_PAGE_IDENTITY = """
+            () => {
+              const body = document.body;
+              const text = body ? (body.innerText || '') : '';
+
+              const q = (sel) => document.querySelectorAll(sel).length;
+              const fileInputs = q('input[type="file"]');
+              const emailInputs = q('input[type="email"]');
+              const passwordInputs = q('input[type="password"]');
+              let textInputs = 0;
+              document.querySelectorAll('input').forEach(el => {
+                const t = (el.getAttribute('type') || 'text').toLowerCase();
+                if (t === 'text' || t === 'tel' || t === 'url' || t === 'search') textInputs++;
+              });
+
+              let submitButtons = 0;
+              document.querySelectorAll(
+                  'button, input[type="submit"], [role="button"]').forEach(el => {
+                const label = ((el.innerText || '') + ' ' + (el.value || '') + ' '
+                    + (el.getAttribute('aria-label') || '')).toLowerCase();
+                const type = (el.getAttribute('type') || '').toLowerCase();
+                if (type === 'submit' || /submit|apply|send application/.test(label)) submitButtons++;
+              });
+
+              const headingText = Array.from(
+                  document.querySelectorAll('h1, h2, h3, legend, [role="heading"]'))
+                  .map(h => (h.innerText || '').toLowerCase()).join(' | ');
+              const applicationHeading = /apply for this job|apply to |submit your application|application form|submit application|apply now/
+                  .test(headingText + ' ' + text.slice(0, 4000).toLowerCase());
+
+              return {
+                finalUrl: location.href,
+                title: document.title || '',
+                visibleText: text.slice(0, 8000),
+                fileInputs: fileInputs,
+                emailInputs: emailInputs,
+                textInputs: textInputs,
+                passwordInputs: passwordInputs > 0,
+                submitButtons: submitButtons,
+                applicationHeading: applicationHeading
+              };
+            }
+            """;
+
+    /**
+     * Parse {@link #DISCOVER_PAGE_IDENTITY}. An unusable result degrades to an empty identity, which
+     * {@code AtsPageVerifier} treats as "proceed" — a broken probe must never reject a real form.
+     */
+    public static ai.careerpilot.execution.browser.validation.AtsPageVerifier.PageIdentity
+            parsePageIdentity(Object scriptResult, String requestedUrl) {
+        if (!(scriptResult instanceof Map<?, ?> map)) {
+            return null;
+        }
+        String finalUrl = str(map, "finalUrl");
+        var signals = new ai.careerpilot.execution.browser.validation.AtsPageVerifier.FormSignals(
+                count(map, "fileInputs"),
+                count(map, "emailInputs"),
+                count(map, "textInputs"),
+                count(map, "submitButtons"),
+                bool(map, "applicationHeading"),
+                bool(map, "passwordInputs"));
+        return new ai.careerpilot.execution.browser.validation.AtsPageVerifier.PageIdentity(
+                requestedUrl,
+                finalUrl.isEmpty() ? requestedUrl : finalUrl,
+                str(map, "title"),
+                str(map, "visibleText"),
+                signals);
+    }
+
     /** Parse {@link #DISCOVER_ENVIRONMENT}. Missing keys degrade to a neutral value, never a throw. */
     public static ai.careerpilot.execution.browser.validation.ValidationReport.PageEnvironment
             parseEnvironment(Object scriptResult, int consoleErrorCount) {

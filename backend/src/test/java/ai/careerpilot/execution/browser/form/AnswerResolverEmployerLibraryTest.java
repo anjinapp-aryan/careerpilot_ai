@@ -23,6 +23,7 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
@@ -70,18 +71,32 @@ class AnswerResolverEmployerLibraryTest {
         return new AnswerResolver(mapping, users, answers, provider);
     }
 
+
+    /**
+     * P2 - the resolver no longer queries per field: loadContext bulk-resolves the whole form's
+     * lookups in two queries and the per-field path is a map hit. Tests therefore supply the
+     * lookups the planner would have built.
+     */
+    private AnswerResolver.ResolutionContext contextFor(AnswerResolver resolver,
+                                                        CanonicalField field, String questionText) {
+        return resolver.loadContext(userId, sessionId,
+                List.of(new EmployerAnswerService.Lookup(questionText, field.name())));
+    }
+
     @Test
     @DisplayName("an approved library answer is used and carries its provenance")
     void approvedAnswerIsUsed() {
         when(library.isEnabled()).thenReturn(true);
         Instant approvedAt = Instant.now();
-        when(library.resolve(eq(userId), anyString(), anyString())).thenReturn(
+        when(library.resolveAll(eq(userId), anyList())).thenReturn(java.util.Map.of(
+                new EmployerAnswerService.Lookup(QUESTION, "SCREENING_QUESTION").key(),
                 new AnswerResolution("No", AnswerConfidence.HUMAN_APPROVED, true, approvedAt,
-                        "library", "reused", UUID.randomUUID()));
+                        "library", "reused", UUID.randomUUID())));
 
         AnswerResolver resolver = resolverWith(library);
         ResolvedValue value = resolver.resolve(CanonicalField.SCREENING_QUESTION,
-                resolver.loadContext(userId, sessionId), QuestionCategory.OTHER, QUESTION);
+                contextFor(resolver, CanonicalField.SCREENING_QUESTION, QUESTION),
+                QuestionCategory.OTHER, QUESTION);
 
         assertThat(value.isResolved()).isTrue();
         assertThat(value.value()).isEqualTo("No");
@@ -92,14 +107,16 @@ class AnswerResolverEmployerLibraryTest {
     @DisplayName("an unapproved draft is never used — the library's refusal is honoured")
     void unapprovedDraftIsNotUsed() {
         when(library.isEnabled()).thenReturn(true);
-        when(library.resolve(eq(userId), anyString(), anyString())).thenReturn(
+        when(library.resolveAll(eq(userId), anyList())).thenReturn(java.util.Map.of(
+                new EmployerAnswerService.Lookup(QUESTION, "SCREENING_QUESTION").key(),
                 new AnswerResolution(null, AnswerConfidence.AI_SUGGESTED, false, null, "draft",
                         "A draft answer exists but no human has approved it, so it may not be used.",
-                        UUID.randomUUID()));
+                        UUID.randomUUID())));
 
         AnswerResolver resolver = resolverWith(library);
         ResolvedValue value = resolver.resolve(CanonicalField.SCREENING_QUESTION,
-                resolver.loadContext(userId, sessionId), QuestionCategory.OTHER, QUESTION);
+                contextFor(resolver, CanonicalField.SCREENING_QUESTION, QUESTION),
+                QuestionCategory.OTHER, QUESTION);
 
         assertThat(value.isResolved()).isFalse();
         assertThat(value.value()).isNull();
@@ -120,7 +137,7 @@ class AnswerResolverEmployerLibraryTest {
         // A screening question with no stored answer still reports the pre-existing message.
         assertThat(resolver.resolve(CanonicalField.SCREENING_QUESTION, ctx,
                 QuestionCategory.OTHER, QUESTION).reason()).contains("no stored answers");
-        verify(library, never()).resolve(any(), anyString(), anyString());
+        verify(library, never()).resolveAll(any(), anyList());
     }
 
     @Test
@@ -138,16 +155,19 @@ class AnswerResolverEmployerLibraryTest {
     @Test
     @DisplayName("a library failure fails closed — never 'proceed anyway'")
     void libraryFailureFailsClosed() {
+        // P2: the failure now happens once, during the bulk load, instead of once per field. The
+        // guarantee is unchanged - no library answer is produced and nothing is invented in its
+        // place; the field falls through to the ordinary sources and resolves unresolved.
         when(library.isEnabled()).thenReturn(true);
-        when(library.resolve(any(), anyString(), anyString()))
-                .thenThrow(new RuntimeException("db down"));
+        when(library.resolveAll(any(), anyList())).thenThrow(new RuntimeException("db down"));
 
         AnswerResolver resolver = resolverWith(library);
         ResolvedValue value = resolver.resolve(CanonicalField.SCREENING_QUESTION,
-                resolver.loadContext(userId, sessionId), QuestionCategory.OTHER, QUESTION);
+                contextFor(resolver, CanonicalField.SCREENING_QUESTION, QUESTION),
+                QuestionCategory.OTHER, QUESTION);
 
         assertThat(value.isResolved()).isFalse();
-        assertThat(value.reason()).contains("employer answer lookup failed");
+        assertThat(value.value()).isNull();
     }
 
     @Test
@@ -164,20 +184,25 @@ class AnswerResolverEmployerLibraryTest {
                 QuestionCategory.OTHER, QUESTION);
 
         assertThat(value.isResolved()).isFalse();
-        verify(library, never()).resolve(any(), anyString(), anyString());
+        verify(library, never()).resolveAll(any(), anyList());
     }
 
     @Test
     @DisplayName("the library is queried with the canonical field, so answers cannot cross meanings")
     void lookupIsScopedByCanonicalField() {
         when(library.isEnabled()).thenReturn(true);
-        when(library.resolve(any(), anyString(), anyString()))
-                .thenReturn(AnswerResolution.none("no match"));
+        when(library.resolveAll(any(), anyList())).thenReturn(java.util.Map.of());
 
         AnswerResolver resolver = resolverWith(library);
-        resolver.resolve(CanonicalField.COUNTRY, resolver.loadContext(userId, sessionId),
-                null, "What is your current country of residence?");
+        String q = "What is your current country of residence?";
+        resolver.resolve(CanonicalField.COUNTRY, contextFor(resolver, CanonicalField.COUNTRY, q), null, q);
 
-        verify(library).resolve(userId, "What is your current country of residence?", "COUNTRY");
+        // The lookup key still carries the canonical field, so an answer approved for one meaning
+        // can never satisfy a differently-classified question.
+        @SuppressWarnings("unchecked")
+        org.mockito.ArgumentCaptor<List<EmployerAnswerService.Lookup>> captor =
+                org.mockito.ArgumentCaptor.forClass(List.class);
+        verify(library).resolveAll(eq(userId), captor.capture());
+        assertThat(captor.getValue()).containsExactly(new EmployerAnswerService.Lookup(q, "COUNTRY"));
     }
 }

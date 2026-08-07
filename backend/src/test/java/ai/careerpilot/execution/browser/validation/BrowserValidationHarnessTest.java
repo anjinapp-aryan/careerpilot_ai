@@ -96,9 +96,319 @@ class BrowserValidationHarnessTest {
                 .thenReturn(Map.of("spaFramework", "React", "iframeCount", 0, "shadowRootCount", 0,
                         "captchaDetected", false, "cookieBannerDetected", false,
                         "failedRequests", 0, "title", "Apply"));
+        // Phase F4 — every test that expects discovery to run must present a page the verifier
+        // accepts, since an unverified page now stops before discovery by design.
+        pageIs(URL, "Acme - Engineer", "Submit your application", true);
+    }
+
+    /** Stub the Phase F4 page-identity probe. {@code form} selects a real form vs. a bare page. */
+    private void pageIs(String finalUrl, String title, String text, boolean form) {
+        Map<String, Object> identity = new LinkedHashMap<>();
+        identity.put("finalUrl", finalUrl);
+        identity.put("title", title);
+        identity.put("visibleText", text);
+        identity.put("fileInputs", form ? 1 : 0);
+        identity.put("emailInputs", form ? 1 : 0);
+        identity.put("textInputs", form ? 6 : 0);
+        identity.put("submitButtons", form ? 1 : 0);
+        identity.put("applicationHeading", form);
+        identity.put("passwordInputs", false);
+        when(browser.evaluate(FormDiscoveryScript.DISCOVER_PAGE_IDENTITY)).thenReturn(identity);
     }
 
     private static final String URL = "https://boards.greenhouse.io/acme/jobs/1";
+
+    // ── Phase F4: discovery must never run against a page that is not an application form ──
+
+    /** The reported bug, end to end through the harness. */
+    private ValidationReport validateFakeGreenhousePosting() {
+        String fake = "https://boards.greenhouse.io/gitlab/jobs/12345";
+        // Measured: HTTP 200 after two redirects onto the company's board index.
+        pageIs("https://job-boards.greenhouse.io/gitlab?error=true", "Jobs at GitLab",
+                "Jobs at GitLab\nAll Departments\nEngineering", false);
+        when(browser.evaluate(FormDiscoveryScript.DISCOVER_ENVIRONMENT))
+                .thenReturn(Map.of("spaFramework", "React", "iframeCount", 0, "shadowRootCount", 0,
+                        "captchaDetected", false, "cookieBannerDetected", false,
+                        "failedRequests", 0, "title", "Jobs at GitLab"));
+        return harness(true, true).validate(fake, userId, null,
+                BrowserValidationHarness.DocumentAvailability.none());
+    }
+
+    @Test
+    void aFakePostingIsNeverReportedAsCompleted() {
+        ValidationReport report = validateFakeGreenhousePosting();
+
+        assertThat(report.status()).isEqualTo(ValidationReport.Status.INVALID_POSTING);
+        assertThat(report.status()).isNotEqualTo(ValidationReport.Status.COMPLETED);
+        assertThat(report.status().isVerificationRejection()).isTrue();
+    }
+
+    @Test
+    void discoveryNeverRunsForAnInvalidPosting() {
+        validateFakeGreenhousePosting();
+
+        // The whole point of the fix: the expensive, misleading work does not happen at all.
+        verify(browser, never()).evaluate(FormDiscoveryScript.DISCOVER_FIELDS);
+    }
+
+    @Test
+    void anInvalidPostingProducesNoConfidenceAndNoCoverage() {
+        ValidationReport report = validateFakeGreenhousePosting();
+
+        // No number at all, rather than a number derived from a board index.
+        assertThat(report.confidence().score()).isZero();
+        assertThat(report.confidence().ready()).isFalse();
+        assertThat(report.coverage().totalControls()).isZero();
+        assertThat(report.fields()).isEmpty();
+        assertThat(report.discoveryDurationMs()).isZero();
+        assertThat(report.planningDurationMs()).isZero();
+    }
+
+    @Test
+    void anInvalidPostingIsFlaggedExplicitlyInTheApiSnapshot() {
+        Map<String, Object> snapshot = validateFakeGreenhousePosting().summary();
+
+        assertThat(snapshot).containsEntry("pageVerified", false)
+                .containsEntry("discoverySkipped", true)
+                .containsEntry("planningSkipped", true)
+                .containsEntry("invalidPosting", true);
+        assertThat(String.valueOf(snapshot.get("message"))).contains("does not exist");
+    }
+
+    @Test
+    void aValidPageIsFlaggedVerifiedInTheApiSnapshot() {
+        discovers(List.of(control("#email", "input", "email", "Email", true)));
+
+        Map<String, Object> snapshot = harness(true, true)
+                .validate(URL, userId, null, BrowserValidationHarness.DocumentAvailability.none()).summary();
+
+        assertThat(snapshot).containsEntry("pageVerified", true)
+                .containsEntry("discoverySkipped", false)
+                .containsEntry("invalidPosting", false);
+    }
+
+    @Test
+    void anInvalidPostingDoesNotPolluteTheAtsCompatibilityReport() {
+        // A typo'd URL must not drop Greenhouse's measured readiness to zero.
+        validateFakeGreenhousePosting();
+
+        assertThat(metrics.compatibilityReport()).doesNotContainKey(AtsPlatform.GREENHOUSE.name());
+        assertThat(metrics.snapshot()).containsEntry("validationInvalidPages", 1L)
+                .containsEntry("validationCompleted", 0L);
+    }
+
+    @Test
+    void theBrowserLeaseIsReleasedWhenAPageIsRejected() {
+        validateFakeGreenhousePosting();
+
+        verify(browser).logout();
+    }
+
+    @Test
+    void aRejectedPageStillNeverInteractsWithTheForm() {
+        validateFakeGreenhousePosting();
+
+        verify(browser, never()).uploadFileTo(anyString(), any());
+        verify(browser, never()).submit();
+        verify(browser, never()).fillAt(anyString(), anyString());
+        verify(browser, never()).clickAt(anyString());
+    }
+
+    // ── P0: CAPTCHA blocks automation end to end through the harness ──
+
+    /** Stub the environment probe with CAPTCHA present, mirroring live GitLab/Figma postings. */
+    private void environmentWithCaptcha(boolean captcha) {
+        when(browser.evaluate(FormDiscoveryScript.DISCOVER_ENVIRONMENT))
+                .thenReturn(Map.of("spaFramework", "React", "iframeCount", 0, "shadowRootCount", 0,
+                        "captchaDetected", captcha, "cookieBannerDetected", false,
+                        "failedRequests", 0, "title", "Apply"));
+    }
+
+    /** A fully mappable form — the shape that used to score 94/HIGH/READY. */
+    private ValidationReport validateFullyMappableForm(boolean captcha) {
+        discovers(List.of(
+                control("#first_name", "input", "text", "First Name", true),
+                control("#last_name", "input", "text", "Last Name", true),
+                control("#email", "input", "email", "Email", true)));
+        environmentWithCaptcha(captcha);
+        return harness(true, true).validate(URL, userId, null,
+                new BrowserValidationHarness.DocumentAvailability(true, true));
+    }
+
+    @Test
+    void aCaptchaPageIsNeverReadyForAutomation() {
+        // The measured defect: captchaDetected=true alongside confidence=94 band=HIGH ready=true.
+        ValidationReport report = validateFullyMappableForm(true);
+
+        assertThat(report.environment().captchaDetected()).isTrue();
+        assertThat(report.confidence().ready()).isFalse();
+        assertThat(report.confidence().blocked()).isTrue();
+        assertThat(report.confidence().blockers())
+                .extracting(b -> b.reason())
+                .contains(AutomationBlocker.Reason.CAPTCHA);
+    }
+
+    @Test
+    void theSameFormWithoutCaptchaIsStillReady() {
+        // Guards the opposite error: the blocker must not make every page unready.
+        ValidationReport report = validateFullyMappableForm(false);
+
+        assertThat(report.confidence().blocked()).isFalse();
+        assertThat(report.confidence().ready()).isTrue();
+    }
+
+    @Test
+    void aCaptchaPageReportsAutomationBlockedInTheApiSnapshot() {
+        Map<String, Object> snapshot = validateFullyMappableForm(true).summary();
+
+        assertThat(snapshot).containsEntry("automationBlocked", true);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> phases = (Map<String, Object>) snapshot.get("phases");
+        // The separation that is the whole point: analysis succeeded, execution cannot happen.
+        assertThat(phases).containsEntry("discovery", "SUCCEEDED")
+                .containsEntry("classification", "SUCCEEDED")
+                .containsEntry("planning", "SUCCEEDED")
+                .containsEntry("automation", "BLOCKED")
+                .containsEntry("submission", "NOT_ATTEMPTED");
+    }
+
+    @Test
+    void aBlockedPageIsCountedAsBlockedInMetricsNotAsReady() {
+        validateFullyMappableForm(true);
+
+        Map<String, Object> snap = metrics.snapshot();
+        assertThat(snap).containsEntry("validationBlockedPages", 1L);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> byReason = (Map<String, Object>) snap.get("validationBlockedByReason");
+        assertThat(byReason).containsEntry("CAPTCHA", 1L);
+    }
+
+    @Test
+    void theCompatibilityReportStatesTheBlockRatherThanJustAScore() {
+        validateFullyMappableForm(true);
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> row = (Map<String, Object>) metrics.compatibilityReport()
+                .get(AtsPlatform.GREENHOUSE.name());
+        assertThat(row).containsEntry("automationBlocked", true)
+                .containsEntry("blockedReason", "CAPTCHA")
+                .containsEntry("ready", false);
+    }
+
+    @Test
+    void aMissingRequiredValueIsAlsoABlockerNotJustALowBand() {
+        // No document available, so a required file input cannot be satisfied.
+        discovers(List.of(control("#resume", "input", "file", "Resume", true)));
+        environmentWithCaptcha(false);
+
+        ValidationReport report = harness(true, true).validate(URL, userId, null,
+                BrowserValidationHarness.DocumentAvailability.none());
+
+        assertThat(report.confidence().blocked()).isTrue();
+        assertThat(report.confidence().ready()).isFalse();
+    }
+
+    @Test
+    void aValidPageReportsAllPhasesSucceeded() {
+        Map<String, Object> snapshot = validateFullyMappableForm(false).summary();
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> phases = (Map<String, Object>) snapshot.get("phases");
+        assertThat(phases).containsEntry("discovery", "SUCCEEDED")
+                .containsEntry("automation", "SUCCEEDED")
+                // Validation never submits — stated in the payload, not left to be inferred.
+                .containsEntry("submission", "NOT_ATTEMPTED");
+    }
+
+    @Test
+    void anInvalidPostingReportsEveryAnalysisPhaseSkipped() {
+        @SuppressWarnings("unchecked")
+        Map<String, Object> phases = (Map<String, Object>)
+                validateFakeGreenhousePosting().summary().get("phases");
+
+        assertThat(phases).containsEntry("discovery", "SKIPPED")
+                .containsEntry("classification", "SKIPPED")
+                .containsEntry("planning", "SKIPPED")
+                .containsEntry("automation", "SKIPPED")
+                .containsEntry("submission", "NOT_ATTEMPTED");
+    }
+
+    // ── P1.6: the lease is released on EVERY exit path ──
+
+    // logout() is what returns the pooled permit and closes the context. With max-leases=1 a single
+    // missed release wedges the whole platform until restart — there is no second permit to absorb
+    // it, and TTL reclaim only runs on the next acquire, which will never come.
+
+    @Test
+    void leaseReleasedWhenNavigationThrows() {
+        org.mockito.Mockito.doThrow(new IllegalStateException("net::ERR_CONNECTION_REFUSED"))
+                .when(browser).navigate(anyString());
+
+        harness(true, true).validate(URL, userId, null, BrowserValidationHarness.DocumentAvailability.none());
+
+        verify(browser).logout();
+    }
+
+    @Test
+    void leaseReleasedWhenWaitForStableThrows() {
+        org.mockito.Mockito.doThrow(new RuntimeException("timeout")).when(browser).waitForStable(anyLong());
+
+        harness(true, true).validate(URL, userId, null, BrowserValidationHarness.DocumentAvailability.none());
+
+        verify(browser).logout();
+    }
+
+    @Test
+    void leaseReleasedWhenTheScreenshotFails() {
+        discovers(List.of(control("#email", "input", "email", "Email", false)));
+        org.mockito.Mockito.doThrow(new RuntimeException("screenshot failed"))
+                .when(browser).captureScreenshot(any());
+
+        ValidationReport report = new BrowserValidationHarness(browser, classifier, planner,
+                new ValidationUrlPolicy(true, "", true), metrics, storage, true, true, 0, true)
+                .validate(URL, userId, null, BrowserValidationHarness.DocumentAvailability.none());
+
+        verify(browser).logout();
+        // A failed screenshot is a note, never a failed validation — the plan is the deliverable.
+        assertThat(report.status()).isEqualTo(ValidationReport.Status.COMPLETED);
+        assertThat(report.notes()).anyMatch(n -> n.contains("screenshot capture failed"));
+    }
+
+    @Test
+    void leaseReleasedWhenTheS3UploadFails() {
+        discovers(List.of(control("#email", "input", "email", "Email", false)));
+        when(storage.uploadBytes(any(), anyString(), anyString(), anyString()))
+                .thenThrow(new RuntimeException("minio down"));
+
+        ValidationReport report = new BrowserValidationHarness(browser, classifier, planner,
+                new ValidationUrlPolicy(true, "", true), metrics, storage, true, true, 0, true)
+                .validate(URL, userId, null, BrowserValidationHarness.DocumentAvailability.none());
+
+        verify(browser).logout();
+        assertThat(report.status()).isEqualTo(ValidationReport.Status.COMPLETED);
+        assertThat(report.screenshotKey()).isNull();
+    }
+
+    @Test
+    void leaseReleasedWhenAutomationIsBlockedByCaptcha() {
+        validateFullyMappableForm(true);
+
+        verify(browser).logout();
+    }
+
+    @Test
+    void leaseReleasedEvenIfLogoutItselfThrows() {
+        // The finally block must swallow a failing release rather than propagate it, or a broken
+        // teardown would mask the real result of the run.
+        discovers(List.of(control("#email", "input", "email", "Email", false)));
+        org.mockito.Mockito.doThrow(new RuntimeException("already closed")).when(browser).logout();
+
+        ValidationReport report = harness(true, true).validate(URL, userId, null,
+                BrowserValidationHarness.DocumentAvailability.none());
+
+        assertThat(report).isNotNull();
+        verify(browser).logout();
+    }
 
     // ── the safety guarantees ──
 

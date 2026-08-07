@@ -90,6 +90,12 @@ public class GuestApplyAutomationService {
     private final org.springframework.beans.factory.ObjectProvider<
             ai.careerpilot.execution.browser.multistep.MultiStepExecutionOrchestrator> multiStep;
 
+    /**
+     * P5 — observability only. Every method on it is total, so instrumentation can never change
+     * whether an application is sent, retried or recorded.
+     */
+    private final ai.careerpilot.execution.timeline.ExecutionTimelineRecorder timeline;
+
     public GuestApplyAutomationService(PlaywrightAutomationProvider browser, BrowserAutomationMetrics metrics,
                                        S3StorageService storage, ApprovalService approvalService,
                                        ExecutionScreenshotRepository screenshots, UserRepository users,
@@ -104,8 +110,10 @@ public class GuestApplyAutomationService {
                                        org.springframework.beans.factory.ObjectProvider<
                                                ai.careerpilot.execution.browser.multistep
                                                        .MultiStepExecutionOrchestrator> multiStep,
+                                       ai.careerpilot.execution.timeline.ExecutionTimelineRecorder timeline,
                                        @Value("${browser.automation.guest-apply-only:true}") boolean guestApplyOnlyFlag) {
         this.multiStep = multiStep;
+        this.timeline = timeline;
         this.browser = browser;
         this.metrics = metrics;
         this.storage = storage;
@@ -131,7 +139,14 @@ public class GuestApplyAutomationService {
 
     /** Result of one automation attempt. Never throws to the caller — always a value. */
     public record AttemptOutcome(Kind kind, String reason, UUID approvalId, String confirmationReference) {
-        public enum Kind { AWAITING_APPROVAL, ABORTED, SUBMITTED, ERROR }
+        /**
+         * {@code SUBMIT_UNVERIFIED} means the submit click was issued and then something threw, so
+         * delivery can be neither confirmed nor denied. It is deliberately distinct from
+         * {@code ERROR}: an ERROR is a failure that never reached the employer and is safe to retry,
+         * whereas this one may already have created an application. Collapsing the two is how
+         * duplicate applications get sent.
+         */
+        public enum Kind { AWAITING_APPROVAL, ABORTED, SUBMITTED, SUBMIT_UNVERIFIED, ERROR }
 
         public static AttemptOutcome awaitingApproval(UUID approvalId) {
             return new AttemptOutcome(Kind.AWAITING_APPROVAL, null, approvalId, null);
@@ -144,6 +159,10 @@ public class GuestApplyAutomationService {
         }
         public static AttemptOutcome error(String reason) {
             return new AttemptOutcome(Kind.ERROR, reason, null, null);
+        }
+        /** The click was issued; whether the employer received it is unknown. Never retried. */
+        public static AttemptOutcome submitUnverified(String reason) {
+            return new AttemptOutcome(Kind.SUBMIT_UNVERIFIED, reason, null, null);
         }
     }
 
@@ -233,22 +252,54 @@ public class GuestApplyAutomationService {
             return AttemptOutcome.aborted("job has no reachable apply URL");
         }
         long start = System.currentTimeMillis();
+        // Tracks whether the irreversible action has been attempted, so the catch block can tell
+        // "never reached the employer" (safe to retry) from "may already have been delivered".
+        boolean clickIssued = false;
+        // P5 — the stage cursor. Whichever stage is open when an exception escapes is the stage the
+        // run stopped at, so the catch block closes exactly that one instead of guessing.
+        var run = new ai.careerpilot.execution.timeline.ExecutionTimelineRecorder.RunContext(
+                exec.getId(), exec.getUserId(), job.getId());
+        java.util.UUID openStage = null;
         try {
+            openStage = timeline.started(run, ai.careerpilot.execution.timeline.ExecutionStage.NAVIGATION_STARTED);
             browser.navigate(url);
+            timeline.completed(openStage);
+            timeline.mark(run, ai.careerpilot.execution.timeline.ExecutionStage.NAVIGATION_COMPLETED, null);
+
+            openStage = timeline.started(run, ai.careerpilot.execution.timeline.ExecutionStage.PAGE_CLASSIFIED);
             if (CaptchaLoginDetector.looksLikeCaptchaOrLogin(browser.currentPageHtml())) {
                 metrics.recordCaptchaOrLoginWallDetected();
+                timeline.failed(openStage,
+                        ai.careerpilot.execution.timeline.FailureCategory.ATS_DETECTION,
+                        "captcha or login wall detected on resubmit — routed to human review");
+                openStage = null;
                 log.info("GUEST_APPLY captcha/login wall detected on resubmit execution={} — routed to human review", exec.getId());
                 return AttemptOutcome.aborted("captcha or login wall detected on resubmit — routed to human review");
             }
+            timeline.completed(openStage);
+
+            openStage = timeline.started(run, ai.careerpilot.execution.timeline.ExecutionStage.FIELD_FILL_STARTED);
             Map<String, String> filled = resolveFields(connector.extractForm(job), exec.getUserId());
             browser.fillForm(filled);
+            timeline.completed(openStage, Map.of("connectorFieldsFilled", filled.size()));
 
             // Phase 12C — the engine MUST run here too. finalizeSubmit re-navigates to a fresh page
             // after the human approval, so nothing the fill phase uploaded still exists; without
             // this the resume would be attached to the screenshot the human approved and then
             // absent from the application actually submitted.
+            openStage = timeline.started(run, ai.careerpilot.execution.timeline.ExecutionStage.FIELD_FILL_COMPLETED);
             FormFillReport formReport = runFormEngine(exec);
             if (formReport.hasBlockingGaps()) {
+                // The most important sentence this timeline can produce: the run stopped here, and
+                // it stopped because a required field had no verified value — not because anything
+                // was broken. Categorised as QUESTION_RESOLUTION so it aggregates separately from a
+                // genuine automation defect, which is a different team's problem.
+                timeline.failed(openStage,
+                        ai.careerpilot.execution.timeline.FailureCategory.QUESTION_RESOLUTION,
+                        "required fields could not be filled at submit time: "
+                                + String.join("; ", formReport.blockingGaps()),
+                        Map.of("blockingGaps", formReport.blockingGaps()));
+                openStage = null;
                 // Refusing at the last moment is the correct outcome: the click is irreversible and
                 // the form is provably incomplete. Routed to human review, never submitted anyway.
                 log.warn("GUEST_APPLY refusing submit execution={} — required field(s) unfilled at finalize: {}",
@@ -257,7 +308,21 @@ public class GuestApplyAutomationService {
                         + String.join("; ", formReport.blockingGaps()));
             }
 
+            timeline.completed(openStage);
+
+            // Everything after this line may already have created an application at the employer.
+            // The flag is set BEFORE the call, not after, because the dangerous case is precisely
+            // the one where submit() throws part-way through.
+            openStage = timeline.started(run, ai.careerpilot.execution.timeline.ExecutionStage.SUBMIT_CLICK_STARTED);
+            clickIssued = true;
             String reference = connector.submit(job, Map.of());
+            timeline.completed(openStage);
+            openStage = null;
+            timeline.mark(run, ai.careerpilot.execution.timeline.ExecutionStage.SUBMIT_CLICK_COMPLETED, null);
+            if (reference != null && !reference.isBlank()) {
+                timeline.mark(run, ai.careerpilot.execution.timeline.ExecutionStage.CONFIRMATION_DETECTED,
+                        Map.of("confirmationCaptured", true));
+            }
             metrics.recordRealSubmission();
             metrics.recordConfirmationCaptured();
             log.info("GUEST_APPLY real submit execution={} connector={}", exec.getId(), connector.name());
@@ -265,8 +330,27 @@ public class GuestApplyAutomationService {
             return AttemptOutcome.submitted(reference);
         } catch (Exception e) {
             metrics.recordFailure();
-            log.warn("GUEST_APPLY finalizeSubmit error execution={}: {}", exec.getId(), e.toString());
             captureFailureScreenshot(exec);
+            // Close whichever stage was open. This is what makes "where did it stop" exact rather
+            // than a guess reconstructed from the last surviving log line.
+            timeline.failed(openStage,
+                    clickIssued ? ai.careerpilot.execution.timeline.FailureCategory.SUBMIT
+                                : ai.careerpilot.execution.timeline.FailureCategory.BROWSER,
+                    e.toString());
+            if (clickIssued) {
+                // A click that triggers navigation routinely leaves Playwright throwing
+                // "Element is not attached to the DOM" AFTER the form has already been submitted.
+                // Reporting that as a retryable failure is how the same application gets sent
+                // twice. Uncertainty is recorded honestly and handed to a human instead.
+                log.warn("GUEST_APPLY submit threw AFTER the click was issued execution={} — "
+                                + "delivery is UNKNOWN, recording as submit-unverified (never retried): {}",
+                        exec.getId(), e.toString());
+                return AttemptOutcome.submitUnverified(
+                        "submit click was issued but the browser failed before delivery could be "
+                                + "confirmed: " + e);
+            }
+            log.warn("GUEST_APPLY finalizeSubmit error execution={} (before any click): {}",
+                    exec.getId(), e.toString());
             return AttemptOutcome.error(e.toString());
         } finally {
             safeLogout();

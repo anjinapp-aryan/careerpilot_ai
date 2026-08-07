@@ -28,6 +28,11 @@ public class BrowserValidationMetrics {
     private final AtomicLong failed = new AtomicLong();
     private final AtomicLong refused = new AtomicLong();
     private final AtomicLong screenshots = new AtomicLong();
+    /** Phase F4 — reached the page, but it was not an application form. */
+    private final AtomicLong invalidPages = new AtomicLong();
+    /** P0 — analysed fine, but execution is impossible. Counted per reason, not just in total. */
+    private final AtomicLong blockedPages = new AtomicLong();
+    private final Map<AutomationBlocker.Reason, AtomicLong> blockedByReason = new ConcurrentHashMap<>();
 
     private final AtomicReference<ValidationReport> lastReport = new AtomicReference<>();
     private final Map<AtsPlatform, ValidationReport> latestByPlatform = new ConcurrentHashMap<>();
@@ -42,6 +47,28 @@ public class BrowserValidationMetrics {
         recordLast(report);
         if (report != null && report.platform() != null) {
             latestByPlatform.put(report.platform(), report);
+        }
+    }
+
+    /**
+     * Phase F4 — the page was reached but proven not to be an application form.
+     *
+     * <p>Counted separately from both {@code completed} and {@code failed}, and — critically —
+     * <b>never written into {@code latestByPlatform}</b>. The compatibility report answers "how
+     * automatable is this ATS", and a fake posting says nothing about Greenhouse's forms. Filing a
+     * rejection there would drop that platform's readiness to zero on the strength of a typo'd URL.
+     */
+    public void recordInvalidPage(ValidationReport report) {
+        invalidPages.incrementAndGet();
+        recordLast(report);
+    }
+
+    /** P0 — a page that was analysed successfully but cannot be executed. */
+    public void recordBlocked(java.util.List<AutomationBlocker> blockers) {
+        if (blockers == null || blockers.isEmpty()) return;
+        blockedPages.incrementAndGet();
+        for (AutomationBlocker b : blockers) {
+            blockedByReason.computeIfAbsent(b.reason(), k -> new AtomicLong()).incrementAndGet();
         }
     }
 
@@ -65,7 +92,14 @@ public class BrowserValidationMetrics {
         for (Map.Entry<AtsPlatform, ValidationReport> entry : latestByPlatform.entrySet()) {
             ValidationReport report = entry.getValue();
             Map<String, Object> row = new LinkedHashMap<>();
+            // P0 — an ATS whose pages are all CAPTCHA-guarded must not read as "94% confident".
+            // The score describes analysis quality; these two describe whether anything can run.
+            row.put("automationBlocked", report.confidence().blocked());
+            row.put("blockedReason", report.confidence().blockers().isEmpty() ? null
+                    : report.confidence().blockers().get(0).reason().name());
             row.put("automationConfidence", report.confidence().score());
+            row.put("confidenceMeaning", "analysis completeness only — see automationBlocked for "
+                    + "whether execution is actually possible");
             row.put("band", report.confidence().band().name());
             row.put("ready", report.confidence().ready());
             row.put("selectorsSupported", report.coverage().supportedControls());
@@ -87,6 +121,11 @@ public class BrowserValidationMetrics {
         out.put("validationCompleted", completed.get());
         out.put("validationFailed", failed.get());
         out.put("validationRefused", refused.get());
+        out.put("validationInvalidPages", invalidPages.get());
+        out.put("validationBlockedPages", blockedPages.get());
+        Map<String, Object> byReason = new LinkedHashMap<>();
+        blockedByReason.forEach((k, v) -> byReason.put(k.name(), v.get()));
+        out.put("validationBlockedByReason", byReason);
         out.put("validationScreenshots", screenshots.get());
         ValidationReport last = lastReport.get();
         out.put("lastValidation", last == null ? null : last.summary());

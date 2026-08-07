@@ -34,6 +34,8 @@ class ValidationHistoryServiceTest {
         repo = mock(AtsValidationRunRepository.class);
         when(repo.findTop20ByUrlHashOrderByCreatedAtDesc(anyString())).thenReturn(List.of());
         when(repo.findTop50ByAtsPlatformOrderByCreatedAtDesc(anyString())).thenReturn(List.of());
+        // The campaign report asks which platforms have history before pulling any series.
+        when(repo.findDistinctAtsPlatforms()).thenReturn(List.of("GREENHOUSE"));
         when(repo.save(any())).thenAnswer(inv -> inv.getArgument(0));
         service = new ValidationHistoryService(repo, new SelectorDriftDetector(10, 2), true);
     }
@@ -219,6 +221,7 @@ class ValidationHistoryServiceTest {
 
     @Test
     void aFailingRepositoryDegradesThatPlatformOnly() {
+        when(repo.findDistinctAtsPlatforms()).thenReturn(List.of("GREENHOUSE", "LEVER"));
         when(repo.findTop50ByAtsPlatformOrderByCreatedAtDesc("GREENHOUSE"))
                 .thenThrow(new IllegalStateException("db down"));
         when(repo.findTop50ByAtsPlatformOrderByCreatedAtDesc("LEVER"))
@@ -238,5 +241,38 @@ class ValidationHistoryServiceTest {
                 new ValidationHistoryService(repo, new SelectorDriftDetector(10, 2), false);
         assertThat(disabled.historyFor(URL)).isEmpty();
         verify(repo, never()).findTop20ByUrlHashOrderByCreatedAtDesc(anyString());
+    }
+
+    // ── P3 — the campaign report used to issue one query per AtsPlatform enum value ────────────
+    //
+    // Eleven round-trips to the external database on every call to the UNAUTHENTICATED
+    // GET /api/diagnostics/browser, nine of them returning nothing. Measured at 3.9s per request.
+
+    @Test
+    void campaignReportQueriesOnlyPlatformsThatActuallyHaveHistory() {
+        when(repo.findDistinctAtsPlatforms()).thenReturn(List.of("GREENHOUSE"));
+        when(repo.findTop50ByAtsPlatformOrderByCreatedAtDesc("GREENHOUSE"))
+                .thenReturn(List.of(stored(70, true)));
+
+        service.campaignReport();
+
+        org.mockito.Mockito.verify(repo).findDistinctAtsPlatforms();
+        org.mockito.Mockito.verify(repo).findTop50ByAtsPlatformOrderByCreatedAtDesc("GREENHOUSE");
+        // No series query for any of the ten platforms with no history.
+        org.mockito.Mockito.verify(repo, org.mockito.Mockito.times(1))
+                .findTop50ByAtsPlatformOrderByCreatedAtDesc(anyString());
+    }
+
+    @Test
+    void campaignReportSurvivesAFailureToEnumeratePlatforms() {
+        when(repo.findDistinctAtsPlatforms()).thenThrow(new RuntimeException("db down"));
+
+        Map<String, Object> campaign = service.campaignReport();
+
+        // Degrades to "nothing verified" rather than throwing on a diagnostics endpoint.
+        assertThat(campaign).containsEntry("enabled", true);
+        assertThat(campaign).containsEntry("note", "No verified validation data available.");
+        org.mockito.Mockito.verify(repo, org.mockito.Mockito.never())
+                .findTop50ByAtsPlatformOrderByCreatedAtDesc(anyString());
     }
 }

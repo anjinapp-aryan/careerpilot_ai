@@ -93,7 +93,22 @@ public class AnswerResolver {
     public record ResolutionContext(Map<String, MappedField> mappedByName,
                                     String fullName,
                                     List<ApplicationSubmissionAnswer> storedAnswers,
-                                    UUID userId) {
+                                    UUID userId,
+                                    Map<String, AnswerResolution> employerResolutions) {
+
+        public ResolutionContext {
+            employerResolutions = employerResolutions == null ? Map.of() : Map.copyOf(employerResolutions);
+        }
+
+        /**
+         * P2 compatibility constructor — a context with no pre-resolved employer answers. Kept so
+         * every caller that does not supply lookups still compiles; such a context simply finds no
+         * library answer, which is the same outcome as the library being disabled.
+         */
+        public ResolutionContext(Map<String, MappedField> mappedByName, String fullName,
+                                 List<ApplicationSubmissionAnswer> storedAnswers, UUID userId) {
+            this(mappedByName, fullName, storedAnswers, userId, Map.of());
+        }
 
         /**
          * Phase E compatibility constructor. A context built without a user id cannot consult the
@@ -102,11 +117,11 @@ public class AnswerResolver {
          */
         public ResolutionContext(Map<String, MappedField> mappedByName, String fullName,
                                  List<ApplicationSubmissionAnswer> storedAnswers) {
-            this(mappedByName, fullName, storedAnswers, null);
+            this(mappedByName, fullName, storedAnswers, null, Map.of());
         }
 
         public static ResolutionContext empty() {
-            return new ResolutionContext(Map.of(), null, List.of(), null);
+            return new ResolutionContext(Map.of(), null, List.of(), null, Map.of());
         }
     }
 
@@ -116,6 +131,21 @@ public class AnswerResolver {
      * are reported unresolved rather than failing.
      */
     public ResolutionContext loadContext(UUID userId, UUID sessionId) {
+        return loadContext(userId, sessionId, List.of());
+    }
+
+    /**
+     * P2 Work Item 1 — same up-front load, plus every employer-library answer this form needs,
+     * fetched in <b>two</b> queries instead of two per field.
+     *
+     * <p>{@code lookups} is the whole form's set of (question text, canonical field) pairs, known
+     * because the planner classifies before it resolves. Passing them here is what lets
+     * {@link ai.careerpilot.employerquestion.EmployerAnswerService#resolveAll} load the library once
+     * and this candidate's answers once; {@link #fromEmployerLibrary} then becomes a map hit with no
+     * I/O at all.
+     */
+    public ResolutionContext loadContext(UUID userId, UUID sessionId,
+                                         List<EmployerAnswerService.Lookup> lookups) {
         Map<String, MappedField> byName = new HashMap<>();
         String fullName = null;
         List<ApplicationSubmissionAnswer> stored = List.of();
@@ -140,7 +170,21 @@ public class AnswerResolver {
                 log.warn("FORM_RESOLVER answer lookup failed session={}: {}", sessionId, e.toString());
             }
         }
-        return new ResolutionContext(Map.copyOf(byName), fullName, List.copyOf(stored), userId);
+        // Two queries for the whole form, or none at all when the library is off/absent.
+        Map<String, AnswerResolution> employerResolutions = Map.of();
+        EmployerAnswerService library = employerAnswers == null ? null : employerAnswers.getIfAvailable();
+        if (library != null && library.isEnabled() && userId != null && !lookups.isEmpty()) {
+            try {
+                employerResolutions = library.resolveAll(userId, lookups);
+            } catch (Exception e) {
+                // Fail closed: an empty map means every field falls through to profile/stored
+                // resolution, which is the same degradation the per-field path already had.
+                log.warn("FORM_RESOLVER employer bulk resolve failed user={}: {}", userId, e.toString());
+            }
+        }
+
+        return new ResolutionContext(Map.copyOf(byName), fullName, List.copyOf(stored), userId,
+                Map.copyOf(employerResolutions));
     }
 
     /**
@@ -271,16 +315,18 @@ public class AnswerResolver {
      */
     private Optional<ResolvedValue> fromEmployerLibrary(ResolutionContext ctx, CanonicalField field,
                                                         String questionText) {
-        if (employerAnswers == null) return Optional.empty();
-        EmployerAnswerService library = employerAnswers.getIfAvailable();
-        if (library == null || !library.isEnabled()) return Optional.empty();
         if (ctx.userId() == null || questionText == null || questionText.isBlank()) {
             // An unattributable lookup must never return a candidate's stored answer. Not decisive:
             // normal resolution still applies.
             return Optional.empty();
         }
         try {
-            AnswerResolution resolution = library.resolve(ctx.userId(), questionText, field.name());
+            // P2 Work Item 1 — a map hit, not a query. loadContext resolved the entire form in two
+            // queries before this loop began; there is deliberately no repository access here, and
+            // no bean lookup either, so nothing in the per-field path can reach the database.
+            AnswerResolution resolution = ctx.employerResolutions()
+                    .get(new EmployerAnswerService.Lookup(questionText, field.name()).key());
+            if (resolution == null) return Optional.empty();
             if (resolution.usable()) {
                 return Optional.of(ResolvedValue.of(resolution.answerText(),
                         "EmployerAnswer[" + resolution.confidence() + "] approved "

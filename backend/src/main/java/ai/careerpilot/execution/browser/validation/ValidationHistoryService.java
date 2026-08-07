@@ -11,8 +11,10 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -111,11 +113,24 @@ public class ValidationHistoryService {
             return out;
         }
         out.put("enabled", true);
+        // One query for "which platforms have history", then one series query per platform that
+        // actually does. Previously this looped every AtsPlatform enum value, so nine of the
+        // eleven round-trips returned nothing on a real deployment — 3.9s per call on an endpoint
+        // that requires no authentication. The output is unchanged: a platform missing from the
+        // distinct list is one whose series would have been empty and skipped below.
+        Set<String> tested;
+        try {
+            tested = new LinkedHashSet<>(runs.findDistinctAtsPlatforms());
+        } catch (Exception e) {
+            log.warn("VALIDATION_HISTORY platform enumeration failed: {}", e.toString());
+            tested = Set.of();
+        }
         Map<String, Object> platforms = new LinkedHashMap<>();
         for (AtsPlatform platform : AtsPlatform.values()) {
+            if (!tested.contains(platform.name())) continue;   // never invent a row for an untested ATS
             try {
                 List<AtsValidationRun> series = runs.findTop50ByAtsPlatformOrderByCreatedAtDesc(platform.name());
-                if (series.isEmpty()) continue;   // never invent a row for an untested ATS
+                if (series.isEmpty()) continue;
                 platforms.put(platform.name(), platformSummary(platform, series));
             } catch (Exception e) {
                 platforms.put(platform.name(), Map.of("unavailable", true, "error", String.valueOf(e)));

@@ -11,10 +11,16 @@ target/
 
 # Python
 .venv/
+venv/
 __pycache__/
+*.pyc
 
 # Node
 node_modules/
+
+# TypeScript incremental build cache — a build artifact, never a build input.
+# Was tracked until now, so every local `tsc -b` showed up as a spurious diff.
+*.tsbuildinfo
 
 # Logs
 *.log

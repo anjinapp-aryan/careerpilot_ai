@@ -11,17 +11,16 @@
 #   service         measured    limit    headroom rationale
 #   backend           621 MiB   2048m    must also cover the Chromium child process
 #                                        Playwright launches INSIDE this container
-#   kafka             768 MiB    900m    steady-state broker, low headroom needed
-#   zookeeper         372 MiB    448m    steady-state
 #   minio             101 MiB    256m    grows with object count
 #   agent-service      36 MiB    512m    Python/LangGraph can spike per run
 #   redis              10 MiB    128m    tiny, but unbounded without maxmemory
 #   frontend            1 MiB     64m    static nginx
 #                                ─────
-#                                4356m   vs ~4.3 GiB free after OS/nginx/dockerd
+#                                3008m   vs ~4.3 GiB free after OS/nginx/dockerd
 #
-# Limits are ceilings, not reservations — real combined usage is ~1.9 GiB, so this
-# leaves genuine slack plus 4 GiB of swap as a shock absorber.
+# Limits are ceilings, not reservations. Kafka + ZooKeeper were removed entirely
+# (they had zero consumers and zero producers after the event path was deleted),
+# recovering their 1348m of ceiling and ~1.11 GiB of measured RSS.
 #
 # Deliberately NO `cpus:` caps anywhere. The VM has 1 vCPU; hard-capping fractional
 # CPU on a single core reliably makes contention worse, not better. CPU is the real
@@ -45,68 +44,6 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
-
-  zookeeper:
-    image: confluentinc/cp-zookeeper:7.5.0
-    restart: unless-stopped
-    mem_limit: 448m
-    environment:
-      ZOOKEEPER_CLIENT_PORT: 2181
-      ZOOKEEPER_TICK_TIME: 2000
-      # Cap the ZK heap explicitly — measured 372 MiB with no bound at all, so it was
-      # sizing against total host RAM like every other JVM here.
-      KAFKA_HEAP_OPTS: "-Xms128m -Xmx256m"
-    # Checks ZooKeeper's own AdminServer `ruok` endpoint (port 8080 inside this
-    # container only — not published, no clash with the backend's host 8080).
-    # curl ships in the cp-zookeeper image. Previous check invoked
-    # "zookeeper-shell.sh", which does not exist in this image (Confluent strips
-    # the .sh suffix: /usr/bin/zookeeper-shell) — every probe died with
-    # exec-not-found, permanently unhealthy, which blocked kafka (service_healthy
-    # gate) and transitively the backend. curl is also far cheaper than the
-    # JVM-per-probe the shell would spawn.
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/commands/ruok"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 20s
-
-  kafka:
-    image: confluentinc/cp-kafka:7.5.0
-    restart: unless-stopped
-    mem_limit: 900m
-    depends_on:
-      zookeeper:
-        condition: service_healthy
-    # No host port published: only the backend's producer needs Kafka, reached
-    # internally at kafka:29092 (see KAFKA_ADVERTISED_LISTENERS below). Nothing
-    # external ever needs to reach this broker directly.
-    environment:
-      KAFKA_BROKER_ID: 1
-      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
-      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:29092,PLAINTEXT_HOST://0.0.0.0:9092
-      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
-      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
-      # Measured 768 MiB with no heap bound. This codebase currently has zero
-      # @KafkaListener consumers (see CLAUDE.md "Provisioned-but-unused"), so the
-      # broker only ever accepts producer writes — it does not need a large heap.
-      KAFKA_HEAP_OPTS: "-Xms256m -Xmx512m"
-    # kafka-broker-api-versions ships inside the cp-kafka image (bundled Kafka
-    # admin CLI; Confluent images strip the upstream .sh suffix — /usr/bin/
-    # kafka-broker-api-versions, NOT ...-versions.sh) — a real protocol-level
-    # check against the broker, no HTTP tooling needed at all. Checks the
-    # PLAINTEXT_HOST listener (bound on 0.0.0.0:9092 inside the container
-    # regardless of whether that port is published to the host — see
-    # KAFKA_LISTENERS above).
-    healthcheck:
-      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
-      interval: 30s
-      timeout: 10s
-      retries: 8
-      start_period: 30s
 
   minio:
     image: minio/minio:latest

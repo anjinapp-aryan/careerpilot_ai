@@ -1,9 +1,43 @@
 FROM maven:3.9-eclipse-temurin-25 AS build
+ARG TARGETARCH
 WORKDIR /workspace
 COPY pom.xml .
 RUN mvn -B -q dependency:go-offline
 COPY src ./src
 RUN mvn -B -q -DskipTests package
+
+# ── P3 — pre-extract the Playwright Node driver ───────────────────────────────
+# playwright-java's DriverJar unpacks its ~105 MB Node driver into a NEW
+# Files.createTempDirectory("playwright-java-") on every JVM start, and registers
+# only File.deleteOnExit() for cleanup — which never fires on SIGKILL and cannot
+# delete a non-empty directory even on a graceful stop. Measured on the running
+# container: /tmp at 217 MB holding TWO 105 MB driver directories after a single
+# restart, growing without bound across the container's life.
+#
+# Setting -Dplaywright.driver.tmpdir would only move the parent: the temp
+# directory is still created fresh underneath it (verified by decompiling
+# DriverJar). The property that actually eliminates the extraction is
+# -Dplaywright.cli.dir, which makes Driver.newInstance() return PreinstalledDriver
+# and skip DriverJar entirely — so the driver is unpacked once, here, at build
+# time, into an immutable image layer.
+#
+# The build fails loudly if the expected platform directory is absent rather than
+# shipping an image whose browser automation would fail at first use.
+RUN set -eu; \
+    case "${TARGETARCH:-amd64}" in \
+      arm64) PW_PLATFORM=linux-arm64 ;; \
+      amd64) PW_PLATFORM=linux ;; \
+      *) echo "unsupported TARGETARCH=${TARGETARCH}" >&2; exit 1 ;; \
+    esac; \
+    BUNDLE="$(find /root/.m2 -name 'driver-bundle-*.jar' | head -1)"; \
+    test -n "$BUNDLE" || { echo "driver-bundle jar not found in the local repository" >&2; exit 1; }; \
+    mkdir -p /opt/playwright-driver; \
+    cd /opt/playwright-driver; \
+    "$JAVA_HOME/bin/jar" xf "$BUNDLE" "driver/$PW_PLATFORM"; \
+    mv "driver/$PW_PLATFORM"/* .; \
+    rm -rf driver; \
+    test -x node || chmod +x node; \
+    test -f package/cli.js || { echo "driver extraction incomplete: package/cli.js missing" >&2; exit 1; }
 
 # ── Runtime ────────────────────────────────────────────────────────────────────
 # Phase 12A — base image changed from `eclipse-temurin:25-jre-alpine` to Debian
@@ -53,6 +87,10 @@ RUN apt-get update \
 
 COPY --from=build /workspace/target/*.jar app.jar
 
+# Left root-owned and world-readable: the app only ever reads and executes it, and a
+# driver the runtime user cannot modify is one an exploited renderer cannot tamper with.
+COPY --from=build /opt/playwright-driver /opt/playwright-driver
+
 # Non-root. Chromium loading untrusted third-party job pages with --no-sandbox
 # (required: the container has no user namespace) is the weakest point in this
 # design; running it as root would mean a renderer exploit starts with root inside
@@ -81,6 +119,11 @@ EXPOSE 8080
 # crash-loop (OutOfMemoryError: Metaspace) after hours of uptime.
 # SerialGC is retained and is now clearly correct — the VM has exactly 1 vCPU,
 # where parallel/concurrent collectors cost more than they return.
-ENV JAVA_OPTS="-Xms256m -Xmx768m -XX:+UseContainerSupport -XX:+UseSerialGC -Xss256k -XX:MaxMetaspaceSize=320m -XX:CompressedClassSpaceSize=96m -XX:MaxDirectMemorySize=32m -XX:ReservedCodeCacheSize=64m -XX:+ExitOnOutOfMemoryError"
+#
+# -Dplaywright.cli.dir points at the driver unpacked in the build stage above, which
+# is what stops playwright-java re-extracting ~105 MB into /tmp on every start. To
+# roll back, drop this one property: DriverJar takes over again and behaves exactly
+# as before.
+ENV JAVA_OPTS="-Xms256m -Xmx768m -XX:+UseContainerSupport -XX:+UseSerialGC -Xss256k -XX:MaxMetaspaceSize=320m -XX:CompressedClassSpaceSize=96m -XX:MaxDirectMemorySize=32m -XX:ReservedCodeCacheSize=64m -XX:+ExitOnOutOfMemoryError -Dplaywright.cli.dir=/opt/playwright-driver"
 
 ENTRYPOINT ["/usr/bin/tini", "--", "sh", "-c", "java $JAVA_OPTS -jar /app/app.jar"]

@@ -55,6 +55,7 @@ public class ExecutionDiagnosticsController {
     private final ThreadPoolTaskExecutor atsExecutor;
     private final ThreadPoolTaskExecutor trackingExecutor;
     private final ThreadPoolTaskExecutor analyticsExecutor;
+    private final ai.careerpilot.execution.timeline.ExecutionTimelineService executionTimeline;
 
     @Value("${application.execution.enabled:false}") private boolean executionEnabled;
     @Value("${application.execution.trigger.enabled:false}") private boolean executionTriggerEnabled;
@@ -84,7 +85,9 @@ public class ExecutionDiagnosticsController {
             @Qualifier(ExecutionExecutorsConfig.BROWSER_AUTOMATION_EXECUTOR) ThreadPoolTaskExecutor browserExecutor,
             @Qualifier(ExecutionExecutorsConfig.ATS_CONNECTOR_EXECUTOR) ThreadPoolTaskExecutor atsExecutor,
             @Qualifier(ExecutionExecutorsConfig.TRACKING_EXECUTOR) ThreadPoolTaskExecutor trackingExecutor,
-            @Qualifier(ExecutionExecutorsConfig.ANALYTICS_EXECUTOR) ThreadPoolTaskExecutor analyticsExecutor) {
+            @Qualifier(ExecutionExecutorsConfig.ANALYTICS_EXECUTOR) ThreadPoolTaskExecutor analyticsExecutor,
+            ai.careerpilot.execution.timeline.ExecutionTimelineService executionTimeline) {
+        this.executionTimeline = executionTimeline;
         this.executionMetrics = executionMetrics;
         this.browserMetrics = browserMetrics;
         this.atsMetrics = atsMetrics;
@@ -239,6 +242,19 @@ public class ExecutionDiagnosticsController {
     public Map<String, Object> operationsSummary() {
         if (!operationsEnabled) return Map.of("enabled", false);
         Map<String, Object> out = new LinkedHashMap<>(operations.summary());
+        out.put("enabled", true);
+        return out;
+    }
+
+    /**
+     * P5 — per-stage aggregate counters: average duration by stage, completed/failed by stage, and
+     * the top failure stage and category. Aggregates only, no per-application content, so it stays
+     * on this unauthenticated surface alongside the other operations aggregates.
+     */
+    @GetMapping("/operations/stages")
+    public Map<String, Object> operationsStages() {
+        if (!operationsEnabled) return Map.of("enabled", false);
+        Map<String, Object> out = new LinkedHashMap<>(executionTimeline.stageMetrics());
         out.put("enabled", true);
         return out;
     }

@@ -21,6 +21,7 @@ import { EmptyState } from '@/components/ui/empty-state';
 import { Skeleton } from '@/components/ui/skeleton';
 import { KpiCard } from '@/components/dashboard/KpiCard';
 import { BrowserValidationPanel } from '@/components/execution/BrowserValidationPanel';
+import { ExecutionTimelinePanel } from '@/components/execution/ExecutionTimelinePanel';
 
 const TABS = [
   { value: 'dashboard', label: 'Dashboard' },
@@ -29,6 +30,9 @@ const TABS = [
   // Phase 12C.5 — the browser validation harness. Placed here rather than on a route of its own:
   // this page is already admin-only and already the home for automation observability.
   { value: 'validation', label: 'Browser Validation' },
+  // P5 — per-execution stage timeline. Same reasoning as the validation tab: this page is already
+  // the admin-only home for automation observability, so it extends rather than adds a route.
+  { value: 'timeline', label: 'Execution Timeline' },
 ];
 
 interface OperationsSummary {
@@ -119,6 +123,7 @@ export default function OperationsCenter() {
           (browser.validation.enabled) and its own disabled state, so it stays usable even when
           the operations aggregation view is dark. */}
       {tab === 'validation' && <BrowserValidationPanel />}
+      {tab === 'timeline' && <ExecutionTimelinePanel />}
     </div>
   );
 }

@@ -22,9 +22,6 @@
     { "name": "storage.s3.bucket", "type": "java.lang.String", "description": "S3 bucket name for object storage." },
     { "name": "storage.s3.access-key", "type": "java.lang.String", "description": "S3/MinIO access key." },
     { "name": "storage.s3.secret-key", "type": "java.lang.String", "description": "S3/MinIO secret key." },
-    { "name": "storage.s3.path-style", "type": "java.lang.Boolean", "description": "Use path-style access (required by MinIO)." },
-
-    { "name": "kafka.topics.workflow-events", "type": "java.lang.String", "description": "Topic name for workflow state-change events." },
-    { "name": "kafka.topics.audit-events", "type": "java.lang.String", "description": "Topic name for audit events (declared but not yet produced/consumed)." }
+    { "name": "storage.s3.path-style", "type": "java.lang.Boolean", "description": "Use path-style access (required by MinIO)." }
   ]
 }

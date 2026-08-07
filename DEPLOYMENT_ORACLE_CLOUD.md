@@ -1,8 +1,8 @@
 # Deploying to a single Oracle Cloud VM (Docker Compose)
 
 This is the finalized production architecture for CareerPilot AI: **one Oracle Cloud VM
-running Oracle Linux 9**, with every service — `backend`, `agent-service`, `redis`, `kafka`,
-`zookeeper`, `minio` — in a single Docker Compose stack (`docker-compose.yml` at the repo
+running Oracle Linux 9**, with every service — `backend`, `agent-service`, `redis`,
+`minio` — in a single Docker Compose stack (`docker-compose.yml` at the repo
 root). The frontend is deployed separately on Vercel; it is not part of this stack.
 
 **This doc explains the *why* of the VM-level architecture** (repo choice, systemd design,
@@ -223,7 +223,7 @@ During initial deployment, it's fine to open 8080 temporarily for direct testing
 confirming the backend responds before Nginx is configured) — but close that rule once
 Nginx is up and proxying correctly.
 
-Every other service (`redis`, `kafka`, `zookeeper`, `minio`, `agent-service`) has **no
+Every other service (`redis`, `minio`, `agent-service`) has **no
 published host port** by design — they're reachable only from other containers on the
 Compose network, never from outside the VM. See the inline comments on each service in
 `docker-compose.yml` for the specific reasoning per service.
@@ -269,7 +269,7 @@ For rollback, backup, and standalone health verification, see
 
 ## 8. Local-dev-only overlay — do not bring to the VM
 
-`docker-compose.local.yml` re-opens host ports for `redis`/`kafka`/`minio`/`agent-service`
+`docker-compose.local.yml` re-opens host ports for `redis`/`minio`/`agent-service`
 and unsets `SPRING_PROFILES_ACTIVE` for local development convenience (direct
 `localhost:8088/docs`, `localhost:9001` MinIO console access, verbose logging, Swagger UI).
 It is **not auto-merged** — Compose only auto-applies a file named exactly

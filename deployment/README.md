@@ -1,7 +1,7 @@
 # CareerPilot AI — Deployment Runbook
 
 Operational runbook for running CareerPilot AI (`backend`, `agent-service`, `redis`,
-`kafka`, `zookeeper`, `minio`) on a single Oracle Cloud VM (Oracle Linux 9) via Docker
+`minio`) on a single Oracle Cloud VM (Oracle Linux 9) via Docker
 Compose. The frontend is deployed separately on Vercel and is not covered here.
 
 For *why* the stack is shaped the way it is (network topology, healthcheck choices,
@@ -153,7 +153,7 @@ idempotent to run often.
 ```
 
 Checks: Docker daemon, Compose plugin, the Compose network, every container's health
-status (`redis`, `zookeeper`, `kafka`, `minio`, `agent-service`, `backend`), and the two
+status (`redis`, `minio`, `agent-service`, `backend`), and the two
 HTTP health endpoints (`backend` `/actuator/health`, `agent-service` `/health`, both
 checked via `docker exec` since neither port is published to the host). Exits non-zero if
 anything critical is down — safe to wire into external monitoring/alerting.
@@ -212,8 +212,6 @@ docker image prune -f   # safe: only removes dangling, untagged images
   usually a symptom, not the root cause
 - `backend` has a 45s `start_period` before healthchecks count against it — a fresh boot
   failing health in the first 45s is expected, not a bug
-- `kafka` depends on `zookeeper` being healthy first — if `zookeeper` is unhealthy,
-  `kafka` will never start
 
 ### If `verify.sh` reports HTTP check failures but containers look healthy
 - The HTTP checks run `docker exec` inside the container itself (no host port is

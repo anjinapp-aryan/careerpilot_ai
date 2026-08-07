@@ -34,8 +34,3 @@ spring:
         jdbc.batch_size: 20
         order_inserts: true
         order_updates: true
-
-careerpilot:
-  kafka:
-    # Kafka not deployed on free tier; silently disabled
-    enabled: false

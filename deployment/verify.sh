@@ -161,7 +161,7 @@ main() {
   check_compose_plugin
   check_network
 
-  for svc in redis zookeeper kafka minio agent-service backend; do
+  for svc in redis minio agent-service backend; do
     check_container_health "${svc}"
   done
 

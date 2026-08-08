@@ -26,6 +26,20 @@ public interface AtsValidationRunRepository extends JpaRepository<AtsValidationR
     /** Recent runs across every ATS, for the campaign dashboard. */
     List<AtsValidationRun> findTop100ByOrderByCreatedAtDesc();
 
+    /**
+     * Which ATS platforms have any history at all.
+     *
+     * <p>Exists so the campaign report does not issue one series query per {@code AtsPlatform}
+     * enum value. That loop meant 11 round-trips to the external database on every call to the
+     * <em>unauthenticated</em> {@code GET /api/diagnostics/browser}, nine of which returned
+     * nothing — measured at 3.9s per request. This turns it into 1 + (platforms actually tested),
+     * with byte-identical output, since a platform absent from this list is one the loop would
+     * have skipped anyway.
+     */
+    @org.springframework.data.jpa.repository.Query(
+            "select distinct r.atsPlatform from AtsValidationRun r")
+    List<String> findDistinctAtsPlatforms();
+
     long countByAtsPlatform(String atsPlatform);
 
     long countByAtsPlatformAndReadyTrue(String atsPlatform);

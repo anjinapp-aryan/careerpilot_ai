@@ -34,19 +34,22 @@ public class ExecutionController {
     private final OperationsService operations;
     private final ai.careerpilot.execution.browser.validation.BrowserValidationHarness validationHarness;
     private final ai.careerpilot.execution.browser.validation.ValidationHistoryService validationHistory;
+    private final ai.careerpilot.execution.timeline.ExecutionTimelineService executionTimeline;
 
     @Value("${application.operations.enabled:false}") private boolean operationsEnabled;
 
     public ExecutionController(ApprovalService approval, ApplicationExecutionService execution,
                                ApplicationTrackingService tracking, OperationsService operations,
                                ai.careerpilot.execution.browser.validation.BrowserValidationHarness validationHarness,
-                               ai.careerpilot.execution.browser.validation.ValidationHistoryService validationHistory) {
+                               ai.careerpilot.execution.browser.validation.ValidationHistoryService validationHistory,
+                               ai.careerpilot.execution.timeline.ExecutionTimelineService executionTimeline) {
         this.approval = approval;
         this.execution = execution;
         this.tracking = tracking;
         this.operations = operations;
         this.validationHarness = validationHarness;
         this.validationHistory = validationHistory;
+        this.executionTimeline = executionTimeline;
     }
 
     /**
@@ -168,6 +171,25 @@ public class ExecutionController {
     public Map<String, Object> detail(AuthenticatedUser user, @PathVariable UUID id) {
         requireOperationsEnabled();
         return operations.detail(id, user.userId())
+                .orElseThrow(() -> new NoSuchElementException("execution not found or not owned by caller"));
+    }
+
+    /**
+     * P5 — the stage-by-stage execution timeline: exactly where this application stopped, how long
+     * every stage took, why the last stage was the last one, and what recovery decision followed.
+     *
+     * <p>Separate from {@link #detail}, whose {@code timeline} block is Phase 3A's per-(user, job)
+     * application-lifecycle feed — a different grain entirely, since one job has many execution
+     * runs. This one is scoped to a single run.
+     *
+     * <p>Authenticated and ownership-scoped: a timeline for someone else's execution is
+     * indistinguishable from one that does not exist. It is deliberately NOT on the unauthenticated
+     * diagnostics surface — stage detail carries per-application context.
+     */
+    @GetMapping("/executions/{id}/timeline")
+    public Map<String, Object> executionTimeline(AuthenticatedUser user, @PathVariable UUID id) {
+        requireOperationsEnabled();
+        return executionTimeline.timeline(id, user.userId())
                 .orElseThrow(() -> new NoSuchElementException("execution not found or not owned by caller"));
     }
 

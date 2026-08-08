@@ -12,7 +12,6 @@
   - `ai/` — LLM routing via AiGatewayService (multi-provider failover chain)
   - `domain/` — JPA entities (User, Resume, Job, WorkflowRun, Conversation)
   - `security/` — JWT auth, multi-tenant context extraction
-  - `kafka/` — Event producers (workflow state changes)
 - **Port**: 8080 (Swagger at `/swagger-ui.html`)
 
 ### Agent Service (Python FastAPI + LangGraph 0.2)
@@ -33,7 +32,6 @@
 | Component | Tech | Notes |
 |-----------|------|-------|
 | **Database** | Neon serverless Postgres | External (not in docker-compose). Direct endpoint required (no -pooler). V1+V2 migrations in Flyway. LangGraph checkpoints auto-created by PostgresSaver. |
-| **Message Queue** | Kafka (Confluent) | Local compose only. Not deployed to production. WorkflowEventProducer publishes state changes. No consumers wired (scaffolding). |
 | **Cache** | Redis 7 | docker-compose only. No @Cacheable / RedisTemplate usage yet (scaffolding). |
 | **Storage** | MinIO (S3-compatible) | Local docker-compose. Cloudflare R2 in production. No resume upload pipeline yet. |
 
@@ -66,7 +64,7 @@
 
 1. **Register & Auth** → Backend creates User + OAuth optional → JWT issued
 2. **Copilot Chat** → Frontend SSE stream → Backend → AiGatewayService → Provider (with failover)
-3. **Workflow Run** → Frontend calls /api/workflows/run → Backend assembles input → Calls agent-service → Persists WorkflowRun → Publishes Kafka event
+3. **Workflow Run** → Frontend calls /api/workflows/run → Backend assembles input → Calls agent-service → Persists WorkflowRun
 4. **Workflow Resume** → Frontend calls /api/workflows/{threadId}/resume → Backend re-validates the run is still awaiting approval (`deriveDisplayStatus`), then calls agent-service (which re-validates independently) → stamps approve/reject audit fields into state → Updates state. Either layer returns 409 if the run isn't currently parked at `human_approval`.
 
 ## Configuration
@@ -95,5 +93,4 @@
 - audit_logs, usage_records tables (no writes)
 - pgvector embeddings (no generation)
 - Redis caching (@Cacheable)
-- Kafka consumers (events go nowhere)
 - Resume upload & S3 storage

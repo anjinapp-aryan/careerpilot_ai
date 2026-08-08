@@ -45,9 +45,25 @@ interface Coverage {
   missingRequiredValues: number;
 }
 
+interface AutomationBlockerEntry {
+  reason: string;
+  detail: string;
+}
+
+const BLOCKER_LABELS: Record<string, string> = {
+  CAPTCHA: 'CAPTCHA',
+  LOGIN_WALL: 'Login wall',
+  MISSING_REQUIRED_DATA: 'Missing required data',
+  NO_FORM: 'No form found',
+  CROSS_ORIGIN_FRAME: 'Form inside a cross-origin frame',
+};
+
 interface Confidence {
   score: number;
   band: 'HIGH' | 'MEDIUM' | 'LOW';
+  blocked?: boolean;
+  blockers?: AutomationBlockerEntry[];
+  blockedReason?: string | null;
   ready: boolean;
   rationale?: string | null;
 }
@@ -72,11 +88,39 @@ interface Drift {
   reasons: string[];
 }
 
+type ValidationStatus =
+  | 'COMPLETED'
+  | 'FAILED'
+  | 'REFUSED'
+  // Phase F4 — the page was reached but proven not to be an application form. Discovery and
+  // planning never ran, so there is deliberately no confidence score to show.
+  | 'INVALID_APPLICATION_PAGE'
+  | 'INVALID_POSTING'
+  | 'REDIRECTED_TO_NON_APPLICATION'
+  | 'LOGIN_REQUIRED'
+  | 'JOB_REMOVED'
+  | 'UNSUPPORTED_PAGE';
+
+const INVALID_PAGE_LABELS: Record<string, string> = {
+  INVALID_APPLICATION_PAGE: 'No Application Form',
+  INVALID_POSTING: 'Invalid ATS Posting',
+  REDIRECTED_TO_NON_APPLICATION: 'Redirected Away From Application',
+  LOGIN_REQUIRED: 'Login Required',
+  JOB_REMOVED: 'Job Removed',
+  UNSUPPORTED_PAGE: 'Unsupported Page',
+};
+
 interface ValidationResponse {
   url: string;
   atsPlatform: string;
-  status: 'COMPLETED' | 'FAILED' | 'REFUSED';
+  status: ValidationStatus;
   message?: string | null;
+  pageVerified?: boolean;
+  discoverySkipped?: boolean;
+  planningSkipped?: boolean;
+  invalidPosting?: boolean;
+  automationBlocked?: boolean;
+  phases?: Record<string, 'SUCCEEDED' | 'SKIPPED' | 'BLOCKED' | 'NOT_ATTEMPTED'>;
   totalDurationMs: number;
   navigationDurationMs: number;
   discoveryDurationMs: number;
@@ -270,8 +314,61 @@ export function BrowserValidationPanel() {
   );
 }
 
+/**
+ * Phase F4 — the page was reached but is not an application form.
+ *
+ * Deliberately renders NO confidence percentage, NO band and NO Ready badge. A score computed from
+ * a board index is a misleading number, and showing "0%" next to a "Ready" badge is exactly the
+ * confusion this phase exists to remove. Discovery and planning read "Skipped", not "0 ms", so it
+ * is clear they were never attempted rather than instantaneous.
+ */
+function InvalidPageResult({ result }: { result: ValidationResponse }) {
+  const label = INVALID_PAGE_LABELS[result.status] ?? 'Invalid Page';
+
+  return (
+    <div className="space-y-4">
+      <Card className="space-y-3 border-destructive/40 p-4">
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge tone="danger">✕ {label}</Badge>
+          <Badge tone="info">{result.atsPlatform}</Badge>
+          <Badge tone="neutral">BROWSER READY: FALSE</Badge>
+        </div>
+
+        <div>
+          <p className="text-sm font-medium text-foreground">Reason</p>
+          <p className="text-sm text-muted-foreground">{result.message}</p>
+        </div>
+
+        <div className="grid gap-2 text-xs text-muted-foreground sm:grid-cols-4">
+          <span>Total {fmtMs(result.totalDurationMs)}</span>
+          <span>Navigation {fmtMs(result.navigationDurationMs)}</span>
+          <span>Discovery <span className="font-medium text-foreground">Skipped</span></span>
+          <span>Planning <span className="font-medium text-foreground">Skipped</span></span>
+        </div>
+
+        <p className="break-all text-xs text-muted-foreground">{result.url}</p>
+
+        {result.notes.length > 0 && (
+          <ul className="space-y-1 text-xs text-muted-foreground">
+            {result.notes.map((note, i) => (
+              <li key={i} className="flex gap-1.5">
+                <span aria-hidden>•</span>
+                <span>{note}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Card>
+    </div>
+  );
+}
+
 function ValidationResult({ result }: { result: ValidationResponse }) {
   const { coverage, confidence, environment, drift } = result;
+
+  if (result.invalidPosting || INVALID_PAGE_LABELS[result.status]) {
+    return <InvalidPageResult result={result} />;
+  }
 
   return (
     <div className="space-y-4">
@@ -282,13 +379,46 @@ function ValidationResult({ result }: { result: ValidationResponse }) {
         <KpiCard label="Confidence" value={`${confidence.score}%`} icon={Gauge} tone={confidence.ready ? 'success' : 'warning'} />
       </div>
 
+      {confidence.blocked && (
+        <Card className="space-y-2 border-destructive/40 p-4">
+          {/* P0 — the page was analysed fine; execution is still impossible. Stated first and
+              loudest, because a CAPTCHA page previously read "94% HIGH READY". */}
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge tone="danger">✕ Automation blocked</Badge>
+            {(confidence.blockers ?? []).map((b) => (
+              <Badge key={b.reason} tone="warning">
+                {BLOCKER_LABELS[b.reason] ?? b.reason}
+              </Badge>
+            ))}
+          </div>
+          <div>
+            <p className="text-sm font-medium text-foreground">Reason</p>
+            <ul className="space-y-1 text-sm text-muted-foreground">
+              {(confidence.blockers ?? []).map((b) => (
+                <li key={b.reason}>
+                  <span className="font-medium text-foreground">
+                    {BLOCKER_LABELS[b.reason] ?? b.reason}
+                  </span>{' '}
+                  — {b.detail}
+                </li>
+              ))}
+            </ul>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            The {confidence.score}% score below measures how completely the form was{' '}
+            <span className="font-medium text-foreground">analysed</span>. It does not mean the page
+            can be executed — it cannot.
+          </p>
+        </Card>
+      )}
+
       <Card className="space-y-3 p-4">
         <div className="flex flex-wrap items-center gap-2">
           <Badge tone="info">{result.atsPlatform}</Badge>
           <Badge tone={result.status === 'COMPLETED' ? 'success' : 'danger'}>{result.status}</Badge>
           <Badge tone={bandTone(confidence.band)}>{confidence.band}</Badge>
-          <Badge tone={confidence.ready ? 'success' : 'neutral'}>
-            {confidence.ready ? 'READY' : 'NOT READY'}
+          <Badge tone={confidence.ready ? 'success' : confidence.blocked ? 'danger' : 'neutral'}>
+            {confidence.ready ? 'READY' : confidence.blocked ? 'BLOCKED' : 'NOT READY'}
           </Badge>
           {drift && (
             <Badge tone={driftTone(drift.severity)}>
@@ -298,6 +428,24 @@ function ValidationResult({ result }: { result: ValidationResponse }) {
           {environment.captchaDetected && <Badge tone="danger">CAPTCHA DETECTED</Badge>}
           {environment.spaFramework && <Badge tone="neutral">{environment.spaFramework}</Badge>}
         </div>
+
+        {result.phases && (
+          /* P0 — the five stages shown separately. "Discovery SUCCEEDED" beside "Automation
+             BLOCKED" is the whole point: analysing a page and being able to execute on it are
+             different questions, and collapsing them is what produced the false READY. */
+          <div className="flex flex-wrap gap-2 text-xs">
+            {(['discovery', 'classification', 'planning', 'automation', 'submission'] as const).map((phase) => {
+              const v = result.phases?.[phase];
+              const tone: BadgeTone =
+                v === 'SUCCEEDED' ? 'success' : v === 'BLOCKED' ? 'danger' : 'neutral';
+              return (
+                <Badge key={phase} tone={tone}>
+                  {phase}: {v ?? '—'}
+                </Badge>
+              );
+            })}
+          </div>
+        )}
 
         {confidence.rationale && (
           <p className="text-sm text-muted-foreground">{confidence.rationale}</p>

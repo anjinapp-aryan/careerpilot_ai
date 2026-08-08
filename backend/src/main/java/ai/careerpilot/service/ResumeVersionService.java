@@ -2,7 +2,6 @@ package ai.careerpilot.service;
 
 import ai.careerpilot.domain.Resume;
 import ai.careerpilot.domain.ResumeVersion;
-import ai.careerpilot.kafka.WorkflowEventProducer;
 import ai.careerpilot.repo.ResumeRepository;
 import ai.careerpilot.repo.ResumeVersionRepository;
 import ai.careerpilot.service.profile.event.ResumeChangedEvent;
@@ -13,7 +12,6 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -32,17 +30,15 @@ public class ResumeVersionService {
     private final ResumeRepository resumes;
     private final ResumeDocumentService documents;
     private final S3StorageService storage;
-    private final WorkflowEventProducer events;
     private final ApplicationEventPublisher appEvents;
 
     public ResumeVersionService(ResumeVersionRepository versions, ResumeRepository resumes,
                                 ResumeDocumentService documents, S3StorageService storage,
-                                WorkflowEventProducer events, ApplicationEventPublisher appEvents) {
+                                ApplicationEventPublisher appEvents) {
         this.versions = versions;
         this.resumes = resumes;
         this.documents = documents;
         this.storage = storage;
-        this.events = events;
         this.appEvents = appEvents;
     }
 
@@ -97,12 +93,6 @@ public class ResumeVersionService {
                 .build();
         ResumeVersion saved = versions.save(version);
         log.info("Resume version created: resume={}, version={}, thread={}", req.resumeId(), next, req.threadId());
-
-        events.publishResumeEvent(req.threadId(), "resume.version.created", new HashMap<>(Map.of(
-                "resumeId", req.resumeId().toString(),
-                "versionId", saved.getId().toString(),
-                "versionNumber", next,
-                "userId", req.userId().toString())));
 
         // Decoupled: an optimized resume regenerates the Candidate Profile (if enabled) after
         // commit, async. Failure there never affects optimization — see CandidateProfileEventListener.

@@ -14,6 +14,43 @@ public interface ApplicationExecutionRepository extends JpaRepository<Applicatio
 
     Optional<ApplicationExecution> findFirstByUserIdAndJobIdOrderByCreatedAtDesc(UUID userId, UUID jobId);
 
+    /**
+     * Bulk form of {@link #findFirstByUserIdAndJobIdOrderByCreatedAtDesc} — the latest execution per
+     * job for a whole page of cards, in one query. {@code DISTINCT ON} keeps the first row of each
+     * {@code job_id} group under the same ordering the per-row finder uses, so the two agree by
+     * construction.
+     */
+    @org.springframework.data.jpa.repository.Query(value = """
+            SELECT DISTINCT ON (job_id) *
+            FROM application_execution
+            WHERE user_id = :userId AND job_id IN (:jobIds)
+            ORDER BY job_id, created_at DESC
+            """, nativeQuery = true)
+    List<ApplicationExecution> findLatestPerJob(
+            @org.springframework.data.repository.query.Param("userId") UUID userId,
+            @org.springframework.data.repository.query.Param("jobIds") java.util.Collection<UUID> jobIds);
+
+    /**
+     * Atomically claims an approved execution for submission: {@code AWAITING_APPROVAL -> SUBMITTING}.
+     *
+     * <p>Exists because the previous guard was a check-then-act — read the row, compare the status,
+     * then drive the browser. Under Postgres READ COMMITTED two workers (an at-least-once approval
+     * event, a worker retry, the manual retry endpoint) could both read {@code AWAITING_APPROVAL}
+     * and both submit. The single browser lease serialises them, so they submit one after the other
+     * — <b>both for real</b>. A conditional UPDATE makes the transition the claim itself: the row is
+     * no longer {@code AWAITING_APPROVAL} after the first winner, so every later caller sees zero
+     * rows affected and stops.
+     *
+     * @return 1 when this caller won the claim, 0 when someone else already has it
+     */
+    @org.springframework.data.jpa.repository.Modifying
+    @org.springframework.data.jpa.repository.Query(value = """
+            UPDATE application_execution
+            SET execution_status = 'SUBMITTING'
+            WHERE id = :id AND execution_status = 'AWAITING_APPROVAL'
+            """, nativeQuery = true)
+    int claimForSubmit(@org.springframework.data.repository.query.Param("id") UUID id);
+
     long countByExecutionStatus(String executionStatus);
 
     /** Phase 7.16.3 — the Automation Recovery Center's retry queue: due RETRY rows. */

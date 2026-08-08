@@ -4,7 +4,6 @@ import ai.careerpilot.domain.Job;
 import ai.careerpilot.domain.JobFetchAudit;
 import ai.careerpilot.jobdiscovery.provider.JobProvider;
 import ai.careerpilot.jobdiscovery.provider.RawJob;
-import ai.careerpilot.kafka.WorkflowEventProducer;
 import ai.careerpilot.repo.JobFetchAuditRepository;
 import ai.careerpilot.repo.JobRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -34,7 +33,6 @@ class JobAggregationServiceBackfillTest {
     private JobNormalizer normalizer;
     private JobRepository jobs;
     private JobFetchAuditRepository audits;
-    private WorkflowEventProducer events;
     private JobDiscoveryHealthTracker health;
     private JobAggregationService service;
 
@@ -51,7 +49,6 @@ class JobAggregationServiceBackfillTest {
         normalizer = mock(JobNormalizer.class);
         jobs = mock(JobRepository.class);
         audits = mock(JobFetchAuditRepository.class);
-        events = mock(WorkflowEventProducer.class);
         health = mock(JobDiscoveryHealthTracker.class);
 
         when(audits.save(any(JobFetchAudit.class))).thenAnswer(inv -> inv.getArgument(0));
@@ -62,7 +59,7 @@ class JobAggregationServiceBackfillTest {
         });
 
         service = new JobAggregationService(
-                List.of(configuredProvider, unconfiguredProvider), normalizer, jobs, audits, events, health);
+                List.of(configuredProvider, unconfiguredProvider), normalizer, jobs, audits, health);
     }
 
     private RawJob rawJob(String id, Instant postedDate) {
@@ -165,13 +162,6 @@ class JobAggregationServiceBackfillTest {
 
         assertEquals(2, summary.totalFetched());
         assertEquals(1, summary.totalPersisted());
-    }
-
-    @Test
-    void discoverAllPublishesJobEventEvenForWindowedRun() {
-        when(configuredProvider.fetch()).thenReturn(List.of());
-        service.discoverAll(Duration.ofHours(24));
-        verify(events, times(1)).publishJobEvent(eq("job-discovery"), eq("job.discovery.completed"), any());
     }
 
     // ── filterByWindow (package-private helper) ──────────────────────────

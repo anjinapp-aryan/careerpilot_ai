@@ -83,4 +83,36 @@ class BrowserLaunchOptionsFactoryTest {
         assertThat(nulls.describe().get("executablePath")).isEqualTo("(playwright bundled)");
         assertThat(factory(true, true, "   ", "  ").describe().get("channel")).isEqualTo("(none)");
     }
+
+    // ── P3 — Playwright's first-run browser download ──────────────────────────────────────────
+    //
+    // Measured on a cold container: Playwright downloaded Chromium, FFMPEG, Firefox AND WebKit on
+    // the first Playwright.create(), then launched /usr/bin/chromium anyway. 83,432 ms of the
+    // first request, hundreds of MB of disk with no volume behind it, and an outbound dependency
+    // on playwright.azureedge.net that timed out once before falling back to a mirror.
+
+    @Test
+    void driverSkipsBrowserDownloadWhenAnExplicitExecutableIsConfigured() {
+        BrowserLaunchOptionsFactory f = factory(true, true, "/usr/bin/chromium", "");
+        assertThat(f.usesExternalBrowser()).isTrue();
+        assertThat(f.driverEnv()).containsEntry("PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD", "1");
+        assertThat(f.describe()).containsEntry("skipBrowserDownload", true);
+    }
+
+    @Test
+    void driverSkipsBrowserDownloadWhenAChannelIsConfigured() {
+        BrowserLaunchOptionsFactory f = factory(true, true, "", "chrome");
+        assertThat(f.usesExternalBrowser()).isTrue();
+        assertThat(f.driverEnv()).containsEntry("PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD", "1");
+    }
+
+    @Test
+    void driverStillDownloadsWhenPlaywrightsOwnBundledBrowserIsTheBrowser() {
+        // No executable path and no channel means the bundled browser IS the browser — suppressing
+        // its download would leave nothing to launch. Local development depends on this branch.
+        BrowserLaunchOptionsFactory f = factory(true, true, "", "");
+        assertThat(f.usesExternalBrowser()).isFalse();
+        assertThat(f.driverEnv()).isEmpty();
+        assertThat(f.describe()).containsEntry("skipBrowserDownload", false);
+    }
 }

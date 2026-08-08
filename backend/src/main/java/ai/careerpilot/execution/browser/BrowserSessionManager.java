@@ -35,6 +35,15 @@ public class BrowserSessionManager {
     private final ai.careerpilot.execution.browser.pool.BrowserLaunchOptionsFactory launchOptions;
     private final BrowserLifecycleMetrics lifecycleMetrics;
 
+    /** Idle window after which an unused browser is shut down. {@code <= 0} disables idle shutdown. */
+    private final Duration idleTimeout;
+
+    /** Contexts served before the browser is recycled. {@code <= 0} disables the count trigger. */
+    private final long maxContextsPerBrowser;
+
+    /** Uptime after which the browser is recycled. {@code <= 0} disables the uptime trigger. */
+    private final Duration maxUptime;
+
     /**
      * Phase 12B — resolved lazily via {@link org.springframework.beans.factory.ObjectProvider}
      * because {@code BrowserLeasePool} depends on <em>this</em> bean; a constructor reference would
@@ -55,15 +64,60 @@ public class BrowserSessionManager {
     private final AtomicInteger openContextCount = new AtomicInteger();
     private volatile Instant lastContextOpenedAt;
 
+    // ── P3 — recycle bookkeeping. All three are written under `lock` (or by contextClosed(), which
+    // only moves the activity clock forward) and read under `lock` in recycleIfDue(). ──
+
+    /** When the current browser was launched; {@code null} whenever no browser is running. */
+    private volatile Instant launchedAt;
+
+    /** Last time a context was opened OR closed — the clock the idle trigger measures against. */
+    private volatile Instant lastActivityAt;
+
+    /** Contexts served by the <em>current</em> browser. Reset to zero on every teardown. */
+    private final java.util.concurrent.atomic.AtomicLong contextsSinceLaunch =
+            new java.util.concurrent.atomic.AtomicLong();
+
     public BrowserSessionManager(@Value("${browser.automation.enabled:false}") boolean enabled,
                                  ai.careerpilot.execution.browser.pool.BrowserLaunchOptionsFactory launchOptions,
                                  BrowserLifecycleMetrics lifecycleMetrics,
                                  org.springframework.beans.factory.ObjectProvider<
-                                         ai.careerpilot.execution.browser.pool.BrowserLeasePool> leasePoolProvider) {
+                                         ai.careerpilot.execution.browser.pool.BrowserLeasePool> leasePoolProvider,
+                                 @Value("${browser.automation.lifecycle.idle-timeout-seconds:300}") long idleTimeoutSeconds,
+                                 @Value("${browser.automation.lifecycle.max-contexts:100}") long maxContextsPerBrowser,
+                                 @Value("${browser.automation.lifecycle.max-uptime-seconds:21600}") long maxUptimeSeconds) {
         this.enabled = enabled;
         this.launchOptions = launchOptions;
         this.lifecycleMetrics = lifecycleMetrics;
         this.leasePoolProvider = leasePoolProvider;
+        this.idleTimeout = Duration.ofSeconds(idleTimeoutSeconds);
+        this.maxContextsPerBrowser = maxContextsPerBrowser;
+        this.maxUptime = Duration.ofSeconds(maxUptimeSeconds);
+    }
+
+    /**
+     * Why the browser was (or would be) recycled. {@code NOT_DUE} and the two {@code DEFERRED_*}
+     * values are the "did nothing" outcomes; the three trigger values mean a teardown happened.
+     */
+    public enum RecycleOutcome {
+        /** No browser is running — nothing to do, and specifically nothing to launch. */
+        NOT_LAUNCHED,
+        /** Running, but no trigger fired. */
+        NOT_DUE,
+        /** A pool permit is held: an execution is in flight or starting. Never tear down under one. */
+        DEFERRED_LEASE_ACTIVE,
+        /** A context is open. Same reasoning, checked independently of the pool. */
+        DEFERRED_CONTEXT_OPEN,
+        /** Idle longer than {@code lifecycle.idle-timeout-seconds}. */
+        IDLE,
+        /** Served {@code lifecycle.max-contexts} contexts. */
+        MAX_CONTEXTS,
+        /** Up longer than {@code lifecycle.max-uptime-seconds}. */
+        MAX_UPTIME;
+
+        /** True for the three outcomes that actually closed the browser. */
+        public boolean recycled() {
+            return this == IDLE || this == MAX_CONTEXTS || this == MAX_UPTIME;
+        }
     }
 
     public boolean isEnabled() {
@@ -95,7 +149,13 @@ public class BrowserSessionManager {
                     lifecycleMetrics.recordLaunchAttempt();
                     long launchStart = System.currentTimeMillis();
                     try {
-                        playwright = Playwright.create();
+                        // Suppresses Playwright's first-run browser download when an external
+                        // Chromium is configured — see BrowserLaunchOptionsFactory#driverEnv for
+                        // the measured cost (83s and hundreds of MB, for browsers never launched).
+                        java.util.Map<String, String> driverEnv = launchOptions.driverEnv();
+                        playwright = driverEnv.isEmpty()
+                                ? Playwright.create()
+                                : Playwright.create(new Playwright.CreateOptions().setEnv(driverEnv));
                         BrowserType.LaunchOptions options = launchOptions.create();
                         browser = b = playwright.chromium().launch(options);
                     } catch (RuntimeException | Error e) {
@@ -108,6 +168,9 @@ public class BrowserSessionManager {
                         throw e;
                     }
                     long launchMs = System.currentTimeMillis() - launchStart;
+                    launchedAt = Instant.now();
+                    lastActivityAt = launchedAt;
+                    contextsSinceLaunch.set(0);
                     lifecycleMetrics.recordLaunchSuccess(launchMs);
                     log.info("BROWSER_SESSION_MANAGER launched headless chromium with hardened options in {}ms", launchMs);
                 }
@@ -116,17 +179,38 @@ public class BrowserSessionManager {
         return b;
     }
 
-    /** A brand-new, isolated browser context — no shared cookies/storage with any other execution. */
+    /**
+     * A brand-new, isolated browser context — no shared cookies/storage with any other execution.
+     *
+     * <p><b>P3 — the whole body now runs under {@link #lock}.</b> {@link #recycleIfDue()} tears the
+     * browser down under the same lock, so without this a recycle could land between {@link
+     * #browser()} returning and {@code newContext()} being called on it, handing a live execution a
+     * closed browser. Holding the lock also makes the relaunch-after-recycle path automatic: a
+     * caller that blocks here simply finds {@code browser == null} and launches a fresh one.
+     *
+     * <p>Serialising context creation costs nothing in this deployment — one browser, one lease,
+     * sequential execution — and it is the reason the recycle checks can be a simple read rather
+     * than a compare-and-swap protocol.
+     */
     public BrowserContext newContext() {
-        BrowserContext ctx = browser().newContext();
-        openContextCount.incrementAndGet();
-        lastContextOpenedAt = Instant.now();
-        return ctx;
+        synchronized (lock) {
+            BrowserContext ctx = browser().newContext();
+            openContextCount.incrementAndGet();
+            contextsSinceLaunch.incrementAndGet();
+            Instant now = Instant.now();
+            lastContextOpenedAt = now;
+            lastActivityAt = now;
+            return ctx;
+        }
     }
 
     /** Phase 7.16.3 — called by {@code PlaywrightAutomationProvider#logout} once its context is closed. */
     public void contextClosed() {
         openContextCount.updateAndGet(c -> Math.max(0, c - 1));
+        // Starts the idle clock at the moment the browser genuinely became unused, not at the
+        // moment its last context was opened — a 40-minute execution must not count as 40 minutes
+        // of idleness the instant it finishes.
+        lastActivityAt = Instant.now();
     }
 
     /**
@@ -169,6 +253,121 @@ public class BrowserSessionManager {
         lifecycleMetrics.recordCrash("zombie detection: stuck or leaking browser contexts");
         log.warn("BROWSER_SESSION_MANAGER restarted due to zombie detection (stuck/leaking contexts)");
         return true;
+    }
+
+    /**
+     * P3 — shuts the shared browser down when it is genuinely unused, and recycles it periodically.
+     *
+     * <p><b>Root cause this addresses.</b> The browser was launched lazily and then never closed
+     * except at {@code @PreDestroy} or on a zombie verdict (which requires 5+ open contexts). After
+     * a single validation, Chromium's six processes plus the Node driver stayed resident
+     * indefinitely — measured at <b>+178 MiB of container memory, retained across 30s of complete
+     * idleness</b>. On a sequential, occasional-use workload that is memory rented 24×7 for minutes
+     * of use per day. The periodic recycle exists for a different reason: not leaks (none were
+     * found) but the state a long-lived browser naturally accumulates — renderer state, V8 heap
+     * fragmentation, network stack and internal caches.
+     *
+     * <p><b>Why this is the safe shape.</b> Teardown happens only under {@link #lock}, the same lock
+     * {@link #newContext()} holds for its whole body, so a recycle can never interleave with an
+     * execution obtaining a context. Three independent conditions must all say "unused" first:
+     * <ol>
+     *   <li><b>No pool permit is held.</b> Checked as {@code availablePermits == maxLeases}, not as
+     *       {@code activeLeases == 0}: the pool takes its permit <em>before</em> calling
+     *       {@code newContext()} and registers the lease <em>after</em>, so there is a window where
+     *       a real execution is starting and {@code activeLeases()} still reads zero. The permit
+     *       count has no such window.</li>
+     *   <li><b>No lease is registered</b> — the same question asked the other way, kept because it
+     *       costs nothing and covers a pool that is unresolvable or mid-shutdown.</li>
+     *   <li><b>No context is open</b> — asked of this class's own counter, so a disagreement between
+     *       the pool and the session manager resolves toward not tearing down.</li>
+     * </ol>
+     * Any of them saying otherwise returns a {@code DEFERRED_*} outcome and tries again next sweep.
+     *
+     * <p>Triggers are evaluated deterministically in a fixed order — contexts, then uptime, then
+     * idle — so the reported reason for a teardown is reproducible rather than dependent on which
+     * threshold happened to be read first. Recycling is only ever a teardown: the next execution
+     * re-launches lazily through the existing path, which now costs ~1.1s.
+     *
+     * <p>Never throws, never launches. Returns what it did.
+     */
+    public RecycleOutcome recycleIfDue() {
+        if (!enabled) return RecycleOutcome.NOT_LAUNCHED;
+        if (browser == null) return RecycleOutcome.NOT_LAUNCHED;
+
+        synchronized (lock) {
+            // Re-read under the lock: another thread may have torn the browser down already.
+            if (browser == null) return RecycleOutcome.NOT_LAUNCHED;
+
+            if (permitHeld()) return RecycleOutcome.DEFERRED_LEASE_ACTIVE;
+            if (activeLeases() > 0) return RecycleOutcome.DEFERRED_LEASE_ACTIVE;
+            if (openContextCount.get() > 0) return RecycleOutcome.DEFERRED_CONTEXT_OPEN;
+
+            RecycleOutcome reason = dueReason();
+            if (!reason.recycled()) return reason;
+
+            long served = contextsSinceLaunch.get();
+            Duration uptime = launchedAt == null ? Duration.ZERO : Duration.between(launchedAt, Instant.now());
+            closeQuietly();
+            lifecycleMetrics.recordRestart();
+            log.info("BROWSER_SESSION_MANAGER released chromium — reason={} contextsServed={} uptimeSeconds={}; "
+                            + "the next execution relaunches lazily",
+                    reason, served, uptime.toSeconds());
+            return reason;
+        }
+    }
+
+    /**
+     * Which trigger, if any, is due. Fixed evaluation order so the reported reason is deterministic.
+     * A non-positive configured value disables that trigger outright, which is the documented
+     * rollback for each one independently.
+     */
+    private RecycleOutcome dueReason() {
+        Instant now = Instant.now();
+        if (maxContextsPerBrowser > 0 && contextsSinceLaunch.get() >= maxContextsPerBrowser) {
+            return RecycleOutcome.MAX_CONTEXTS;
+        }
+        Instant started = launchedAt;
+        if (!maxUptime.isZero() && !maxUptime.isNegative()
+                && started != null && Duration.between(started, now).compareTo(maxUptime) >= 0) {
+            return RecycleOutcome.MAX_UPTIME;
+        }
+        Instant last = lastActivityAt;
+        if (!idleTimeout.isZero() && !idleTimeout.isNegative()
+                && last != null && Duration.between(last, now).compareTo(idleTimeout) >= 0) {
+            return RecycleOutcome.IDLE;
+        }
+        return RecycleOutcome.NOT_DUE;
+    }
+
+    /**
+     * Whether any pool permit is currently checked out. Fails <em>closed</em> — an unresolvable or
+     * throwing pool reports "in use", because wrongly believing the browser is free is the only
+     * error here that can break a live execution.
+     */
+    private boolean permitHeld() {
+        try {
+            ai.careerpilot.execution.browser.pool.BrowserLeasePool pool = leasePoolProvider.getIfAvailable();
+            if (pool == null) return false;   // no pool means nothing can be holding a permit
+            return pool.availablePermits() < pool.maxLeases();
+        } catch (Exception e) {
+            log.warn("BROWSER_SESSION_MANAGER permit check failed, treating browser as in use: {}", e.toString());
+            return true;
+        }
+    }
+
+    /** Contexts served by the currently-running browser. Zero when none is running. */
+    public long contextsSinceLaunch() {
+        return contextsSinceLaunch.get();
+    }
+
+    /** When the current browser was launched, or {@code null} if none is running. */
+    public Instant launchedAt() {
+        return launchedAt;
+    }
+
+    /** Last context open/close, or {@code null} if no browser has run. */
+    public Instant lastActivityAt() {
+        return lastActivityAt;
     }
 
     /**
@@ -245,5 +444,10 @@ public class BrowserSessionManager {
         browser = null;
         playwright = null;
         openContextCount.set(0);
+        // Reset so the next launch starts its own lifetime rather than inheriting the previous
+        // browser's context count and uptime — otherwise a recycled browser would be due for
+        // recycling again immediately.
+        contextsSinceLaunch.set(0);
+        launchedAt = null;
     }
 }

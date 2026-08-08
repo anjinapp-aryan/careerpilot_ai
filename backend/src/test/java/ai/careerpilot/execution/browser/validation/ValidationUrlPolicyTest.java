@@ -147,6 +147,73 @@ class ValidationUrlPolicyTest {
         assertThat(policy.describe()).containsEntry("extraAllowedHosts", 1);
     }
 
+    // ── P1: custom-domain ATS front-ends, without weakening the control ──
+
+    @Test
+    void aCustomDomainAtsFrontEndIsAdmittedWhenConfigured() {
+        // Measured in the F5 audit: 7 of 16 sampled Greenhouse employers serve their board from
+        // their own domain, so 24% of real postings were refused. Naming the host fixes that.
+        ValidationUrlPolicy policy = new ValidationUrlPolicy(true,
+                "careers.airbnb.com,jobs.dropbox.com,instacart.careers", true);
+
+        assertThat(policy.evaluate("https://careers.airbnb.com/positions/8053756").allowed()).isTrue();
+        assertThat(policy.evaluate("https://jobs.dropbox.com/listing/7822807").allowed()).isTrue();
+        assertThat(policy.evaluate("https://instacart.careers/job/?gh_jid=1").allowed()).isTrue();
+    }
+
+    @Test
+    void configuringOneCustomDomainDoesNotAdmitAnother() {
+        ValidationUrlPolicy policy = new ValidationUrlPolicy(true, "careers.airbnb.com", true);
+
+        assertThat(policy.evaluate("https://careers.someoneelse.com/jobs/1").allowed()).isFalse();
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest(name = "a dangerously broad entry ''{0}'' is ignored")
+    @org.junit.jupiter.params.provider.ValueSource(strings = {
+            "com", "io", "net", "org", "co", "co.uk", "careers", "jobs"})
+    void dangerouslyBroadAllowListEntriesAreRejected(String entry) {
+        // Suffix matching means a single bare-TLD entry would admit every host on the internet,
+        // turning the SSRF control into an SSRF vector. A typo must not do that silently.
+        ValidationUrlPolicy policy = new ValidationUrlPolicy(true, entry, true);
+
+        assertThat(policy.describe()).containsEntry("extraAllowedHosts", 0);
+        assertThat(policy.evaluate("https://example.com/careers").allowed()).isFalse();
+    }
+
+    @Test
+    void malformedAllowListEntriesAreDroppedNotAppliedLiterally() {
+        ValidationUrlPolicy policy = new ValidationUrlPolicy(true,
+                "https://careers.acme.com/jobs, *.acme.com, acme.com:8080, careers.good.com", true);
+
+        // Only the one well-formed bare hostname survives. Asserted on the parsed count rather than
+        // by evaluating a URL, because evaluation also performs a DNS lookup and these are not real
+        // hosts — that would test the resolver, not the parser.
+        assertThat(policy.describe()).containsEntry("extraAllowedHosts", 1);
+    }
+
+    @Test
+    void aCustomDomainStillCannotResolveIntoAPrivateRange() {
+        // The address check is not disableable and runs for allow-listed hosts too — this is the
+        // DNS-rebinding case that would otherwise make the allow-list the vulnerability.
+        ValidationUrlPolicy policy = new ValidationUrlPolicy(true, "localtest.me", true);
+
+        // localtest.me resolves to 127.0.0.1 by design.
+        assertThat(policy.evaluate("https://localtest.me/anything").allowed()).isFalse();
+    }
+
+    @Test
+    void aCompanySubdomainOfGreenhouseNeedsNoConfiguration() {
+        // company.greenhouse.io is recognised by host-suffix match, so it never needed an
+        // allowed-hosts entry. Asserted on detection rather than evaluate(), which would also
+        // require the fictional host to resolve in DNS.
+        assertThat(AtsPlatform.detect("https://acme.greenhouse.io/jobs/1"))
+                .isEqualTo(AtsPlatform.GREENHOUSE);
+        assertThat(AtsPlatform.detect("https://careers.acme.lever.co/x")).isEqualTo(AtsPlatform.LEVER);
+        // ...while a lookalike that merely contains the token is not.
+        assertThat(AtsPlatform.detect("https://boards.greenhouse.io.evil.com/x"))
+                .isEqualTo(AtsPlatform.UNKNOWN);
+    }
+
     // ── platform detection ──
 
     @Test

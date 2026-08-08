@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project shape
 
-CareerPilot AI is a three-service monorepo: a **Spring Boot 4 / Java 25 backend** (`backend/`) acts as the control plane, a **Python FastAPI + LangGraph 0.2 agent service** (`agent-service/`) hosts the multi-agent workflow, and a **React 18 + Vite + TS frontend** (`frontend/`) is the UI. They share **one PostgreSQL** database (currently a **Neon serverless** instance, external to docker-compose — see `.env`) with the pgvector extension — backend persists domain data, agent-service persists LangGraph checkpoints into the same DB. Redis, Kafka, and MinIO/S3 run in `docker-compose.yml`.
+CareerPilot AI is a three-service monorepo: a **Spring Boot 4 / Java 25 backend** (`backend/`) acts as the control plane, a **Python FastAPI + LangGraph 0.2 agent service** (`agent-service/`) hosts the multi-agent workflow, and a **React 18 + Vite + TS frontend** (`frontend/`) is the UI. They share **one PostgreSQL** database (currently a **Neon serverless** instance, external to docker-compose — see `.env`) with the pgvector extension — backend persists domain data, agent-service persists LangGraph checkpoints into the same DB. Redis and MinIO/S3 run in `docker-compose.yml`. **Kafka and ZooKeeper were removed entirely** — see "Kafka removal" below.
 
 The backend has grown well past its original vertical slice into ~30 role-based packages (job discovery, resume tailoring, execution/browser automation, workflow tracking, learning, autopilot, company intelligence, career-goal intelligence, etc. — see "Architecture" below for the ones with non-obvious cross-file shape). The great majority of that surface still ships **dark by default** behind independent `*.enabled` feature flags — a package existing, or even having a REST controller, is not evidence it's live in production. Several tables and beans are also intentionally provisioned-but-unwired (see "Provisioned-but-unused" below).
 
@@ -15,13 +15,13 @@ To **launch and smoke-test the whole stack from scratch**, use the `run-careerpi
 ## Commands
 
 ### Run the whole stack (preferred)
-`docker-compose.yml` at the repo root is now **hardened for the Oracle Cloud VM production deploy** (`SPRING_PROFILES_ACTIVE=prod`, no host ports published for `redis`/`kafka`/`minio`/`zookeeper` — only the backend can reach them internally). Running it bare on a dev machine works but hides those services from the host and disables Swagger. For local dev, layer the local-dev overlay on top:
+`docker-compose.yml` at the repo root is now **hardened for the Oracle Cloud VM production deploy** (`SPRING_PROFILES_ACTIVE=prod`, no host ports published for `redis`/`minio` — only the backend can reach them internally). Running it bare on a dev machine works but hides those services from the host and disables Swagger. For local dev, layer the local-dev overlay on top:
 ```bash
 cp .env.example .env
 # Set: JWT_SECRET (>=32 chars), GEMINI_API_KEY, and your Neon DATABASE_URL/DATABASE_URL_PY
 docker compose --env-file .env -f docker-compose.yml -f docker-compose.local.yml up --build
 ```
-[docker-compose.local.yml](docker-compose.local.yml) restores host access to redis/kafka/minio and other local-dev conveniences that were intentionally stripped from the base file for the VM deploy. **Never apply this overlay on the production VM** — the VM runs `docker-compose.yml` alone.
+[docker-compose.local.yml](docker-compose.local.yml) restores host access to redis/minio and other local-dev conveniences that were intentionally stripped from the base file for the VM deploy. **Never apply this overlay on the production VM** — the VM runs `docker-compose.yml` alone.
 
 Frontend on http://localhost:5173, backend on http://localhost:8080 (Swagger at `/swagger-ui.html`), agent service on http://localhost:8088 (`/docs`), MinIO console on http://localhost:9001.
 
@@ -37,18 +37,20 @@ The backend `Dockerfile`'s `JAVA_OPTS` includes `-XX:MaxMetaspaceSize=320m` — 
 | Fact | Value | Why it matters |
 |---|---|---|
 | Total RAM | **5.5 GiB** (2.5 GiB available) | RAM is *not* the binding constraint; earlier 3 GB sizing was too pessimistic |
-| **vCPUs** | **1** | **The real constraint.** Chromium rendering/JS is CPU-bound; one core is shared with the JVM, Kafka, ZK and uvicorn |
+| **vCPUs** | **1** | **The real constraint.** Chromium rendering/JS is CPU-bound; one core is shared with the JVM and uvicorn |
 | Architecture | **aarch64 (ARM64)** | Playwright ships no `linux-arm64` Chromium — distro Chromium via `setExecutablePath`/`setChannel` is mandatory, not optional |
 | Swap | 4 GiB (554 MiB in use) | Swap *does* exist, contrary to earlier notes — but on 1 vCPU, swap thrash is effectively an outage |
 
-Measured per-container memory: backend 621 MiB, **kafka 768 MiB**, **zookeeper 372 MiB**, minio 101 MiB, agent-service 36 MiB, redis 10 MiB, frontend 1 MiB (~1.9 GiB total; the remaining ~1.2 GiB of the 3.1 GiB used is host OS + Nginx + dockerd). **Kafka + ZooKeeper together consume 1.11 GiB — roughly 20% of the box — while this codebase has zero `@KafkaListener` consumers** (see "Provisioned-but-unused"), so every event produced goes nowhere. That remains the single largest available memory recovery.
+Measured per-container memory (taken while Kafka/ZooKeeper were still deployed): backend 621 MiB, kafka 768 MiB, zookeeper 372 MiB, minio 101 MiB, agent-service 36 MiB, redis 10 MiB, frontend 1 MiB.
+
+**Kafka removal.** Kafka and ZooKeeper together consumed 1.11 GiB — roughly 20% of the box — while this codebase had zero `@KafkaListener` consumers, so every event produced went nowhere. Both have been removed: the `kafka`/`zookeeper` compose services, the `spring-kafka` dependency, the `ai.careerpilot.kafka` package (`WorkflowEventProducer`), and all `spring.kafka.*`/`KAFKA_BOOTSTRAP_SERVERS` config are gone. `WorkflowService` no longer publishes on state transitions — persistence to `workflow_runs` is now the sole record of a transition. Do not reintroduce a broker without a real consumer on the other end.
 
 Note the interaction with `-XX:MaxRAMPercentage=50` and the fact that **no service in `docker-compose.yml` has a `mem_limit`**: with container support seeing the whole 5.5 GiB host, the backend JVM's max heap ceiling is ~2.75 GiB even though it currently uses 621 MiB. If it ever expands toward that ceiling while a browser is running, the box goes to swap on a single core. An explicit `-Xmx` plus per-service `mem_limit`s should land before browser automation is enabled.
 
 ### Per-service (no Docker)
 | Service | Command (from service dir) |
 |---|---|
-| backend | `mvn spring-boot:run` (needs Postgres+Kafka+Redis+MinIO running) |
+| backend | `mvn spring-boot:run` (needs Postgres+Redis+MinIO running) |
 | agent-service | `pip install -r requirements.txt && uvicorn app.main:app --reload --port 8088` |
 | frontend | `npm install && npm run dev` |
 
@@ -126,7 +128,6 @@ No new endpoint, DTO, table, or migration. `CareerContext`'s new `recommendedAct
 - assembling the LangGraph input from a `Resume` row + `Job` rows
 - calling `AgentServiceClient` (a `WebClient` wrapper, [agent/AgentServiceClient.java](backend/src/main/java/ai/careerpilot/agent/AgentServiceClient.java))
 - persisting/upserting a `WorkflowRun` row keyed by the LangGraph `thread_id` on every transition
-- publishing a Kafka event via `WorkflowEventProducer` on every state change
 - **converting entity responses to DTOs** via `toResponse(WorkflowRun)` for proper JSON serialization
 
 **DTO pattern for API responses**: Controller methods must return `WorkflowRunResponse` (defined in [WorkflowDtos.java](backend/src/main/java/ai/careerpilot/api/dto/WorkflowDtos.java)), not the raw `WorkflowRun` entity. The DTO uses `Map<String, Object>` for state instead of `JsonNode`, which avoids Jackson type definition errors. The service layer parses the entity's JSON state string into a Map before constructing the DTO. This pattern should be replicated for any entity with complex JSON fields.
@@ -195,7 +196,7 @@ Infrastructure only; **no Java, Python, SQL, migration, endpoint, DTO, or featur
 
 The runtime base moved from `eclipse-temurin:25-jre-alpine` to `debian:bookworm-slim` carrying a copied Temurin JRE, because the Alpine image could not run browser automation for three independently fatal reasons (all verified on the live VM): musl vs glibc (Playwright's Chromium and Node driver are glibc builds), no browser installed and no `~/.cache/ms-playwright`, and ARM — Playwright publishes no `linux-arm64` Chromium, so its download-on-first-use path cannot succeed regardless of libc. The image now installs distro `chromium` (verified `151.0.7922.71` on this exact hardware) plus `fonts-liberation` (without a font, headless Chromium renders blank text — which would silently corrupt the very screenshots the human `FORM_SCREENSHOT` approval gate depends on), `tini` as PID 1 (Chromium spawns children; without a reaper, crashed renderers accumulate as zombies), and `wget` (the compose healthcheck relied on BusyBox's `wget` from Alpine — a latent break caught during this phase). It runs as non-root `careerpilot`, which matters specifically because `--no-sandbox` is mandatory here.
 
-**The `mem_limit`/`-Xmx` pairing is load-bearing and must not be split.** `MaxRAMPercentage=50` sizes the heap from whatever bound it sees, so adding `mem_limit: 2048m` *alone* would grant a 1024m heap; add non-heap (~450m) and a Chromium child process (~600m peak, launched **inside this container** by Playwright) and the container is OOM-killed. An explicit `-Xmx768m` replaces the percentage. `MaxMetaspaceSize=320m` is retained (160m caused a real production crash-loop) and SerialGC is retained and now clearly correct on 1 vCPU. Per-service `mem_limit`s are sized from measured usage; `KAFKA_HEAP_OPTS`/ZooKeeper heaps are capped (they consume ~20% of the box with zero consumers — see "Provisioned-but-unused"). **No `cpus:` caps** — on one core, hard fractional caps worsen contention rather than isolating it.
+**The `mem_limit`/`-Xmx` pairing is load-bearing and must not be split.** `MaxRAMPercentage=50` sizes the heap from whatever bound it sees, so adding `mem_limit: 2048m` *alone* would grant a 1024m heap; add non-heap (~450m) and a Chromium child process (~600m peak, launched **inside this container** by Playwright) and the container is OOM-killed. An explicit `-Xmx768m` replaces the percentage. `MaxMetaspaceSize=320m` is retained (160m caused a real production crash-loop) and SerialGC is retained and now clearly correct on 1 vCPU. Per-service `mem_limit`s are sized from measured usage. **No `cpus:` caps** — on one core, hard fractional caps worsen contention rather than isolating it.
 
 Verified empirically on the production VM rather than reasoned: Chromium installs on bookworm arm64, Temurin 25.0.3 runs on glibc 2.36, headless launch with the exact production flags renders DOM and exits 0 as the non-root user with `shm_size: 256m`. Production containers were untouched throughout. `mvn test` 2375/2375.
 
@@ -458,7 +459,7 @@ API: `GET /api/workflow-definitions`, `POST /api/workflow/register`, `POST /api/
 
 API: `POST /api/orchestrator/run/{missionId}`, `GET /api/orchestrator/status/{missionId}`. Verified via `mvn test` (2099/2099 — 2091 prior + 8 new) and live end-to-end against Neon: running the orchestrator against the Phase 3 mission (one skill action already completed, others still open) correctly recommended `SKILL_ANALYSIS_V1` + `JOB_DISCOVERY_V1` with accurate reasons, skipping the already-completed action.
 
-**Phase 4/5 live-deploy notes**: Docker Desktop crashed mid-session (all containers exited); restarting it re-triggered the recurring `docker-credential-desktop` PATH bug (fixed the same way as documented elsewhere in this file) and Kafka's stale-broker-registration race (fixed with a plain `docker restart kafka`) — both transient, both already-known issues, not code problems.
+**Phase 4/5 live-deploy notes**: Docker Desktop crashed mid-session (all containers exited); restarting it re-triggered the recurring `docker-credential-desktop` PATH bug (fixed the same way as documented elsewhere in this file) and (at the time, before Kafka was removed) a stale-broker-registration race — both transient, neither a code problem.
 
 ### Phase 7A — Mission-Aware Autonomous Career Agent: the agent stays the single execution coordinator
 `ai.careerpilot.career.agent` (Phase 11.6's `AutonomousCareerAgent`, extended — not forked) gained mission awareness: `AgentObservation` carries an optional `MissionContext`, `DefaultAgentPlanner` gained a mission-first planning branch (a `WorkflowType → AgentTaskType` map) that takes priority over the pre-existing Phase 11.6 observation-based planning when mission context is present, and `DefaultAutonomousCareerAgent` gained `observeMission()` plus a provisioned-but-unused `ObjectProvider<ai.careerpilot.mission.WorkflowPlanner>` seam (the Phase 6A.1 narrow interface, not Phase 8's — see the naming note in `ai.careerpilot.workflowplanner`'s package-info). All existing constructors are preserved via delegation — zero breaking change to Phase 11.6's shipped shape. Gated by `career.mission.agent.enabled` (default `false`).
@@ -598,7 +599,7 @@ Flags: `browser.automation.form-engine.enabled` (default `false` — with it off
 
 **The never-submits guarantee is structural, not configuration.** `BrowserFormAutomationEngine` — the only class in this codebase that writes to a page — **is not a dependency of `BrowserValidationHarness` at all**. There is no code path from the harness to an upload, an answer, a submit click, or a multi-step advance, so the guarantee holds by construction rather than by discipline. `BrowserValidationHarnessTest` additionally pins it with `verify(browser, never())` on all nine interaction primitives, so a future edit that introduces one fails loudly. Documents are declared as **availability flags, not loaded**: planning only needs to know *whether* a resume exists to decide if a required file input is a blocking gap, so no resume is ever materialised on disk during validation — a file that is never fetched cannot be uploaded by mistake. Every `ValidationReport` carries `submitted:false`/`documentsUploaded:false`/`questionsAnswered:false` so no consumer can mistake it for a submission record.
 
-**`ValidationUrlPolicy` exists because the harness is an SSRF primitive.** It takes a caller-supplied URL and makes the server fetch it with a full browser — with access to the internal Docker network (`redis`/`kafka`/`minio`) and to cloud metadata. Three independent controls: the trigger lives on the **authenticated** `POST /api/execution/validate-page`, never on the public `/api/diagnostics` surface (reading a past result is safe; triggering a fetch is not); a host allow-list of known public ATS hosts plus operator-added ones; and a resolved-address check rejecting loopback/link-local/private/multicast and the `169.254.169.254` metadata endpoint. **The address check runs for allow-listed hosts too** — DNS is attacker-influenced, and an allow-listed name resolving into a private range is the rebinding case that would make the allow-list the vulnerability rather than the control. Name check runs before address check so an unknown host never triggers a DNS lookup from this server at all. A DNS failure is a denial, not a pass.
+**`ValidationUrlPolicy` exists because the harness is an SSRF primitive.** It takes a caller-supplied URL and makes the server fetch it with a full browser — with access to the internal Docker network (`redis`/`minio`) and to cloud metadata. Three independent controls: the trigger lives on the **authenticated** `POST /api/execution/validate-page`, never on the public `/api/diagnostics` surface (reading a past result is safe; triggering a fetch is not); a host allow-list of known public ATS hosts plus operator-added ones; and a resolved-address check rejecting loopback/link-local/private/multicast and the `169.254.169.254` metadata endpoint. **The address check runs for allow-listed hosts too** — DNS is attacker-influenced, and an allow-listed name resolving into a private range is the rebinding case that would make the allow-list the vulnerability rather than the control. Name check runs before address check so an unknown host never triggers a DNS lookup from this server at all. A DNS failure is a denial, not a pass.
 
 **`AutomationConfidence` is deterministic** (no LLM, same discipline as `RetryPolicyService`/`VerificationAdjudicator`): 60 points required-field coverage, 25 classification coverage, 15 supported-control ratio. **A missing required value caps the band at LOW regardless of score** — without that, a page with 40 mapped fields and one unfillable required resume scores ~85 and reads HIGH, which is precisely the false confidence this whole series exists to prevent. A page declaring *no* required fields reports its required coverage as "unproven rather than satisfied" instead of silently scoring 60/60, because many ATSes enforce requiredness in JavaScript.
 
@@ -753,9 +754,7 @@ Knowing what is *not* wired prevents wasted debugging:
 - `usage_records` table — no code writes to it; cost tracking is not aggregated
 - `embedding` vector columns — no embedding generation anywhere (pgvector extension is installed, but no HNSW/IVFFlat indexes)
 - Redis — `spring-boot-starter-data-redis` on the classpath, no `@Cacheable` / `RedisTemplate` usage
-- `careerpilot.audit.events` topic — declared in config, neither produced nor consumed
 - `security.rate-limit.*` values — read by no limiter (no Bucket4j / RedisRateLimiter)
-- `@KafkaListener` — zero consumers exist; producer events go nowhere
 - `refresh_tokens` table — exists but no refresh endpoint wired
 - `AdaptiveRecommendationEngine.getBoost()` (`learning/recommendation/`) — computed and persisted end-to-end, but not called by `JobScoring`/`JobMatchingService`; live job matching does not use outcome-based learning today despite the pipeline existing
 
@@ -774,7 +773,7 @@ Most later phases ship their own narrower diagnostics controller rather than ext
 
 ## Conventions
 
-- Java package root is `ai.careerpilot`. Sub-packages are role-based: `api` (controllers + DTOs), `service`, `repo`, `domain` (JPA entities), `security`, `kafka`, `storage`, `ai`, `agent`, `config`.
+- Java package root is `ai.careerpilot`. Sub-packages are role-based: `api` (controllers + DTOs), `service`, `repo`, `domain` (JPA entities), `security`, `storage`, `ai`, `agent`, `config`.
 - Python agents live one-file-per-agent under `agent-service/app/agents/`. Each exports a single `<name>_node(state) -> dict` function; the dict is shallow-merged into `CareerState` by LangGraph.
 - New backend endpoints accept `AuthenticatedUser` as a method parameter (see any existing controller) — this is how you get `userId`/`orgId`.
 - Frontend pages live under `src/pages/`, one file each. Routes are registered in [App.tsx](frontend/src/App.tsx) inside the `<Private>`-guarded `<Layout>`.

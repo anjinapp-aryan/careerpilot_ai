@@ -19,5 +19,20 @@ public interface ApplicationSubmissionSessionRepository extends JpaRepository<Ap
 
     Optional<ApplicationSubmissionSession> findByApprovalQueueEntryId(UUID approvalQueueEntryId);
 
+    /**
+     * Sessions in one of {@code statuses} whose last write is older than {@code before} — the work
+     * list for the stranded-session reaper.
+     *
+     * <p>A submission session is driven by a single in-memory thread on the bounded submission
+     * executor. If that thread dies (JVM killed mid-pipeline, dispatch rejected, uncaught Error),
+     * nothing else owns the row: the status column has no next writer and the session sits in an
+     * intermediate state forever. This finder is how such rows are found again.
+     *
+     * <p>Bounded by construction — the caller passes only non-terminal, non-parked statuses, and
+     * the {@code (status)} index already exists.
+     */
+    List<ApplicationSubmissionSession> findByStatusInAndUpdatedAtBefore(List<String> statuses,
+                                                                        java.time.Instant before);
+
     long countByStatus(String status);
 }

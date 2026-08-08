@@ -79,24 +79,6 @@ spring:
       # Single connection-string form: redis://[:password@]host:port, or
       # rediss://... for TLS (Upstash and most managed Redis require TLS).
       url: ${REDIS_URL:redis://localhost:6379}
-  kafka:
-    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
-    producer:
-      key-serializer: org.apache.kafka.common.serialization.StringSerializer
-      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
-      # Spring Boot autoconfigures the ProducerFactory (and reserves its buffer-memory)
-      # at context startup regardless of careerpilot.kafka.enabled, since that flag only
-      # gates whether WorkflowEventProducer publishes. Kafka's own default buffer-memory
-      # is 32MB — trim it hard for memory-constrained deploys (e.g. Render free 512MB).
-      buffer-memory: ${KAFKA_PRODUCER_BUFFER_MEMORY:1048576}
-      properties:
-        max.block.ms: 1000
-    consumer:
-      group-id: careerpilot
-      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
-      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
-      properties:
-        spring.json.trusted.packages: "*"
   servlet:
     multipart:
       max-file-size: 10MB
@@ -698,17 +680,6 @@ storage:
     access-key: ${MINIO_ACCESS_KEY:}
     secret-key: ${MINIO_SECRET_KEY:}
     path-style: true
-
-kafka:
-  topics:
-    workflow-events: careerpilot.workflow.events
-    audit-events: careerpilot.audit.events
-
-careerpilot:
-  kafka:
-    # When false (or Kafka unreachable), workflow event publishing is skipped
-    # silently so a missing/broken broker never breaks the workflow path.
-    enabled: ${KAFKA_ENABLED:true}
 
 # ---- Phase 2 Job Discovery ----
 # Real-job ingest from adapter providers. Keyless providers (RemoteOK, Arbeitnow)

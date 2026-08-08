@@ -11,4 +11,17 @@ public interface ApplicationRetryRepository extends JpaRepository<ApplicationRet
     List<ApplicationRetry> findByApplicationExecutionIdOrderByAttemptAsc(UUID applicationExecutionId);
 
     long countByApplicationExecutionId(UUID applicationExecutionId);
+
+    /** Row shape for {@link #countPerExecution}. */
+    interface RetryCount {
+        UUID getExecutionId();
+        Long getCnt();
+    }
+
+    /** Bulk form of {@link #countByApplicationExecutionId} — one grouped query per page of cards. */
+    @org.springframework.data.jpa.repository.Query(
+            "select r.applicationExecutionId as executionId, count(r) as cnt from ApplicationRetry r "
+                    + "where r.applicationExecutionId in :executionIds group by r.applicationExecutionId")
+    List<RetryCount> countPerExecution(
+            @org.springframework.data.repository.query.Param("executionIds") java.util.Collection<UUID> executionIds);
 }

@@ -40,18 +40,21 @@ public class BrowserMaintenanceScheduler {
     private final boolean maintenanceEnabled;
     private final boolean automationEnabled;
     private final boolean zombieRestartEnabled;
+    private final boolean lifecycleEnabled;
 
     public BrowserMaintenanceScheduler(
             BrowserLeasePool leasePool,
             BrowserSessionManager sessionManager,
             @Value("${browser.automation.maintenance.enabled:false}") boolean maintenanceEnabled,
             @Value("${browser.automation.enabled:false}") boolean automationEnabled,
-            @Value("${browser.automation.maintenance.zombie-restart-enabled:true}") boolean zombieRestartEnabled) {
+            @Value("${browser.automation.maintenance.zombie-restart-enabled:true}") boolean zombieRestartEnabled,
+            @Value("${browser.automation.lifecycle.enabled:true}") boolean lifecycleEnabled) {
         this.leasePool = leasePool;
         this.sessionManager = sessionManager;
         this.maintenanceEnabled = maintenanceEnabled;
         this.automationEnabled = automationEnabled;
         this.zombieRestartEnabled = zombieRestartEnabled;
+        this.lifecycleEnabled = lifecycleEnabled;
     }
 
     /**
@@ -74,15 +77,30 @@ public class BrowserMaintenanceScheduler {
             log.warn("BROWSER_MAINTENANCE lease reclaim failed: {}", e.toString());
         }
 
-        if (!zombieRestartEnabled) return;
+        if (zombieRestartEnabled) {
+            try {
+                // restartIfZombie() is itself a no-op unless the browser genuinely looks wedged AND no
+                // lease is outstanding (see its javadoc) — this scheduler adds a trigger, not a policy.
+                if (sessionManager.restartIfZombie()) {
+                    log.warn("BROWSER_MAINTENANCE restarted a wedged browser during periodic sweep");
+                }
+            } catch (Exception e) {
+                log.warn("BROWSER_MAINTENANCE zombie check failed: {}", e.toString());
+            }
+        }
+
+        // P3 — idle shutdown and periodic recycle. Third independently-isolated half, for the same
+        // reason as the other two: a failure here must not disable lease reclaim or zombie recovery.
+        // Like them, this contributes a trigger and no policy — every safety decision (permit held,
+        // lease registered, context open, which threshold is due) lives in recycleIfDue().
+        if (!lifecycleEnabled) return;
         try {
-            // restartIfZombie() is itself a no-op unless the browser genuinely looks wedged AND no
-            // lease is outstanding (see its javadoc) — this scheduler adds a trigger, not a policy.
-            if (sessionManager.restartIfZombie()) {
-                log.warn("BROWSER_MAINTENANCE restarted a wedged browser during periodic sweep");
+            BrowserSessionManager.RecycleOutcome outcome = sessionManager.recycleIfDue();
+            if (outcome.recycled()) {
+                log.info("BROWSER_MAINTENANCE released the idle browser during periodic sweep (reason={})", outcome);
             }
         } catch (Exception e) {
-            log.warn("BROWSER_MAINTENANCE zombie check failed: {}", e.toString());
+            log.warn("BROWSER_MAINTENANCE lifecycle check failed: {}", e.toString());
         }
     }
 }

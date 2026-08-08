@@ -11,6 +11,12 @@ public interface ApplicationReviewRepository extends JpaRepository<ApplicationRe
 
     Optional<ApplicationReview> findByApplicationPackageId(UUID applicationPackageId);
 
+    /** Bulk presence check for {@link #findByApplicationPackageId} — one query per page of cards. */
+    @org.springframework.data.jpa.repository.Query(
+            "select r.applicationPackageId from ApplicationReview r where r.applicationPackageId in :packageIds")
+    List<UUID> findReviewedPackageIds(
+            @org.springframework.data.repository.query.Param("packageIds") java.util.Collection<UUID> packageIds);
+
     List<ApplicationReview> findByUserIdOrderByUpdatedAtDesc(UUID userId);
 
     long countByVerdict(String verdict);

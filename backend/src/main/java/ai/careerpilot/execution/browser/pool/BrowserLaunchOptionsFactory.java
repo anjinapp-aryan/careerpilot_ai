@@ -119,6 +119,37 @@ public class BrowserLaunchOptionsFactory {
         return args;
     }
 
+    /**
+     * True when an external browser binary is configured, i.e. Playwright is driving a browser it
+     * did not install and therefore must not try to download one.
+     */
+    public boolean usesExternalBrowser() {
+        return !executablePath.isEmpty() || !channel.isEmpty();
+    }
+
+    /**
+     * Environment for the Playwright driver process.
+     *
+     * <p><b>This exists because of a measured, repeating waste.</b> Playwright's Java driver runs
+     * its {@code install} step on the first {@code Playwright.create()} of every process. With an
+     * explicit {@code executable-path} configured — which is mandatory on ARM, where Playwright
+     * publishes no {@code linux-arm64} Chromium at all — that step downloaded Chromium, FFMPEG,
+     * <em>Firefox</em> and <em>WebKit</em> into the container's cache and then the launch used
+     * {@code /usr/bin/chromium} regardless. Measured on a cold container: 83,432 ms of the first
+     * request's latency, hundreds of megabytes of disk in a layer with no volume behind it (so it
+     * repeated on every restart), and a hard dependency on outbound access to
+     * {@code playwright.azureedge.net} — one download attempt in the captured run timed out after
+     * 30s before falling back to a mirror.
+     *
+     * <p>{@code PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD} is only set when an external browser is actually
+     * configured. A developer running with no {@code executable-path} still gets Playwright's own
+     * bundled browsers downloaded as normal, because in that case they are the browser.
+     */
+    public java.util.Map<String, String> driverEnv() {
+        if (!usesExternalBrowser()) return java.util.Map.of();
+        return java.util.Map.of("PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD", "1");
+    }
+
     /** Diagnostics only — never logged with credentials, there are none here. */
     public java.util.Map<String, Object> describe() {
         java.util.Map<String, Object> out = new java.util.LinkedHashMap<>();
@@ -128,6 +159,7 @@ public class BrowserLaunchOptionsFactory {
         out.put("executablePath", executablePath.isEmpty() ? "(playwright bundled)" : executablePath);
         out.put("channel", channel.isEmpty() ? "(none)" : channel);
         out.put("launchTimeoutMs", launchTimeoutMs);
+        out.put("skipBrowserDownload", usesExternalBrowser());
         out.put("args", args());
         return out;
     }

@@ -7,7 +7,6 @@ import ai.careerpilot.api.dto.WorkflowDtos.WorkflowRunResponse;
 import ai.careerpilot.domain.Job;
 import ai.careerpilot.domain.Resume;
 import ai.careerpilot.domain.WorkflowRun;
-import ai.careerpilot.kafka.WorkflowEventProducer;
 import ai.careerpilot.offer.OfferAnalysisService;
 import ai.careerpilot.repo.JobRepository;
 import ai.careerpilot.repo.ResumeRepository;
@@ -34,21 +33,19 @@ public class WorkflowService {
     private final ResumeRepository resumes;
     private final JobRepository jobs;
     private final WorkflowRunRepository runs;
-    private final WorkflowEventProducer events;
     private final ResumeVersionService resumeVersions;
     private final OfferAnalysisService offerAnalysis;
     private final CareerRoadmapPersistenceService careerRoadmapPersistence;
     private final ObjectMapper mapper = new ObjectMapper();
 
     public WorkflowService(AgentServiceClient agent, ResumeRepository resumes, JobRepository jobs,
-                           WorkflowRunRepository runs, WorkflowEventProducer events,
+                           WorkflowRunRepository runs,
                            ResumeVersionService resumeVersions, OfferAnalysisService offerAnalysis,
                            CareerRoadmapPersistenceService careerRoadmapPersistence) {
         this.agent = agent;
         this.resumes = resumes;
         this.jobs = jobs;
         this.runs = runs;
-        this.events = events;
         this.resumeVersions = resumeVersions;
         this.offerAnalysis = offerAnalysis;
         this.careerRoadmapPersistence = careerRoadmapPersistence;
@@ -217,10 +214,6 @@ public class WorkflowService {
                     intOrNull(state, "ats_before"), intOrNull(state, "ats_after"),
                     providerForStage(state, "resume_export"),
                     optimized));
-            events.publishResumeEvent(merged.getThreadId(), "resume.optimization.completed", new HashMap<>(Map.of(
-                    "threadId", merged.getThreadId(),
-                    "resumeId", resumeId.toString(),
-                    "userId", merged.getUserId().toString())));
         } catch (Exception e) {
             log.error("Resume version creation failed for thread={}: {}", merged.getThreadId(), e.toString(), e);
         }
@@ -316,8 +309,6 @@ public class WorkflowService {
         WorkflowRun saved = runs.save(run);
         log.info("Workflow Updated: thread={}, status={}", saved.getThreadId(), saved.getStatus());
         captureGapBAndGapC(saved, state);
-        events.publish(saved.getThreadId(),
-                Map.of("threadId", saved.getThreadId(), "status", saved.getStatus(), "userId", saved.getUserId().toString()));
         return saved;
     }
 

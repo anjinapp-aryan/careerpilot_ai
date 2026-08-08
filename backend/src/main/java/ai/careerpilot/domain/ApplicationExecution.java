@@ -40,6 +40,21 @@ public class ApplicationExecution {
      * rejection of the form does not retry automatically).
      */
     public static final String STATUS_AWAITING_APPROVAL = "AWAITING_APPROVAL";
+
+    /**
+     * Claimed for submission — the browser is (or was) driving the submit click right now.
+     *
+     * <p>Written only by {@code ApplicationExecutionRepository#claimForSubmit}, which transitions
+     * {@code AWAITING_APPROVAL -> SUBMITTING} atomically so exactly one worker can ever proceed to
+     * the irreversible click. Transient in the happy path: every outcome moves on to a terminal
+     * status.
+     *
+     * <p>A row left in {@code SUBMITTING} means the process died mid-submit, so delivery is
+     * genuinely unknown. It is deliberately <b>not</b> auto-recovered: re-driving it would resubmit
+     * an application that may already exist. It needs a human, exactly like
+     * {@link #STATUS_SUBMIT_UNVERIFIED}.
+     */
+    public static final String STATUS_SUBMITTING = "SUBMITTING";
     /**
      * Phase 0 (Browser Automation Platform) — the submit click genuinely happened, but the
      * collected evidence was not strong enough to certify that the application reached the

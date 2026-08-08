@@ -140,6 +140,21 @@ public class BrowserLeasePool {
                     lease.id(), outstanding.size(), maxLeases, waited);
             return lease;
         } catch (RuntimeException e) {
+            // The context was counted the moment sessionManager.newContext() returned, so a failure
+            // AFTER that point (newPage(), setDefaultTimeout()) must decrement it — exactly the
+            // symmetry destroyAndReturnPermit() enforces on the normal path. Without it the
+            // open-context counter drifts up by one per failed acquire and never comes back down:
+            // at five it makes isZombie() permanently true, so the maintenance sweep restarts a
+            // healthy browser every minute, and it pins recycleIfDue() at DEFERRED_CONTEXT_OPEN,
+            // silently disabling idle shutdown with no error anywhere.
+            if (context != null) {
+                try {
+                    sessionManager.contextClosed();
+                } catch (Exception notifyFailure) {
+                    log.warn("BROWSER_POOL contextClosed notify failed during failed acquire: {}",
+                            notifyFailure.toString());
+                }
+            }
             safeClose(context);
             permits.release();
             metrics.recordAcquireFailure();

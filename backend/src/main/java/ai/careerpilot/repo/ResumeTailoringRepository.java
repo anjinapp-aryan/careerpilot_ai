@@ -20,4 +20,15 @@ public interface ResumeTailoringRepository extends JpaRepository<ResumeTailoring
 
     /** Next tailoring_version to assign for a (user, job) pair. */
     long countByUserIdAndJobId(UUID userId, UUID jobId);
+
+    /**
+     * Which of these jobs have a tailored resume at all — presence only, in one query.
+     *
+     * <p>Deliberately projects {@code jobId} rather than returning entities: the card only needs a
+     * boolean, and {@code tailored_resume_text} is a full resume per row.
+     */
+    @org.springframework.data.jpa.repository.Query(
+            "select distinct t.jobId from ResumeTailoring t where t.userId = :userId and t.jobId in :jobIds")
+    List<UUID> findTailoredJobIds(@org.springframework.data.repository.query.Param("userId") UUID userId,
+                                  @org.springframework.data.repository.query.Param("jobIds") java.util.Collection<UUID> jobIds);
 }

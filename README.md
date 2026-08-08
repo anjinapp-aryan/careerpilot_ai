@@ -1,6 +1,6 @@
 # CareerPilot AI
 
-Agentic AI Career Operating System. Multi-agent platform built on LangGraph (Python) with a Spring Boot (Java 25) control plane, React/TypeScript frontend, Postgres+pgvector, Redis, Kafka, and S3-compatible storage.
+Agentic AI Career Operating System. Multi-agent platform built on LangGraph (Python) with a Spring Boot (Java 25) control plane, React/TypeScript frontend, Postgres+pgvector, Redis, and S3-compatible storage.
 
 ## What's in this vertical slice
 
@@ -14,7 +14,6 @@ This is **phase 1 of the build**: a runnable end-to-end skeleton with the archit
 - Application CRUD with status pipeline
 - LangGraph 8-agent workflow with Postgres checkpointing and human-in-the-loop interrupt
 - Dashboard aggregating Career Health / Resume / ATS / Match / Interview / Offer scores
-- Kafka workflow-event emission for downstream observability
 
 ### Phases still to build (next turns)
 - Phase 10: AWS deployment (Terraform/CDK, RDS, ElastiCache, MSK, ECR, ECS Fargate)
@@ -45,7 +44,7 @@ This is **phase 1 of the build**: a runnable end-to-end skeleton with the archit
          │ (cloud, pgvector)│             │ FastAPI + LangGraph  │
          └──────────────────┘             │  8 agents · Gemini   │
                                           └──────────────────────┘
-       Redis · Kafka · MinIO/S3 (all local in docker-compose)
+        Redis · MinIO/S3 (all local in docker-compose)
 ```
 
 LangGraph runs in its own Python service. The Java backend calls it over HTTP; LangGraph persists workflow state with `PostgresSaver` in the shared Postgres so runs can be paused, resumed, and audited.
@@ -79,7 +78,7 @@ Requirements: Docker Desktop, a free Neon Postgres database, a free Gemini API k
 docker compose --env-file .env up --build
 ```
 
-This brings up: `redis`, `zookeeper`, `kafka`, `minio`, `agent-service`, `backend`, `frontend`. Postgres is **not** in the compose stack — the backend connects directly to Neon. On first boot Flyway baselines against whatever schema state Neon is in; if you applied [V1__init.sql](backend/src/main/resources/db/migration/V1__init.sql) manually first, Flyway sees the tables and creates a baseline row at v1 instead of re-running the DDL.
+This brings up: `redis`, `minio`, `agent-service`, `backend`, `frontend`. Postgres is **not** in the compose stack — the backend connects directly to Neon. On first boot Flyway baselines against whatever schema state Neon is in; if you applied [V1__init.sql](backend/src/main/resources/db/migration/V1__init.sql) manually first, Flyway sees the tables and creates a baseline row at v1 instead of re-running the DDL.
 
 Once everything is healthy:
 - Frontend: http://localhost:5173
@@ -132,7 +131,6 @@ careerpilot_ai/
 │   │   ├── api/             REST controllers + DTOs + exception handler
 │   │   ├── config/          Web MVC config
 │   │   ├── domain/          JPA entities (User, Org, Subscription, …)
-│   │   ├── kafka/           Producers
 │   │   ├── repo/            Spring Data JPA repositories
 │   │   ├── security/        JWT filter + service + config
 │   │   ├── service/         AuthService, ResumeService, WorkflowService, …
@@ -175,7 +173,7 @@ careerpilot_ai/
 │   ├── nginx.conf
 │   └── Dockerfile
 │
-├── docker-compose.yml       postgres+pgvector · redis · kafka · minio · backend · agent-service · frontend
+├── docker-compose.yml       postgres+pgvector · redis · minio · backend · agent-service · frontend
 ├── .env.example
 └── README.md
 ```
@@ -218,7 +216,6 @@ OpenAPI docs are auto-generated at `/swagger-ui.html`.
 ## Observability
 
 - Spring Actuator endpoints: `/actuator/health`, `/actuator/metrics`, `/actuator/prometheus`
-- Kafka topic `careerpilot.workflow.events` receives a record on every workflow state transition — wire to your event bus / data lake.
 - Workflow runs persist their full LangGraph state (`workflow_runs.state JSONB`) and the LangGraph PostgresSaver stores per-checkpoint history.
 
 ---

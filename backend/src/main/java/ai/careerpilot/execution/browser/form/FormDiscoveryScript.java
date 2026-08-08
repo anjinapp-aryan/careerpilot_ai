@@ -68,24 +68,30 @@ public final class FormDiscoveryScript {
                 const root = rootOf(el);
                 const find = id => (root.getElementById ? root.getElementById(id)
                                                         : root.querySelector('#' + CSS.escape(id)));
+                // A widget's own placeholder ("Select...") can leak into an authoritative source —
+                // e.g. a generic Select component that defaults aria-label to its placeholder when
+                // no real accessible name was ever wired up. Filtering these out here, not just in
+                // the proximity fallback below, is what stops that placeholder from outranking the
+                // real question sitting nearby but not programmatically associated.
                 const by = el.getAttribute('aria-labelledby');
                 if (by) {
                   const parts = by.split(/\\s+/).map(id => txt(find(id))).filter(Boolean);
-                  if (parts.length) return parts.join(' ');
+                  const joined = parts.join(' ');
+                  if (parts.length && !isPlaceholderText(joined)) return joined;
                 }
                 const aria = el.getAttribute('aria-label');
-                if (aria && aria.trim()) return aria.trim();
+                if (aria && aria.trim() && !isPlaceholderText(aria.trim())) return aria.trim();
                 if (el.id) {
                   const l = root.querySelector('label[for="' + CSS.escape(el.id) + '"]');
-                  if (l && txt(l)) return txt(l);
+                  if (l && txt(l) && !isPlaceholderText(txt(l))) return txt(l);
                 }
                 const wrap = el.closest('label');
-                if (wrap && txt(wrap)) return txt(wrap);
+                if (wrap && txt(wrap) && !isPlaceholderText(txt(wrap))) return txt(wrap);
                 // Fieldset legend, walking the whole fieldset hierarchy rather than one level, so a
                 // control nested two groups deep still inherits the question it belongs to.
                 for (let fs = el.closest('fieldset'); fs; fs = fs.parentElement && fs.parentElement.closest('fieldset')) {
                   const lg = fs.querySelector('legend');
-                  if (lg && txt(lg)) return txt(lg);
+                  if (lg && txt(lg) && !isPlaceholderText(txt(lg))) return txt(lg);
                 }
                 const desc = el.getAttribute('aria-describedby');
                 if (desc) {

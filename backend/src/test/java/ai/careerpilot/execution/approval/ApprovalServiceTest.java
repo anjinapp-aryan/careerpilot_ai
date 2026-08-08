@@ -41,6 +41,31 @@ class ApprovalServiceTest {
         when(queue.save(any(ApprovalQueueEntry.class))).thenAnswer(inv -> inv.getArgument(0));
     }
 
+    /**
+     * P7 Action 2 — approve()/reject() now claim via {@link ApprovalQueueRepository#claimDecision},
+     * an atomic conditional UPDATE (see the real-Postgres concurrency proof in
+     * ApprovalServiceConcurrencyTest), not a read-then-save. A winning claim is simulated here by
+     * stubbing claimDecision to return 1 and re-stubbing findById to return the post-claim row —
+     * the same two-step shape the real repository method + a follow-up findById produce.
+     */
+    private void stubWinningClaim(ApprovalQueueEntry preClaim, String newStatus) {
+        when(queue.findById(approvalId)).thenReturn(Optional.of(preClaim));
+        when(queue.claimDecision(eq(approvalId), eq(newStatus), any(), any(), any()))
+                .thenAnswer(inv -> {
+                    // Mutated in place rather than via toBuilder (not enabled on this Lombok
+                    // @Builder) — fine here since each test constructs its own fresh entity.
+                    preClaim.setStatus(newStatus);
+                    when(queue.findById(approvalId)).thenReturn(Optional.of(preClaim));
+                    return 1;
+                });
+    }
+
+    /** A losing/racing claim: the row is already in {@code currentStatus}, claimDecision always refuses. */
+    private void stubLosingClaim(ApprovalQueueEntry current) {
+        when(queue.findById(approvalId)).thenReturn(Optional.of(current));
+        when(queue.claimDecision(eq(approvalId), any(), any(), any(), any())).thenReturn(0);
+    }
+
     private ApprovalService service(boolean enabled) {
         return new ApprovalService(queue, audit, new ApprovalMetrics(), events, enabled);
     }
@@ -71,10 +96,9 @@ class ApprovalServiceTest {
 
     @Test
     void approveTransitionsToApprovedAndPublishesEvent() {
-        when(queue.findById(approvalId)).thenReturn(Optional.of(pending()));
+        stubWinningClaim(pending(), ApprovalQueueEntry.STATUS_APPROVED);
         ApprovalQueueEntry r = service(true).approve(approvalId, userId, "boss@x.com", "looks good");
         assertThat(r.getStatus()).isEqualTo(ApprovalQueueEntry.STATUS_APPROVED);
-        assertThat(r.getDecidedBy()).isEqualTo("boss@x.com");
         verify(events).publishEvent(any(ApprovalGrantedEvent.class));
     }
 
@@ -82,7 +106,7 @@ class ApprovalServiceTest {
     void approveOnAlreadyApprovedRowConflicts() {
         ApprovalQueueEntry approved = pending();
         approved.setStatus(ApprovalQueueEntry.STATUS_APPROVED);
-        when(queue.findById(approvalId)).thenReturn(Optional.of(approved));
+        stubLosingClaim(approved);
         assertThatThrownBy(() -> service(true).approve(approvalId, userId, "boss@x.com", null))
                 .isInstanceOf(IllegalStateException.class);
         verify(events, never()).publishEvent(any());
@@ -92,9 +116,20 @@ class ApprovalServiceTest {
     void approveOnRejectedRowConflicts() {
         ApprovalQueueEntry rejected = pending();
         rejected.setStatus(ApprovalQueueEntry.STATUS_REJECTED);
-        when(queue.findById(approvalId)).thenReturn(Optional.of(rejected));
+        stubLosingClaim(rejected);
         assertThatThrownBy(() -> service(true).approve(approvalId, userId, "boss@x.com", null))
                 .isInstanceOf(IllegalStateException.class);
+    }
+
+    /** P7 Action 2 — the race this action closes: claimDecision refuses even though the row IS PENDING. */
+    @Test
+    void approveConflictsWhenAConcurrentCallerAlreadyWonTheClaim() {
+        when(queue.findById(approvalId)).thenReturn(Optional.of(pending()));
+        when(queue.claimDecision(eq(approvalId), eq(ApprovalQueueEntry.STATUS_APPROVED), any(), any(), any()))
+                .thenReturn(0);
+        assertThatThrownBy(() -> service(true).approve(approvalId, userId, "boss@x.com", null))
+                .isInstanceOf(IllegalStateException.class);
+        verify(events, never()).publishEvent(any());
     }
 
     @Test
@@ -102,6 +137,7 @@ class ApprovalServiceTest {
         when(queue.findById(approvalId)).thenReturn(Optional.of(pending()));
         assertThatThrownBy(() -> service(true).approve(approvalId, UUID.randomUUID(), "hacker@x.com", null))
                 .isInstanceOf(SecurityException.class);
+        verify(queue, never()).claimDecision(any(), any(), any(), any(), any());
         verify(events, never()).publishEvent(any());
     }
 
@@ -116,7 +152,7 @@ class ApprovalServiceTest {
 
     @Test
     void rejectTransitionsToRejectedAndPublishesNothing() {
-        when(queue.findById(approvalId)).thenReturn(Optional.of(pending()));
+        stubWinningClaim(pending(), ApprovalQueueEntry.STATUS_REJECTED);
         ApprovalQueueEntry r = service(true).reject(approvalId, userId, "boss@x.com", "not a fit");
         assertThat(r.getStatus()).isEqualTo(ApprovalQueueEntry.STATUS_REJECTED);
         verify(events, never()).publishEvent(any());
@@ -126,7 +162,7 @@ class ApprovalServiceTest {
     void rejectOnTerminalRowConflicts() {
         ApprovalQueueEntry approved = pending();
         approved.setStatus(ApprovalQueueEntry.STATUS_APPROVED);
-        when(queue.findById(approvalId)).thenReturn(Optional.of(approved));
+        stubLosingClaim(approved);
         assertThatThrownBy(() -> service(true).reject(approvalId, userId, "boss@x.com", null))
                 .isInstanceOf(IllegalStateException.class);
     }

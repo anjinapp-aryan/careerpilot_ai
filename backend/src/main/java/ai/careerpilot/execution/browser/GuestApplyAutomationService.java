@@ -192,7 +192,10 @@ public class GuestApplyAutomationService {
             // ADD fields (resume upload, cover letter, screening questions) that the connector
             // never knew about — it cannot regress a field the connector already filled correctly.
             // With the flag off this is a no-op and attemptFill is byte-identical to Phase 12B.
-            FormFillReport formReport = runFormEngine(exec);
+            // P7 Action 4 — no RunContext threaded through here: attemptFill had zero P5
+            // instrumentation before this action, and adding a full stage sequence to it is a
+            // separate, larger scope decision (see the Action 4 gate report), not an oversight.
+            FormFillReport formReport = runFormEngine(exec, null);
 
             // A required field we cannot honestly fill means this application would be incomplete.
             // Abort to human review rather than parking an approval: asking someone to approve a
@@ -288,7 +291,7 @@ public class GuestApplyAutomationService {
             // this the resume would be attached to the screenshot the human approved and then
             // absent from the application actually submitted.
             openStage = timeline.started(run, ai.careerpilot.execution.timeline.ExecutionStage.FIELD_FILL_COMPLETED);
-            FormFillReport formReport = runFormEngine(exec);
+            FormFillReport formReport = runFormEngine(exec, run);
             if (formReport.hasBlockingGaps()) {
                 // The most important sentence this timeline can produce: the run stopped here, and
                 // it stopped because a required field had no verified value — not because anything
@@ -445,7 +448,8 @@ public class GuestApplyAutomationService {
      * {@code ApplicationPackage}. Never throws — a form-engine failure degrades to "the connector's
      * own fields were filled", which is exactly the Phase 12B behaviour.
      */
-    private FormFillReport runFormEngine(ApplicationExecution exec) {
+    private FormFillReport runFormEngine(ApplicationExecution exec,
+                                         ai.careerpilot.execution.timeline.ExecutionTimelineRecorder.RunContext run) {
         if (formEngine == null || !formEngine.isEnabled()) return FormFillReport.notRun();
         Path resumeTmp = null;
         try {
@@ -468,7 +472,7 @@ public class GuestApplyAutomationService {
                     coverLetterText);
 
             BrowserFormAutomationEngine.FillOutcome outcome =
-                    formEngine.fillForm(exec.getUserId(), sessionId, docs);
+                    formEngine.fillForm(exec.getUserId(), sessionId, docs, run);
 
             if (!outcome.attempted()) return FormFillReport.notRun();
             log.info("GUEST_APPLY form engine execution={} filled={} skipped={} blocking={}",

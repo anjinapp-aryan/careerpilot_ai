@@ -2,6 +2,7 @@ package ai.careerpilot.repo;
 
 import ai.careerpilot.domain.ApplicationExecution;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.util.List;
@@ -41,8 +42,24 @@ public interface ApplicationExecutionRepository extends JpaRepository<Applicatio
      * no longer {@code AWAITING_APPROVAL} after the first winner, so every later caller sees zero
      * rows affected and stops.
      *
+     * <p><b>P7 Action 1 — {@code @Transactional} is load-bearing here, not decorative.</b> A live
+     * Testcontainers/Postgres reproduction proved that without it, every call from {@code
+     * ApplicationExecutionService.finalizeGuestApplySubmit} (deliberately not {@code @Transactional}
+     * itself, and called from a bounded executor thread with no ambient transaction) threw {@code
+     * jakarta.persistence.TransactionRequiredException: No active transaction for update or delete
+     * query} — caught by that method's own catch block, logged, and silently returned. The entire
+     * guest-apply real-submit path was therefore never reaching a claim at all: not "sometimes
+     * double-submits," but "never submits." Spring Data's repository proxy does not synthesize a
+     * default transaction for a bare {@code @Modifying} query method; it only ever finds one if
+     * {@code @Transactional} is actually declared somewhere on the method/class chain. Declaring it
+     * directly on this method (rather than requiring the caller to be {@code @Transactional}) keeps
+     * the transaction scoped to exactly this one UPDATE, matching the original design intent
+     * described above — the browser work that follows the claim in {@code finalizeGuestApplySubmit}
+     * still runs with no open transaction.
+     *
      * @return 1 when this caller won the claim, 0 when someone else already has it
      */
+    @Transactional
     @org.springframework.data.jpa.repository.Modifying
     @org.springframework.data.jpa.repository.Query(value = """
             UPDATE application_execution
@@ -55,6 +72,14 @@ public interface ApplicationExecutionRepository extends JpaRepository<Applicatio
 
     /** Phase 7.16.3 — the Automation Recovery Center's retry queue: due RETRY rows. */
     List<ApplicationExecution> findByExecutionStatusAndNextRetryAtBefore(String executionStatus, Instant before);
+
+    /**
+     * P7 Action 4 — stale rows of any status, by age since creation. Used for {@code SUBMITTING}
+     * (a stale row means the process died or is still working between the atomic claim and the
+     * terminal write — see {@link ApplicationExecution#STATUS_SUBMITTING}'s own javadoc), but
+     * intentionally not named for that one status since the query itself is generic.
+     */
+    List<ApplicationExecution> findByExecutionStatusAndCreatedAtBefore(String executionStatus, Instant before);
 
     // ── Phase 7.16.4 — Operations Center aggregation. All additive counts/bounded reads; no new
     // persistence, just query surface for data that already exists on this entity. ──

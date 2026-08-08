@@ -105,6 +105,10 @@ class GuestApplyAutomationServiceTest {
             ai.careerpilot.execution.browser.form.BrowserFormAutomationEngine.FillOutcome outcome) {
         when(formEngine.isEnabled()).thenReturn(true);
         when(formEngine.fillForm(any(), any(), any())).thenReturn(outcome);
+        // P7 Action 4 — finalizeSubmit calls the new 4-arg (timeline-aware) overload; attemptFill
+        // still calls the pre-existing 3-arg one. Stubbing both keeps this helper usable by tests
+        // exercising either path without each test needing to know which overload its own call site uses.
+        when(formEngine.fillForm(any(), any(), any(), any())).thenReturn(outcome);
     }
 
     /**
@@ -158,7 +162,14 @@ class GuestApplyAutomationServiceTest {
     @Test
     void aFormEngineFailureDegradesToTheConnectorOnlyBehaviour() {
         when(formEngine.isEnabled()).thenReturn(true);
+        // P7 Action 4 — attemptFill's internal call now always goes through runFormEngine's single
+        // call site, which passes a (null, for attemptFill) RunContext into the 4-arg overload.
+        // Stubbing only the 3-arg matcher here would leave the real call unstubbed (Mockito default:
+        // returns null), which happens to degrade to the same outcome via a NullPointerException
+        // instead of the IllegalStateException this test means to exercise — stubbing both keeps the
+        // test honest about which failure it's actually proving.
         when(formEngine.fillForm(any(), any(), any())).thenThrow(new IllegalStateException("engine exploded"));
+        when(formEngine.fillForm(any(), any(), any(), any())).thenThrow(new IllegalStateException("engine exploded"));
         when(approvalService.enqueueFormScreenshot(any(), any(), any(), any(), any(), anyString()))
                 .thenReturn(Optional.of(ApprovalQueueEntry.builder().id(UUID.randomUUID()).build()));
 
@@ -176,6 +187,7 @@ class GuestApplyAutomationServiceTest {
         service.attemptFill(exec(), job(), connector("greenhouse"));
 
         verify(formEngine, never()).fillForm(any(), any(), any());
+        verify(formEngine, never()).fillForm(any(), any(), any(), any());
     }
 
     @Test

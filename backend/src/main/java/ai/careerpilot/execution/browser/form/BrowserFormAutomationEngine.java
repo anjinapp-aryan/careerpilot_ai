@@ -1,6 +1,9 @@
 package ai.careerpilot.execution.browser.form;
 
 import ai.careerpilot.execution.browser.PlaywrightAutomationProvider;
+import ai.careerpilot.execution.timeline.ExecutionStage;
+import ai.careerpilot.execution.timeline.ExecutionTimelineRecorder;
+import ai.careerpilot.execution.timeline.FailureCategory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -47,6 +50,16 @@ public class BrowserFormAutomationEngine {
     private final FormAutomationMetrics metrics;
     private final boolean enabled;
     private final boolean requireUploadVerification;
+    /**
+     * P7 Action 4 — observability only; every method on it is total (see its own javadoc), so this
+     * dependency can never change whether or how a form is filled. Always the real bean: it is the
+     * per-call {@link ExecutionTimelineRecorder.RunContext}, not this reference, that is null for
+     * the pre-existing 3-arg {@link #fillForm(UUID, UUID, DocumentPaths)} overload — the recorder's
+     * own null-run handling then makes every stage call a no-op, so that overload (used by {@code
+     * attemptFill} and {@code MultiStepExecutionOrchestrator}) is byte-identical to before this
+     * action.
+     */
+    private final ExecutionTimelineRecorder timeline;
 
     public BrowserFormAutomationEngine(
             PlaywrightAutomationProvider browser,
@@ -54,6 +67,7 @@ public class BrowserFormAutomationEngine {
             ValidationErrorDetector validationDetector,
             MultiStepFormNavigator navigator,
             FormAutomationMetrics metrics,
+            ExecutionTimelineRecorder timeline,
             @Value("${browser.automation.form-engine.enabled:false}") boolean enabled,
             @Value("${browser.automation.form-engine.require-upload-verification:true}") boolean requireUploadVerification) {
         this.browser = browser;
@@ -61,6 +75,7 @@ public class BrowserFormAutomationEngine {
         this.validationDetector = validationDetector;
         this.navigator = navigator;
         this.metrics = metrics;
+        this.timeline = timeline;
         this.enabled = enabled;
         this.requireUploadVerification = requireUploadVerification;
     }
@@ -112,6 +127,21 @@ public class BrowserFormAutomationEngine {
      * safety checks ran against.
      */
     public FillOutcome fillForm(UUID userId, UUID sessionId, DocumentPaths documents) {
+        return fillForm(userId, sessionId, documents, null);
+    }
+
+    /**
+     * P7 Action 4 — same as {@link #fillForm(UUID, UUID, DocumentPaths)}, additionally instrumenting
+     * the engine's three real internal seams (discovery, resolution, document upload) on the P5
+     * execution timeline. {@code run} is null for the pre-existing overload above — {@link
+     * ExecutionTimelineRecorder} already treats a null/unusable run as a no-op at every call, so
+     * that overload's behaviour is unchanged by this addition. This overload is currently called
+     * only from {@code GuestApplyAutomationService.finalizeSubmit} — the pre-click, pre-approval
+     * {@code attemptFill} path and {@code MultiStepExecutionOrchestrator} keep using the 3-arg form,
+     * a deliberate scope decision (see the P7 Action 4 gate report), not an oversight.
+     */
+    public FillOutcome fillForm(UUID userId, UUID sessionId, DocumentPaths documents,
+                                ExecutionTimelineRecorder.RunContext run) {
         if (!enabled) return FillOutcome.disabled();
 
         long start = System.currentTimeMillis();
@@ -123,24 +153,54 @@ public class BrowserFormAutomationEngine {
             int dismissed = browser.dismissOverlays();
             if (dismissed > 0) evidence.put("overlaysDismissed", dismissed);
 
+            UUID discoveryStage = timeline.started(run, ExecutionStage.FORM_DISCOVERY_STARTED);
             List<DiscoveredField> discovered = FormDiscoveryScript.parse(
                     browser.evaluate(FormDiscoveryScript.DISCOVER_FIELDS));
             evidence.put("fieldsDiscovered", discovered.size());
             if (discovered.isEmpty()) {
                 metrics.recordFailure();
+                timeline.failed(discoveryStage, FailureCategory.QUESTION_PARSING,
+                        "no form fields discovered on the page");
                 return FillOutcome.failed("no form fields discovered on the page", evidence);
             }
+            timeline.completed(discoveryStage, Map.of("fieldsDiscovered", discovered.size()));
+            timeline.mark(run, ExecutionStage.FORM_DISCOVERED, Map.of("fieldsDiscovered", discovered.size()));
+
+            // Questions Extracted is a real, distinct checkpoint even though it shares the discovery
+            // call's timing: it marks the moment the raw DOM signals become the counted question set
+            // the planner will operate on. No separate browser round-trip backs it, so it is a mark
+            // (instant), never a started/completed pair with its own duration.
+            long requiredCount = discovered.stream().filter(DiscoveredField::required).count();
+            timeline.mark(run, ExecutionStage.QUESTIONS_EXTRACTED, Map.of(
+                    "questionCount", discovered.size(), "requiredQuestionCount", requiredCount));
 
             FormFillPlanner.Documents planDocs = new FormFillPlanner.Documents(
                     docs.resume() != null, docs.coverLetter() != null, docs.coverLetterText());
+            UUID resolveStage = timeline.started(run, ExecutionStage.QUESTIONS_RESOLVED);
             FormFillPlan plan = planner.plan(discovered, userId, sessionId, planDocs);
             evidence.put("plan", plan.summary());
+            timeline.completed(resolveStage, Map.of(
+                    "resolvedCount", plan.fills().size(),
+                    "unresolvedCount", plan.unresolved().size(),
+                    "blockedCount", plan.blockingGaps().size()));
 
             List<String> filled = new ArrayList<>();
             Map<String, String> skipped = new LinkedHashMap<>();
             for (FormFillPlan.UnresolvedField u : plan.unresolved()) {
                 skipped.put(u.field().displayName(), u.reason());
             }
+
+            // Document upload has no separable loop of its own — uploads and ordinary fills share
+            // the same fill loop below. Counting the planned uploads up front, rather than
+            // restructuring the loop, keeps this purely additive: the fill order and applyFill
+            // logic are byte-for-byte unchanged.
+            long plannedUploads = plan.fills().stream()
+                    .filter(f -> FormFillPlanner.DocumentSlot.fromToken(f.value()) != null)
+                    .count();
+            UUID uploadStage = plannedUploads > 0
+                    ? timeline.started(run, ExecutionStage.DOCUMENT_UPLOAD_STARTED,
+                            Map.of("plannedUploads", plannedUploads))
+                    : null;
 
             for (FormFillPlan.PlannedFill fill : plan.fills()) {
                 String outcome = applyFill(fill, docs);
@@ -152,6 +212,25 @@ public class BrowserFormAutomationEngine {
                     // success. If it was required, it becomes a blocking gap below.
                     skipped.put(fill.field().displayName(), outcome);
                     metrics.recordFieldFailed();
+                }
+            }
+
+            if (uploadStage != null) {
+                long uploadsFailed = plan.fills().stream()
+                        .filter(f -> FormFillPlanner.DocumentSlot.fromToken(f.value()) != null)
+                        .filter(f -> skipped.containsKey(f.field().displayName()))
+                        .count();
+                if (uploadsFailed > 0) {
+                    timeline.failed(uploadStage, FailureCategory.UPLOAD,
+                            uploadsFailed + " of " + plannedUploads + " planned upload(s) failed");
+                } else {
+                    timeline.completed(uploadStage, Map.of("uploadsCompleted", plannedUploads));
+                    // Matching the FORM_DISCOVERY_STARTED/FORM_DISCOVERED convention: the started/
+                    // completed pair closes the timed row, and this instant mark is the distinct
+                    // DOCUMENT_UPLOAD_COMPLETED stage a reader can query for directly, rather than
+                    // needing to know DOCUMENT_UPLOAD_STARTED's row can itself carry COMPLETED status.
+                    timeline.mark(run, ExecutionStage.DOCUMENT_UPLOAD_COMPLETED,
+                            Map.of("uploadsCompleted", plannedUploads));
                 }
             }
 

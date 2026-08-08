@@ -12,7 +12,9 @@ package ai.careerpilot.execution.timeline;
  * <p><b>Only stages this platform can genuinely reach are listed.</b> The declaration order is the
  * order a healthy run visits them, so {@link #ordinal()} is a legitimate "how far did it get"
  * comparison, and {@link #displayName()} is what the Operations Center renders. A stage with no
- * real producer would make the timeline claim work happened that never did, so there are none.
+ * real producer would make the timeline claim work happened that never did, so there are none —
+ * with one documented exception, {@link #ANSWER_CONFIDENCE_COMPUTED}, kept declared but
+ * deliberately unproduced (see its own javadoc for why).
  */
 public enum ExecutionStage {
 
@@ -29,10 +31,23 @@ public enum ExecutionStage {
 
     ATS_IDENTIFIED("ATS Identified"),
     PAGE_CLASSIFIED("Page Classified"),
+    /** P7 Action 4 — the timed pair for discovery; {@link #FORM_DISCOVERED} is its instant completion mark. */
+    FORM_DISCOVERY_STARTED("Form Discovery Started"),
     FORM_DISCOVERED("Form Discovered"),
 
     QUESTIONS_EXTRACTED("Questions Extracted"),
     QUESTIONS_RESOLVED("Questions Resolved"),
+    /**
+     * P7 Action 4 — audited and left deliberately unproduced. No uniform "compute confidence" step
+     * exists across the resolution pipeline: a confidence band is only ever computed for the one
+     * {@code AnswerResolver} source that consults the employer answer library (see {@code
+     * AnswerResolver#fromEmployerLibrary}); every other source resolves deterministically with no
+     * confidence concept at all. Emitting this stage for the whole plan would claim a computation
+     * that, for most fields, never happens — exactly what this timeline's own design principle
+     * ("a stage with no real producer would make the timeline claim work happened that never did")
+     * forbids. Kept declared (not removed) so a future phase that adds a genuine per-plan confidence
+     * computation has a name already reserved for it.
+     */
     ANSWER_CONFIDENCE_COMPUTED("Answer Confidence Computed"),
 
     DOCUMENT_UPLOAD_STARTED("Document Upload Started"),

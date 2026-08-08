@@ -311,6 +311,13 @@ public class ApplicationExecutionService {
                 // distinction has to be preserved instead of collapsed into SUBMITTED.
                 exec.setCheckpoint(ExecutionCheckpoint.SUBMIT_CLICKED);
                 VerificationStatus verdict = VerificationStatus.UNKNOWN;
+                // P7 Action 4 — the existing SubmissionVerificationService already persists its own
+                // full evidence (confirmationNumber/verificationStatus/verificationMethod on this
+                // same row, plus its own TimelineService append). This P5 stage is a thin marker
+                // recording only the pass/fail fact and duration on the execution timeline, not a
+                // duplicate of that evidence.
+                UUID verificationStage = timeline.started(run,
+                        ai.careerpilot.execution.timeline.ExecutionStage.VERIFICATION_STARTED);
                 try {
                     VerificationResult result = verification.verify(exec, connector, outcome.confirmationReference());
                     if (result != null && result.status() != null) {
@@ -323,10 +330,16 @@ public class ApplicationExecutionService {
                 exec.setCheckpoint(ExecutionCheckpoint.VERIFICATION_COMPLETE);
 
                 if (verdict == VerificationStatus.VERIFIED) {
+                    timeline.completed(verificationStage, java.util.Map.of("verdict", verdict.name()));
+                    timeline.mark(run, ai.careerpilot.execution.timeline.ExecutionStage.VERIFICATION_COMPLETED,
+                            java.util.Map.of("verdict", verdict.name()));
                     terminal(exec, ApplicationExecution.STATUS_SUBMITTED, null, start);
                 } else {
                     log.info("APP_EXECUTION submit unverified execution={} verdict={} — recorded as {} not SUBMITTED",
                             exec.getId(), verdict, ApplicationExecution.STATUS_SUBMIT_UNVERIFIED);
+                    timeline.failed(verificationStage,
+                            ai.careerpilot.execution.timeline.FailureCategory.VERIFICATION,
+                            "verification returned " + verdict);
                     terminal(exec, ApplicationExecution.STATUS_SUBMIT_UNVERIFIED,
                             "submit click completed but verification returned " + verdict, start);
                 }
@@ -554,6 +567,17 @@ public class ApplicationExecutionService {
         exec.setFailureReason(ApplicationExecution.STATUS_SUBMITTED.equals(status) ? null : reason);
         exec.setCompletedAt(Instant.now());
         executions.save(exec);
+        // P7 Action 4 — closes the last declared-but-unproduced P5 stage: the terminal write is the
+        // one operation every execution outcome (SUBMITTED/ABORTED/FAILED/SUBMIT_UNVERIFIED) shares,
+        // so this is the one place a universal "the result was written down" marker is honest.
+        // A fresh RunContext is built from `exec` (not threaded as a parameter) because terminal()
+        // is called from every execute()/cancel()/requestManualReview() path, most of which never
+        // constructed one — building it here costs nothing and the recorder already no-ops safely
+        // when the flag is off or an id is missing.
+        timeline.mark(new ai.careerpilot.execution.timeline.ExecutionTimelineRecorder.RunContext(
+                        exec.getId(), exec.getUserId(), exec.getJobId()),
+                ai.careerpilot.execution.timeline.ExecutionStage.RESULT_PERSISTED,
+                java.util.Map.of("finalStatus", status));
         switch (status) {
             case ApplicationExecution.STATUS_SUBMITTED -> metrics.recordSubmitted();
             case ApplicationExecution.STATUS_ABORTED -> metrics.recordAborted();

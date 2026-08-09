@@ -42,6 +42,15 @@ public class ApplicationSubmissionSession {
     /** Phase 7.16.5 — reached from SUBMITTING instead of SUBMITTED whenever no genuine automated submission occurred (no configured/eligible execution backend, or the Gap D guest-apply form-screenshot approval is still pending). Never render this as "Submitted"/"Completed" — the package is real and ready, but the user must complete submission themselves. */
     public static final String STATUS_WAITING_MANUAL_SUBMISSION = "WAITING_MANUAL_SUBMISSION";
     /**
+     * Guided Apply — the candidate explicitly confirmed they completed the employer's application
+     * themselves, reached only from {@link #STATUS_WAITING_MANUAL_SUBMISSION} via an explicit
+     * user action (never inferred). Deliberately distinct from both {@link #STATUS_SUBMITTED} and
+     * {@link #STATUS_SUBMIT_UNVERIFIED}: those describe CareerPilot's own automation clicking
+     * submit; this describes a claim CareerPilot never verified itself — see
+     * {@code userReportedSubmittedAt}/{@code userSubmissionNote}.
+     */
+    public static final String STATUS_USER_REPORTED_SUBMITTED = "USER_REPORTED_SUBMITTED";
+    /**
      * Phase 0 (Browser Automation Platform) — the automation genuinely clicked submit, but the
      * evidence was not strong enough to certify it reached the employer (the linked
      * {@code ApplicationExecution} is {@code SUBMIT_UNVERIFIED}).
@@ -83,6 +92,10 @@ public class ApplicationSubmissionSession {
 
     @Column(name = "started_at") private Instant startedAt;
     @Column(name = "completed_at") private Instant completedAt;
+
+    /** Guided Apply — set only by {@code ApplicationSubmissionSessionService#reportUserSubmitted}. */
+    @Column(name = "user_reported_submitted_at") private Instant userReportedSubmittedAt;
+    @Column(name = "user_submission_note", columnDefinition = "text") private String userSubmissionNote;
 
     @CreationTimestamp @Column(name = "created_at", updatable = false) private Instant createdAt;
     @UpdateTimestamp @Column(name = "updated_at") private Instant updatedAt;

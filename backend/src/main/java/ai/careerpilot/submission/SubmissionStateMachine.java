@@ -16,7 +16,7 @@ public final class SubmissionStateMachine {
 
     private SubmissionStateMachine() {}
 
-    private static final Set<String> TERMINAL = Set.of(STATUS_COMPLETED, STATUS_FAILED);
+    private static final Set<String> TERMINAL = Set.of(STATUS_COMPLETED, STATUS_FAILED, STATUS_USER_REPORTED_SUBMITTED);
 
     private static final Map<String, Set<String>> FORWARD = Map.ofEntries(
             Map.entry(STATUS_CREATED, Set.of(STATUS_VALIDATING)),
@@ -42,7 +42,10 @@ public final class SubmissionStateMachine {
             Map.entry(STATUS_SUBMITTING, Set.of(STATUS_SUBMITTED, STATUS_SUBMIT_UNVERIFIED,
                     STATUS_WAITING_MANUAL_SUBMISSION)),
             Map.entry(STATUS_SUBMIT_UNVERIFIED, Set.of(STATUS_TRACKING)),
-            Map.entry(STATUS_WAITING_MANUAL_SUBMISSION, Set.of()),
+            // Guided Apply — the one legal way out of the dead end: an explicit user confirmation
+            // that they completed the employer's application themselves. Never reached any other
+            // way (no automatic inference, no timer, no retry).
+            Map.entry(STATUS_WAITING_MANUAL_SUBMISSION, Set.of(STATUS_USER_REPORTED_SUBMITTED)),
             // Phase 7.16.1 — VERIFYING inserted so VERIFIED is never a bare transition; it can
             // only be reached after a real evidence check. VERIFICATION_FAILED is deliberately
             // NOT terminal — it still proceeds to TRACKING (the application likely was
@@ -52,6 +55,30 @@ public final class SubmissionStateMachine {
             Map.entry(STATUS_VERIFIED, Set.of(STATUS_TRACKING)),
             Map.entry(STATUS_VERIFICATION_FAILED, Set.of(STATUS_TRACKING)),
             Map.entry(STATUS_TRACKING, Set.of(STATUS_COMPLETED)));
+
+    /**
+     * Guided Apply Hardening — every status that means "this session no longer needs the candidate
+     * to manually complete the employer's form", derived directly from the transition graph above
+     * rather than a separately-maintained list: {@code SUBMITTED}/{@code SUBMIT_UNVERIFIED}/{@code
+     * VERIFYING}/{@code VERIFIED}/{@code VERIFICATION_FAILED}/{@code TRACKING}/{@code COMPLETED} are
+     * reachable ONLY via {@code SUBMITTING} (a genuine automated submit attempt actually happened),
+     * never via {@code WAITING_MANUAL_SUBMISSION} — the FORWARD map above has no edge from the
+     * latter into any of them. {@code USER_REPORTED_SUBMITTED} is the one explicit user-confirmed
+     * exit from {@code WAITING_MANUAL_SUBMISSION} itself. Deliberately excludes {@code FAILED}: a
+     * failed session (e.g. package assembly failed before submission was ever attempted) does not
+     * mean the underlying application need went away.
+     *
+     * <p>Consumed by {@code ApplicationCardService} to suppress a stale "Guided Apply Required"
+     * banner once the candidate's submission history for that job has moved past the point where
+     * manual completion is still the open action.
+     */
+    private static final Set<String> RESOLVES_MANUAL_COMPLETION = Set.of(
+            STATUS_SUBMITTED, STATUS_SUBMIT_UNVERIFIED, STATUS_VERIFYING, STATUS_VERIFIED,
+            STATUS_VERIFICATION_FAILED, STATUS_TRACKING, STATUS_COMPLETED, STATUS_USER_REPORTED_SUBMITTED);
+
+    public static boolean resolvesManualCompletion(String status) {
+        return RESOLVES_MANUAL_COMPLETION.contains(status);
+    }
 
     public static boolean isTerminal(String status) {
         return TERMINAL.contains(status);

@@ -65,4 +65,13 @@ export const applicationSubmission = {
     nullOnError<ApplicationSubmissionSession[]>(api.get(`/api/application-submission/${id}/history`)),
 
   queue: () => nullOnError<ApplicationSubmissionSession[]>(api.get('/api/application-submission/queue')),
+
+  /**
+   * Guided Apply — the candidate explicitly confirms they completed the employer's application
+   * themselves. Deliberately does NOT swallow errors like the read methods above: a 409 (wrong
+   * session state) must reach the caller so the UI can show it, rather than silently no-op'ing on
+   * an explicit user action.
+   */
+  reportSubmitted: async (id: string, note?: string | null): Promise<ApplicationSubmissionSession> =>
+    (await api.post(`/api/application-submission/${id}/report-submitted`, { note: note ?? null })).data,
 };

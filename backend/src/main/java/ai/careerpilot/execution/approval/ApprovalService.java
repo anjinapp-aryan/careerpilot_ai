@@ -128,15 +128,30 @@ public class ApprovalService {
         return queue.findById(approvalId);
     }
 
-    /** Human approval. PENDING -> APPROVED + publishes {@link ApprovalGrantedEvent}. 404/403/409 guarded. */
+    /**
+     * Human approval. PENDING -> APPROVED + publishes {@link ApprovalGrantedEvent}. 404/403/409 guarded.
+     *
+     * <p>P7 Action 2 — the PENDING -> APPROVED transition itself is now enforced by an atomic
+     * conditional UPDATE ({@link ai.careerpilot.repo.ApprovalQueueRepository#claimDecision}), not by
+     * a read-then-write check. The prior implementation read the row, verified {@code PENDING} in
+     * memory, then saved — under concurrent callers (a double-click, a duplicate HTTP retry, or a
+     * racing {@code approve()}/{@code reject()} pair on the same row) two callers could both pass
+     * that check before either committed, and the second one published a second {@link
+     * ApprovalGrantedEvent}. {@link ApplicationExecutionService#finalizeGuestApplySubmit
+     * finalizeGuestApplySubmit}'s own atomic claim (Action 1) still stops that from reaching a
+     * second real browser submission, but this is the approval layer's own invariant, not a
+     * downstream backstop for it — exactly one caller may ever observe a winning transition, and
+     * every other caller gets the identical 409 a sequential double-approve already produced.
+     */
     @Transactional
     public ApprovalQueueEntry approve(UUID approvalId, UUID userId, String decidedBy, String note) {
-        ApprovalQueueEntry entry = requirePending(approvalId, userId);
-        entry.setStatus(ApprovalQueueEntry.STATUS_APPROVED);
-        entry.setDecidedBy(decidedBy);
-        entry.setDecisionNote(note);
-        entry.setDecidedAt(Instant.now());
-        queue.save(entry);
+        requireOwned(approvalId, userId);
+        int claimed = queue.claimDecision(approvalId, ApprovalQueueEntry.STATUS_APPROVED, decidedBy, note, Instant.now());
+        if (claimed != 1) {
+            throw conflict(approvalId);
+        }
+        ApprovalQueueEntry entry = queue.findById(approvalId)
+                .orElseThrow(() -> new NoSuchElementException("approval not found"));
         metrics.recordApproved();
         record(userId, entry.getJobId(), entry.getId(), ApprovalAuditEntry.OUTCOME_APPROVED, note);
         events.publishEvent(new ApprovalGrantedEvent(
@@ -145,32 +160,42 @@ public class ApprovalService {
         return entry;
     }
 
-    /** Human rejection. PENDING -> REJECTED, publishes NOTHING. 404/403/409 guarded. */
+    /**
+     * Human rejection. PENDING -> REJECTED, publishes NOTHING. 404/403/409 guarded.
+     *
+     * <p>P7 Action 2 — same atomic claim as {@link #approve}, so a reject can never race an approve
+     * (or another reject) on the same row into a double decision either; only which one lands
+     * changes, not the guarantee that exactly one does.
+     */
     @Transactional
     public ApprovalQueueEntry reject(UUID approvalId, UUID userId, String decidedBy, String note) {
-        ApprovalQueueEntry entry = requirePending(approvalId, userId);
-        entry.setStatus(ApprovalQueueEntry.STATUS_REJECTED);
-        entry.setDecidedBy(decidedBy);
-        entry.setDecisionNote(note);
-        entry.setDecidedAt(Instant.now());
-        queue.save(entry);
+        requireOwned(approvalId, userId);
+        int claimed = queue.claimDecision(approvalId, ApprovalQueueEntry.STATUS_REJECTED, decidedBy, note, Instant.now());
+        if (claimed != 1) {
+            throw conflict(approvalId);
+        }
+        ApprovalQueueEntry entry = queue.findById(approvalId)
+                .orElseThrow(() -> new NoSuchElementException("approval not found"));
         metrics.recordRejected();
         record(userId, entry.getJobId(), entry.getId(), ApprovalAuditEntry.OUTCOME_REJECTED, note);
         log.info("APPROVAL_REJECTED user={} job={} id={} by={}", userId, entry.getJobId(), entry.getId(), decidedBy);
         return entry;
     }
 
-    private ApprovalQueueEntry requirePending(UUID approvalId, UUID userId) {
+    /** Existence + ownership only — 404/403. Never inspects status; the atomic claim owns that. */
+    private void requireOwned(UUID approvalId, UUID userId) {
         ApprovalQueueEntry entry = queue.findById(approvalId)
                 .orElseThrow(() -> new NoSuchElementException("approval not found"));
         if (!entry.getUserId().equals(userId)) {
             throw new SecurityException("approval does not belong to this user");
         }
-        if (!ApprovalQueueEntry.STATUS_PENDING.equals(entry.getStatus())) {
-            metrics.recordConflict();
-            throw new IllegalStateException("approval already " + entry.getStatus() + " — cannot re-decide");
-        }
-        return entry;
+    }
+
+    /** Built only on the losing path, so the 409 message reports the real post-race status. */
+    private IllegalStateException conflict(UUID approvalId) {
+        metrics.recordConflict();
+        String status = queue.findById(approvalId).map(ApprovalQueueEntry::getStatus).orElse("UNKNOWN");
+        return new IllegalStateException("approval already " + status + " — cannot re-decide");
     }
 
     private void record(UUID userId, UUID jobId, UUID approvalId, String outcome, String reason) {

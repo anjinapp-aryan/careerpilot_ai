@@ -68,24 +68,30 @@ public final class FormDiscoveryScript {
                 const root = rootOf(el);
                 const find = id => (root.getElementById ? root.getElementById(id)
                                                         : root.querySelector('#' + CSS.escape(id)));
+                // A widget's own placeholder ("Select...") can leak into an authoritative source —
+                // e.g. a generic Select component that defaults aria-label to its placeholder when
+                // no real accessible name was ever wired up. Filtering these out here, not just in
+                // the proximity fallback below, is what stops that placeholder from outranking the
+                // real question sitting nearby but not programmatically associated.
                 const by = el.getAttribute('aria-labelledby');
                 if (by) {
                   const parts = by.split(/\\s+/).map(id => txt(find(id))).filter(Boolean);
-                  if (parts.length) return parts.join(' ');
+                  const joined = parts.join(' ');
+                  if (parts.length && !isPlaceholderText(joined)) return joined;
                 }
                 const aria = el.getAttribute('aria-label');
-                if (aria && aria.trim()) return aria.trim();
+                if (aria && aria.trim() && !isPlaceholderText(aria.trim())) return aria.trim();
                 if (el.id) {
                   const l = root.querySelector('label[for="' + CSS.escape(el.id) + '"]');
-                  if (l && txt(l)) return txt(l);
+                  if (l && txt(l) && !isPlaceholderText(txt(l))) return txt(l);
                 }
                 const wrap = el.closest('label');
-                if (wrap && txt(wrap)) return txt(wrap);
+                if (wrap && txt(wrap) && !isPlaceholderText(txt(wrap))) return txt(wrap);
                 // Fieldset legend, walking the whole fieldset hierarchy rather than one level, so a
                 // control nested two groups deep still inherits the question it belongs to.
                 for (let fs = el.closest('fieldset'); fs; fs = fs.parentElement && fs.parentElement.closest('fieldset')) {
                   const lg = fs.querySelector('legend');
-                  if (lg && txt(lg)) return txt(lg);
+                  if (lg && txt(lg) && !isPlaceholderText(txt(lg))) return txt(lg);
                 }
                 const desc = el.getAttribute('aria-describedby');
                 if (desc) {
@@ -251,7 +257,13 @@ public final class FormDiscoveryScript {
                     placeholder: el.getAttribute('placeholder') || '',
                     autocomplete: el.getAttribute('autocomplete') || '',
                     dataAttributes: dataAttrs(el),
-                    required: el.required === true || el.getAttribute('aria-required') === 'true',
+                    // P7 Action 5C-FIX — data-required is trusted ONLY at its exact literal
+                    // "true" value, never merely present, since a data-* attribute's meaning is not
+                    // standardised across ATS platforms. This can only ever turn a field MORE
+                    // required (native/aria signals still win independently), never less: the
+                    // invariant is unknown-required must become a blocking gap, not disappear.
+                    required: el.required === true || el.getAttribute('aria-required') === 'true'
+                      || el.getAttribute('data-required') === 'true',
                     hidden: !visible,
                     disabled: el.disabled === true || el.getAttribute('aria-disabled') === 'true',
                     readOnly: el.readOnly === true,
@@ -309,6 +321,141 @@ public final class FormDiscoveryScript {
                 .filter(b => b.label.length > 0);
             }
             """;
+
+    /**
+     * P7 Action 5C-FIX — the whole open-match-select-verify interaction for one custom
+     * combobox/listbox, in a single round trip. Takes {@code {selector, expected}} as one argument
+     * object (Playwright's {@code evaluate(script, arg)} form) rather than being parameterised
+     * separately, so open, match, click and read-back all observe the same DOM snapshot with no
+     * round-trip in between for the page to re-render out from under a second call.
+     *
+     * <p>Options are read live from the DOM <b>after</b> opening — never from whatever the original
+     * discovery pass saw — because most component libraries (React Select among them) do not render
+     * their option list until the control is opened. Matching prefers {@code aria-controls}/
+     * {@code aria-owns} (the accessible, vendor-neutral link from control to listbox); when neither
+     * is set, it falls back to any currently-visible {@code [role="option"]} on the page, since
+     * several libraries portal the open listbox to {@code <body>} rather than nesting it under the
+     * control.
+     *
+     * <p>Matching is exact then case-insensitive-normalised — the same two-tier discipline as
+     * {@code FormFillPlanner.matchOption} — never fuzzy or substring, for the same reason: "No" is a
+     * substring of "Not applicable" and the difference is material on a visa question.
+     *
+     * <p>{@code verified} is computed from the control's own displayed text <em>after</em> the click,
+     * compared against the matched option's own text — both read in the same script execution. A
+     * click is never treated as proof of selection on its own: a click landing on a stale/detached
+     * element, or a widget that does not update its own display, produces {@code matched:true,
+     * verified:false} rather than a false success.
+     */
+    public static final String SELECT_COMBOBOX_OPTION = """
+            (args) => {
+              const selector = args.selector;
+              const expected = args.expected == null ? '' : String(args.expected);
+              const txt = el => (el.textContent || '').replace(/\\s+/g, ' ').trim();
+              const norm = s => (s || '').trim().toLowerCase();
+              const vis = el => {
+                const s = window.getComputedStyle(el);
+                if (!s || s.display === 'none' || s.visibility === 'hidden' || s.opacity === '0') return false;
+                const r = el.getBoundingClientRect();
+                return r.width > 0 && r.height > 0;
+              };
+
+              const control = document.querySelector(selector);
+              if (!control) {
+                return { opened: false, matched: false, verified: false, selectedText: null,
+                         matchedOptionText: null, reason: 'control not found', availableOptions: [] };
+              }
+
+              control.click();
+
+              let optionEls = [];
+              const owns = control.getAttribute('aria-controls') || control.getAttribute('aria-owns');
+              if (owns) {
+                for (const id of owns.split(/\\s+/)) {
+                  const box = document.getElementById(id);
+                  if (box) optionEls.push(...box.querySelectorAll('[role="option"], li, option'));
+                }
+              }
+              if (optionEls.length === 0) {
+                optionEls = Array.from(document.querySelectorAll('[role="option"]'));
+              }
+              optionEls = optionEls.filter(vis);
+
+              if (optionEls.length === 0) {
+                return { opened: false, matched: false, verified: false, selectedText: null,
+                         matchedOptionText: null, reason: 'no options rendered after opening',
+                         availableOptions: [] };
+              }
+
+              // Boolean-equivalence fallback — the same vocabulary as FormFillPlanner.matchOption's
+              // asBoolean(), duplicated here rather than shared because this runs in the browser
+              // against options that only exist once the widget is open: a resolved answer of
+              // "false" (CandidateProfile.visaRequired's literal Java boolean string) must still
+              // match a rendered option labelled "No".
+              const asBool = s => {
+                const v = norm(s);
+                if (v === 'true' || v === 'yes' || v === 'y' || v === '1') return true;
+                if (v === 'false' || v === 'no' || v === 'n' || v === '0') return false;
+                return null;
+              };
+
+              const available = optionEls.map(txt).filter(Boolean);
+              let match = optionEls.find(o => txt(o) === expected.trim());
+              if (!match) match = optionEls.find(o => norm(txt(o)) === norm(expected));
+              if (!match) {
+                const expectedBool = asBool(expected);
+                if (expectedBool !== null) {
+                  match = optionEls.find(o => asBool(txt(o)) === expectedBool);
+                }
+              }
+              if (!match) {
+                return { opened: true, matched: false, verified: false, selectedText: null,
+                         matchedOptionText: null,
+                         reason: 'no rendered option matches the verified answer',
+                         availableOptions: available };
+              }
+
+              const matchedOptionText = txt(match);
+              match.click();
+              const selectedText = txt(control);
+              const verified = norm(selectedText) === norm(matchedOptionText) && selectedText.length > 0;
+
+              return { opened: true, matched: true, verified: verified, selectedText: selectedText,
+                       matchedOptionText: matchedOptionText,
+                       reason: verified ? null : 'clicked option but the control display did not update to match',
+                       availableOptions: available };
+            }
+            """;
+
+    /**
+     * P7 Action 5C-FIX — one custom-combobox selection attempt, exactly as {@link
+     * #SELECT_COMBOBOX_OPTION} reported it. {@code matched} and {@code verified} are independently
+     * false-able: a click can match an option but fail to verify (widget did not update), and both
+     * failure reasons are distinguishable in {@code reason} rather than collapsed into one boolean.
+     */
+    public record ComboboxSelectionResult(boolean opened, boolean matched, boolean verified,
+                                          String selectedText, String matchedOptionText,
+                                          String reason, List<String> availableOptions) {
+
+        public static ComboboxSelectionResult scriptFailure(String reason) {
+            return new ComboboxSelectionResult(false, false, false, null, null, reason, List.of());
+        }
+    }
+
+    /** Parse {@link #SELECT_COMBOBOX_OPTION} output. An unusable result is an honest failure, never a guess. */
+    public static ComboboxSelectionResult parseComboboxSelection(Object scriptResult) {
+        if (!(scriptResult instanceof Map<?, ?> map)) {
+            return ComboboxSelectionResult.scriptFailure("combobox selection script returned no result");
+        }
+        return new ComboboxSelectionResult(
+                bool(map, "opened"),
+                bool(map, "matched"),
+                bool(map, "verified"),
+                map.get("selectedText") == null ? null : String.valueOf(map.get("selectedText")),
+                map.get("matchedOptionText") == null ? null : String.valueOf(map.get("matchedOptionText")),
+                map.get("reason") == null ? null : String.valueOf(map.get("reason")),
+                strList(map.get("availableOptions")));
+    }
 
     /**
      * Post-submit page state for {@link ValidationErrorDetector}. Error text is read from live
@@ -505,7 +652,7 @@ public final class FormDiscoveryScript {
                 String selector = str(map, "selector");
                 if (selector.isEmpty()) continue;
                 FieldControlType type = FieldControlType.from(
-                        str(map, "tag"), str(map, "type"), bool(map, "contentEditable"));
+                        str(map, "tag"), str(map, "type"), bool(map, "contentEditable"), str(map, "role"));
                 out.add(new DiscoveredField(
                         selector,
                         type,

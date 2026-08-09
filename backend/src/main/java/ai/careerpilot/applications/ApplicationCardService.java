@@ -7,6 +7,7 @@ import ai.careerpilot.applications.dto.ApplicationCardDtos.ApplicationCardRespon
 import ai.careerpilot.domain.Application;
 import ai.careerpilot.domain.ApplicationLifecycle;
 import ai.careerpilot.domain.ApplicationExecution;
+import ai.careerpilot.domain.ApplicationSubmissionSession;
 import ai.careerpilot.domain.CandidateProfile;
 import ai.careerpilot.domain.Job;
 import ai.careerpilot.domain.JobRecommendation;
@@ -16,6 +17,7 @@ import ai.careerpilot.repo.ApplicationLifecycleRepository;
 import ai.careerpilot.repo.ApplicationPackageRepository;
 import ai.careerpilot.repo.ApplicationReviewRepository;
 import ai.careerpilot.repo.ApplicationStatusHistoryRepository;
+import ai.careerpilot.repo.ApplicationSubmissionSessionRepository;
 import ai.careerpilot.repo.CandidateProfileRepository;
 import ai.careerpilot.repo.CoverLetterRepository;
 import ai.careerpilot.repo.JobRecommendationRepository;
@@ -60,6 +62,7 @@ public class ApplicationCardService {
     private final ApplicationNextActionService nextActionService;
     private final ApplicationExecutionRepository executions;
     private final ApplicationRetryRepository retries;
+    private final ApplicationSubmissionSessionRepository submissionSessions;
 
     public ApplicationCardService(JobRepository jobs,
                                   JobRecommendationRepository jobRecommendations,
@@ -75,7 +78,8 @@ public class ApplicationCardService {
                                   ApplicationRecommendationService recommendationService,
                                   ApplicationNextActionService nextActionService,
                                   ApplicationExecutionRepository executions,
-                                  ApplicationRetryRepository retries) {
+                                  ApplicationRetryRepository retries,
+                                  ApplicationSubmissionSessionRepository submissionSessions) {
         this.jobs = jobs;
         this.jobRecommendations = jobRecommendations;
         this.resumeTailorings = resumeTailorings;
@@ -91,6 +95,7 @@ public class ApplicationCardService {
         this.nextActionService = nextActionService;
         this.executions = executions;
         this.retries = retries;
+        this.submissionSessions = submissionSessions;
     }
 
     /**
@@ -152,6 +157,14 @@ public class ApplicationCardService {
                     return latestChange == null ? l.getUpdatedAt() : latestChange;
                 })
                 .orElse(null);
+        // P1.1 — Application lifecycle tracking. Reuses the same lifecycle/status-history join
+        // already fetched above for health/recommendation scoring; no new query.
+        String previousStatus = lifecycle.map(l -> data.previousStatusByLifecycle().get(l.getId())).orElse(null);
+        Instant activityAnchor = lastStatusChangeAt != null ? lastStatusChangeAt : app.getUpdatedAt();
+        Long daysSinceLastActivity = activityAnchor == null ? null
+                : java.time.Duration.between(activityAnchor, Instant.now()).toDays();
+        Long applicationAgeDays = app.getCreatedAt() == null ? null
+                : java.time.Duration.between(app.getCreatedAt(), Instant.now()).toDays();
 
         // Refresh the app's computed match/ATS onto a shallow copy so health/recommendation see fresh values
         // without ever writing them back to the dead columns.
@@ -178,6 +191,31 @@ public class ApplicationCardService {
                 : data.retryCounts().getOrDefault(latestExecution.getId(), 0L).intValue();
         String verificationStatus = latestExecution == null ? null : latestExecution.getVerificationStatus();
 
+        boolean guidedApplyRequired = "GUIDED_APPLY_REQUIRED".equals(automationHealth);
+        // Guided Apply Hardening — the ApplicationExecution row that drives automationHealth and the
+        // ApplicationSubmissionSession row the candidate confirms manual submission on are two
+        // independent entities (the execution-scoped Phase 2E path vs the orchestrated Phase 7.16
+        // pipeline — deliberately separate per this codebase's own convention, see CLAUDE.md). Without
+        // this check, an ABORTED execution keeps reporting "Guided Apply Required" forever even after
+        // the user has already confirmed they submitted it manually — a genuinely stale UI state.
+        // Final Hardening Pass — widened from "USER_REPORTED_SUBMITTED only" to every status
+        // ai.careerpilot.submission.SubmissionStateMachine#resolvesManualCompletion recognises as
+        // no-longer-needing manual completion (derived from the transition graph itself, not a
+        // second hand-maintained list — see that method's own javadoc for the exact reasoning).
+        // Covers the case this codebase's own docs call out (Phase 0's SUBMIT_UNVERIFIED,
+        // "the application probably does exist, so it must be tracked") where a later, genuinely
+        // automated attempt succeeded (or submitted-but-unverified) for the same job after an
+        // earlier execution had aborted — the stale banner must clear there too.
+        ApplicationSubmissionSession latestSubmission = data.latestSubmissionSessions().get(jobId);
+        boolean alreadyReportedSubmitted = latestSubmission != null
+                && ai.careerpilot.submission.SubmissionStateMachine.resolvesManualCompletion(latestSubmission.getStatus());
+        if (alreadyReportedSubmitted) guidedApplyRequired = false;
+
+        String blockerReason = guidedApplyRequired
+                ? ai.careerpilot.domain.GuidedApplyReason.fromFailureReason(latestExecution.getFailureReason()).name()
+                : null;
+        String blockerDetail = guidedApplyRequired ? latestExecution.getFailureReason() : null;
+
         return new ApplicationCardResponse(
                 app.getId(), app.getJobId(), app.getResumeId(), app.getStatus(), matchScore, atsScore,
                 app.getNextAction(), app.getNextActionAt(), app.getNotes(),
@@ -191,6 +229,7 @@ public class ApplicationCardService {
                 job == null ? null : job.getSource(),
                 job == null ? null : job.getExternalUrl(),
                 job == null ? null : job.getSponsorshipAvailable(),
+                job == null ? null : job.getExternalId(),
                 resumeTailored, atsAnalysisReady, coverLetterReady, applicationPackageReady, applicationReviewReady,
                 visaRequired,
                 health.status(), health.score(), health.reasoning(),
@@ -198,7 +237,9 @@ public class ApplicationCardService {
                 nextAction.action(), nextAction.suggestedAt(),
                 lifecycleStatus,
                 latestExecution == null ? null : latestExecution.getId(),
-                executionStatus, automationHealth, retryCount, verificationStatus
+                executionStatus, automationHealth, retryCount, verificationStatus,
+                guidedApplyRequired, blockerReason, blockerDetail,
+                previousStatus, lastStatusChangeAt, applicationAgeDays, daysSinceLastActivity
         );
     }
 
@@ -217,8 +258,10 @@ public class ApplicationCardService {
                               CandidateProfile profile,
                               Map<UUID, ApplicationLifecycle> lifecycles,
                               Map<UUID, Instant> lastStatusChangeByLifecycle,
+                              Map<UUID, String> previousStatusByLifecycle,
                               Map<UUID, ApplicationExecution> latestExecutions,
-                              Map<UUID, Long> retryCounts) {
+                              Map<UUID, Long> retryCounts,
+                              Map<UUID, ApplicationSubmissionSession> latestSubmissionSessions) {
     }
 
     /**
@@ -261,11 +304,13 @@ public class ApplicationCardService {
                 .filter(l -> jobIds.contains(l.getJobId()))
                 .collect(Collectors.toMap(ApplicationLifecycle::getJobId, l -> l, (a, b) -> a));
         Map<UUID, Instant> lastChange = new HashMap<>();
+        Map<UUID, String> previousStatus = new HashMap<>();
         if (!lifecyclesByJob.isEmpty()) {
             Set<UUID> lifecycleIds = lifecyclesByJob.values().stream()
                     .map(ApplicationLifecycle::getId).collect(Collectors.toSet());
             for (var row : statusHistory.findLatestChangePerLifecycle(lifecycleIds)) {
                 lastChange.put(row.getLifecycleId(), row.getChangedAt());
+                if (row.getFromStatus() != null) previousStatus.put(row.getLifecycleId(), row.getFromStatus());
             }
         }
 
@@ -280,9 +325,19 @@ public class ApplicationCardService {
             }
         }
 
+        // Guided Apply Hardening — latest ApplicationSubmissionSession per job, same "fetch this
+        // user's whole set once, group in memory" convention as lifecyclesByJob above (that pattern
+        // already proved N+1-safe for this exact file). findByUserIdOrderByCreatedAtDesc is already
+        // DESC-sorted, so the first occurrence per jobId in iteration order is genuinely the latest —
+        // no extra sort needed.
+        Map<UUID, ApplicationSubmissionSession> latestSubmissionByJob = submissionSessions
+                .findByUserIdOrderByCreatedAtDesc(userId).stream()
+                .filter(s -> jobIds.contains(s.getJobId()))
+                .collect(Collectors.toMap(ApplicationSubmissionSession::getJobId, s -> s, (a, b) -> a));
+
         return new JoinedData(jobsById, recoScores, tailored, atsScores, withCoverLetter,
-                packageIdsByJob, reviewed, profile, lifecyclesByJob, lastChange,
-                latestExecutions, retryCounts);
+                packageIdsByJob, reviewed, profile, lifecyclesByJob, lastChange, previousStatus,
+                latestExecutions, retryCounts, latestSubmissionByJob);
     }
 
     /**
@@ -303,7 +358,12 @@ public class ApplicationCardService {
                     ? "RECOVERED"
                     : (exec.getVerificationStatus() == null || "VERIFIED".equals(exec.getVerificationStatus())
                             ? "COMPLETED" : "VERIFICATION_FAILED");
-            case ApplicationExecution.STATUS_ABORTED, ApplicationExecution.STATUS_FAILED -> "FAILED";
+            // Guided Apply — ABORTED means automation deliberately did not attempt/continue
+            // (CAPTCHA, ineligible connector, no backend configured, rollout gate, package not
+            // assembled — every abort site reviewed in the Guided Apply audit) — never a technical
+            // failure. FAILED alone (a thrown exception mid-attempt) keeps that label.
+            case ApplicationExecution.STATUS_ABORTED -> "GUIDED_APPLY_REQUIRED";
+            case ApplicationExecution.STATUS_FAILED -> "FAILED";
             default -> null;
         };
     }

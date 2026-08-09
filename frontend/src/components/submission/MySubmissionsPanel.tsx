@@ -1,8 +1,12 @@
 import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { ChevronDown, ChevronRight, FileText, Send } from 'lucide-react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { CheckCircle2, ChevronDown, ChevronRight, FileText, Send } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge, type BadgeTone } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Dialog, DialogHeader, DialogTitle, DialogDescription, DialogBody, DialogFooter } from '@/components/ui/dialog';
+import { Textarea } from '@/components/ui/input';
+import { useToast } from '@/components/ui/toast';
 import { SubmissionStepper } from './SubmissionStepper';
 import { applicationSubmission } from '@/lib/applicationSubmission';
 import type {
@@ -19,6 +23,9 @@ const STATUS_TONE: Record<string, BadgeTone> = {
   SUBMITTING: 'info',
   WAITING_APPROVAL: 'warning',
   WAITING_MANUAL_SUBMISSION: 'warning',
+  // Guided Apply — the candidate's own claim, never verified by CareerPilot. Same "warning" tone as
+  // WAITING_MANUAL_SUBMISSION rather than "success": it is real progress, not a confirmed outcome.
+  USER_REPORTED_SUBMITTED: 'warning',
   VERIFICATION_FAILED: 'warning',
   FAILED: 'danger',
 };
@@ -32,6 +39,7 @@ const STATUS_TONE: Record<string, BadgeTone> = {
 const STATUS_LABELS: Record<string, string> = {
   WAITING_MANUAL_SUBMISSION: 'Package ready — submit manually',
   PACKAGE_READY: 'Application package ready',
+  USER_REPORTED_SUBMITTED: 'You reported this as submitted',
 };
 
 function toneFor(status: string): BadgeTone {
@@ -44,6 +52,22 @@ function humanStatus(status: string): string {
 
 function SubmissionRow({ session }: { session: ApplicationSubmissionSession }) {
   const [open, setOpen] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [note, setNote] = useState('');
+  const qc = useQueryClient();
+  const { toast } = useToast();
+
+  const reportSubmitted = useMutation({
+    mutationFn: () => applicationSubmission.reportSubmitted(session.id, note || null),
+    onSuccess: () => {
+      toast({ variant: 'success', title: 'Marked as submitted' });
+      setConfirmOpen(false);
+      setNote('');
+      qc.invalidateQueries({ queryKey: ['application-submission'] });
+    },
+    onError: () =>
+      toast({ variant: 'error', title: 'Could not update', description: 'This application may no longer be awaiting manual submission.' }),
+  });
 
   // Detail (generated answers) is fetched lazily, only when a row is expanded.
   const detail = useQuery<ApplicationSubmissionSessionDetail | null>({
@@ -99,10 +123,34 @@ function SubmissionRow({ session }: { session: ApplicationSubmissionSession }) {
           )}
 
           {session.status === 'WAITING_MANUAL_SUBMISSION' && (
+            <>
+              <p className="mb-3 rounded-md bg-warning/10 px-3 py-2 text-xs text-warning">
+                Automated submission isn't available for this employer's application system, so nothing
+                was sent yet. Your tailored resume, cover letter, and answers below are ready — use them
+                to complete the application yourself on the company's site.
+              </p>
+              <Button
+                size="sm"
+                variant="outline"
+                className="mb-3"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setConfirmOpen(true);
+                }}
+              >
+                <CheckCircle2 className="h-3.5 w-3.5" /> Mark as submitted
+              </Button>
+            </>
+          )}
+
+          {session.status === 'USER_REPORTED_SUBMITTED' && (
             <p className="mb-3 rounded-md bg-warning/10 px-3 py-2 text-xs text-warning">
-              Automated submission isn't available for this employer's application system, so nothing
-              was sent yet. Your tailored resume, cover letter, and answers below are ready — use them
-              to complete the application yourself on the company's site.
+              You reported this application as submitted
+              {session.userReportedSubmittedAt && ` on ${new Date(session.userReportedSubmittedAt).toLocaleString()}`}.
+              CareerPilot did not verify this itself — it's your own record.
+              {session.userSubmissionNote && (
+                <span className="mt-1 block text-muted-foreground">Note: {session.userSubmissionNote}</span>
+              )}
             </p>
           )}
 
@@ -140,6 +188,32 @@ function SubmissionRow({ session }: { session: ApplicationSubmissionSession }) {
           )}
         </div>
       )}
+
+      <Dialog open={confirmOpen} onOpenChange={setConfirmOpen} size="sm">
+        <DialogHeader onClose={() => setConfirmOpen(false)}>
+          <DialogTitle>Did you submit this application?</DialogTitle>
+          <DialogDescription>
+            CareerPilot cannot verify an employer's site directly — this records your own confirmation,
+            not a system-verified submission.
+          </DialogDescription>
+        </DialogHeader>
+        <DialogBody>
+          <Textarea
+            rows={3}
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            placeholder="Optional note — e.g. a confirmation number or reference ID"
+          />
+        </DialogBody>
+        <DialogFooter>
+          <Button variant="ghost" onClick={() => setConfirmOpen(false)}>
+            Not yet
+          </Button>
+          <Button onClick={() => reportSubmitted.mutate()} loading={reportSubmitted.isPending}>
+            Yes, I submitted it
+          </Button>
+        </DialogFooter>
+      </Dialog>
     </div>
   );
 }

@@ -22,6 +22,9 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -103,6 +106,15 @@ class ApplicationExecutionServiceTest {
                 guestApply, verification, recovery, new ApplicationExecutionMetrics(), gate,
                 mock(org.springframework.beans.factory.ObjectProvider.class),
                 disabledTimelineRecorder(), enabled);
+    }
+
+    /** P7 Action 4 — same wiring as {@link #service(boolean, ai.careerpilot.execution.browser.rollout.BrowserRolloutGate)}, with a mocked (not disabled) timeline recorder for tests that verify the new stage producers fire. */
+    private ApplicationExecutionService serviceWithMockTimeline(
+            ai.careerpilot.execution.timeline.ExecutionTimelineRecorder timeline) {
+        return new ApplicationExecutionService(executions, audit, packages, jobs, connectors, browser,
+                guestApply, verification, recovery, new ApplicationExecutionMetrics(), openRolloutGate(),
+                mock(org.springframework.beans.factory.ObjectProvider.class),
+                timeline, true);
     }
 
     private static ai.careerpilot.execution.browser.rollout.BrowserRolloutGate openRolloutGate() {
@@ -263,6 +275,51 @@ class ApplicationExecutionServiceTest {
         // Phase 7.16.1 — verification must fire on every real SUBMITTED outcome, with the
         // confirmation reference the automation actually captured (never fabricated).
         org.mockito.Mockito.verify(verification).verify(awaiting, connector, "conf-123");
+    }
+
+    /**
+     * P7 Action 4 — the same real-submit scenario above, proving the new VERIFICATION_STARTED/
+     * COMPLETED and RESULT_PERSISTED stage producers actually fire, with the real verdict as detail
+     * (never fabricated) and never a fabricated completion when the outcome was a failure.
+     */
+    @Test
+    void finalizeGuestApplySubmit_recordsVerificationAndResultPersistedStages() {
+        UUID execId = UUID.randomUUID();
+        ApplicationExecution awaiting = ApplicationExecution.builder()
+                .id(execId).userId(userId).jobId(jobId).applicationPackageId(pkgId)
+                .executionStatus(ApplicationExecution.STATUS_AWAITING_APPROVAL)
+                .executionType(ApplicationExecution.TYPE_ATS_CONNECTOR)
+                .attemptCount(1).build();
+        when(executions.findById(execId)).thenReturn(Optional.of(awaiting));
+        ATSConnector connector = mock(ATSConnector.class);
+        when(connector.isConfigured()).thenReturn(true);
+        when(connector.name()).thenReturn("greenhouse");
+        when(connectors.detect(any())).thenReturn(connector);
+        when(guestApply.isEligible(connector)).thenReturn(true);
+        when(guestApply.finalizeSubmit(any(), any(), any()))
+                .thenReturn(GuestApplyAutomationService.AttemptOutcome.submitted("conf-123"));
+        when(verification.verify(any(), any(), any())).thenReturn(
+                ai.careerpilot.execution.verification.VerificationResult.verified(
+                        "EVIDENCE_ADJUDICATION:CONFIRMED", "reference plus confirmation phrase"));
+
+        ai.careerpilot.execution.timeline.ExecutionTimelineRecorder timeline =
+                mock(ai.careerpilot.execution.timeline.ExecutionTimelineRecorder.class);
+        when(timeline.started(any(), any())).thenReturn(UUID.randomUUID());
+
+        serviceWithMockTimeline(timeline).finalizeGuestApplySubmit(execId);
+
+        org.mockito.Mockito.verify(timeline).started(any(),
+                eq(ai.careerpilot.execution.timeline.ExecutionStage.VERIFICATION_STARTED));
+        org.mockito.Mockito.verify(timeline).completed(any(), argThat(m ->
+                "VERIFIED".equals(m.get("verdict"))));
+        org.mockito.Mockito.verify(timeline).mark(any(),
+                eq(ai.careerpilot.execution.timeline.ExecutionStage.VERIFICATION_COMPLETED), any());
+        org.mockito.Mockito.verify(timeline).mark(any(),
+                eq(ai.careerpilot.execution.timeline.ExecutionStage.RESULT_PERSISTED), argThat(m ->
+                        ApplicationExecution.STATUS_SUBMITTED.equals(m.get("finalStatus"))));
+        // No fabricated failure marker on a genuinely successful verification.
+        org.mockito.Mockito.verify(timeline, org.mockito.Mockito.never()).failed(any(),
+                eq(ai.careerpilot.execution.timeline.FailureCategory.VERIFICATION), anyString());
     }
 
     /**

@@ -212,6 +212,44 @@ class OperationsServiceTest {
         assertThat(manualQueue.get("averageWaitMs")).isNull();
     }
 
+    // ── P7 Action 4 — SUBMITTING operator visibility ──
+
+    /** Previously invisible entirely: no counter anywhere. Reuses the same queueInfo shape as every other status. */
+    @Test
+    void queuesReportsSubmittingQueue() {
+        Instant oldest = Instant.now().minusSeconds(600);
+        when(executions.countByExecutionStatus(ApplicationExecution.STATUS_SUBMITTING)).thenReturn(2L);
+        when(executions.findFirstByExecutionStatusOrderByCreatedAtAsc(ApplicationExecution.STATUS_SUBMITTING))
+                .thenReturn(Optional.of(ApplicationExecution.builder().createdAt(oldest).build()));
+        when(executions.findFirstByExecutionStatusOrderByCreatedAtDesc(ApplicationExecution.STATUS_SUBMITTING))
+                .thenReturn(Optional.of(ApplicationExecution.builder().createdAt(oldest).build()));
+
+        var out = service.queues();
+        @SuppressWarnings("unchecked")
+        java.util.Map<String, Object> submittingQueue = (java.util.Map<String, Object>) out.get("submittingQueue");
+
+        assertThat(submittingQueue.get("items")).isEqualTo(2L);
+        assertThat(submittingQueue.get("oldestItem")).isEqualTo(oldest);
+    }
+
+    @Test
+    void staleSubmittingExecutionsListsRowsOlderThanTheThresholdOnly() {
+        UUID staleId = UUID.randomUUID();
+        Instant staleCreatedAt = Instant.now().minus(java.time.Duration.ofHours(1));
+        when(executions.findByExecutionStatusAndCreatedAtBefore(
+                org.mockito.ArgumentMatchers.eq(ApplicationExecution.STATUS_SUBMITTING), org.mockito.ArgumentMatchers.any()))
+                .thenReturn(List.of(ApplicationExecution.builder()
+                        .id(staleId).userId(userId).jobId(jobId).createdAt(staleCreatedAt).build()));
+
+        List<java.util.Map<String, Object>> stale = service.staleSubmittingExecutions(java.time.Duration.ofMinutes(30));
+
+        assertThat(stale).hasSize(1);
+        assertThat(stale.get(0).get("executionId")).isEqualTo(staleId);
+        assertThat(stale.get(0).get("ageMs")).isNotNull();
+        // Never a candidate's PII beyond ids already exposed elsewhere on this dashboard.
+        assertThat(stale.get(0)).containsOnlyKeys("executionId", "userId", "jobId", "createdAt", "ageMs");
+    }
+
     // ── detail() / explain() ──
 
     @Test

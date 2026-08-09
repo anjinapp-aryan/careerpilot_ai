@@ -40,6 +40,7 @@ class ApplicationCardServiceTest {
     private final ApplicationStatusHistoryRepository statusHistory = mock(ApplicationStatusHistoryRepository.class);
     private final ApplicationExecutionRepository executions = mock(ApplicationExecutionRepository.class);
     private final ApplicationRetryRepository retries = mock(ApplicationRetryRepository.class);
+    private final ApplicationSubmissionSessionRepository submissionSessions = mock(ApplicationSubmissionSessionRepository.class);
 
     private ApplicationCardService svc;
     private UUID userId;
@@ -52,7 +53,7 @@ class ApplicationCardServiceTest {
         svc = new ApplicationCardService(jobs, jobRecommendations, resumeTailorings, atsAnalyses, coverLetters,
                 applicationPackages, applicationReviews, candidateProfiles, lifecycles, statusHistory,
                 new ApplicationHealthService(), new ApplicationRecommendationService(), new ApplicationNextActionService(),
-                executions, retries);
+                executions, retries, submissionSessions);
 
         // The service prefetches every join in bulk (one query each, not one per application), so the
         // empty baseline is stubbed on the bulk finders.
@@ -65,6 +66,7 @@ class ApplicationCardServiceTest {
         when(candidateProfiles.findByUserId(any())).thenReturn(Optional.empty());
         when(lifecycles.findByUserId(any())).thenReturn(List.of());
         when(executions.findLatestPerJob(any(), any())).thenReturn(List.of());
+        when(submissionSessions.findByUserIdOrderByCreatedAtDesc(any())).thenReturn(List.of());
     }
 
     /** Stubs the latest-execution join for {@code jobId} and, when non-null, its retry count. */
@@ -150,6 +152,7 @@ class ApplicationCardServiceTest {
         verify(candidateProfiles, times(1)).findByUserId(any());
         verify(lifecycles, times(1)).findByUserId(any());
         verify(executions, times(1)).findLatestPerJob(any(), any());
+        verify(submissionSessions, times(1)).findByUserIdOrderByCreatedAtDesc(any());
 
         // The per-row finders must not be reachable from the list path at all.
         verify(jobs, never()).findById(any());
@@ -241,5 +244,166 @@ class ApplicationCardServiceTest {
         ApplicationCardResponse card = svc.assemble(userId, app());
 
         assertThat(card.automationHealth()).isEqualTo("RECOVERED");
+    }
+
+    // ── Guided Apply ──
+
+    @Test
+    void abortedByCaptchaIsGuidedApplyRequiredNotFailed() {
+        ApplicationExecution exec = ApplicationExecution.builder()
+                .id(UUID.randomUUID()).userId(userId).jobId(jobId)
+                .executionStatus(ApplicationExecution.STATUS_ABORTED)
+                .failureReason("captcha or login wall detected — routed to human review")
+                .build();
+        stubExecution(exec, null);
+
+        ApplicationCardResponse card = svc.assemble(userId, app());
+
+        assertThat(card.automationHealth()).isEqualTo("GUIDED_APPLY_REQUIRED");
+        assertThat(card.guidedApplyRequired()).isTrue();
+        assertThat(card.blockerReason()).isEqualTo("CAPTCHA");
+        assertThat(card.blockerDetail()).contains("captcha");
+    }
+
+    /**
+     * Guided Apply Hardening — regression for a real stale-state bug: {@code guidedApplyRequired}
+     * was derived solely from {@code ApplicationExecution}, a completely separate entity from the
+     * {@code ApplicationSubmissionSession} row the "Yes, I submitted it" confirmation writes to. A
+     * user who explicitly confirmed manual submission would see the "Guided Apply Required" banner
+     * forever, because nothing about the execution row ever changes in response to that action.
+     */
+    @Test
+    void guidedApplyIsSuppressedOnceTheUserHasReportedManualSubmission() {
+        ApplicationExecution exec = ApplicationExecution.builder()
+                .id(UUID.randomUUID()).userId(userId).jobId(jobId)
+                .executionStatus(ApplicationExecution.STATUS_ABORTED)
+                .failureReason("captcha or login wall detected — routed to human review")
+                .build();
+        stubExecution(exec, null);
+        ai.careerpilot.domain.ApplicationSubmissionSession session =
+                ai.careerpilot.domain.ApplicationSubmissionSession.builder()
+                        .id(UUID.randomUUID()).userId(userId).jobId(jobId)
+                        .status(ai.careerpilot.domain.ApplicationSubmissionSession.STATUS_USER_REPORTED_SUBMITTED)
+                        .submissionMethod(ai.careerpilot.domain.ApplicationSubmissionSession.METHOD_MANUAL)
+                        .build();
+        when(submissionSessions.findByUserIdOrderByCreatedAtDesc(userId)).thenReturn(List.of(session));
+
+        ApplicationCardResponse card = svc.assemble(userId, app());
+
+        // automationHealth is left alone (it still honestly reflects the execution row) but the
+        // boolean that actually drives the frontend's banner/CTA must reflect the user's own action.
+        assertThat(card.automationHealth()).isEqualTo("GUIDED_APPLY_REQUIRED");
+        assertThat(card.guidedApplyRequired()).isFalse();
+        assertThat(card.blockerReason()).isNull();
+        assertThat(card.blockerDetail()).isNull();
+    }
+
+    /**
+     * Final Hardening Pass — widened suppression: a LATER session for the same job that genuinely
+     * reached SUBMIT_UNVERIFIED (automation actually clicked submit, just couldn't verify delivery)
+     * must also clear the stale banner from an EARLIER aborted execution — re-showing "Guided Apply
+     * Required" here would invite the user to apply a second time to a job that may already have
+     * received a real submission.
+     */
+    @Test
+    void guidedApplyIsSuppressedWhenALaterSessionReachedSubmitUnverified() {
+        ApplicationExecution exec = ApplicationExecution.builder()
+                .id(UUID.randomUUID()).userId(userId).jobId(jobId)
+                .executionStatus(ApplicationExecution.STATUS_ABORTED)
+                .failureReason("captcha or login wall detected — routed to human review")
+                .build();
+        stubExecution(exec, null);
+        ai.careerpilot.domain.ApplicationSubmissionSession session =
+                ai.careerpilot.domain.ApplicationSubmissionSession.builder()
+                        .id(UUID.randomUUID()).userId(userId).jobId(jobId)
+                        .status(ai.careerpilot.domain.ApplicationSubmissionSession.STATUS_SUBMIT_UNVERIFIED)
+                        .submissionMethod(ai.careerpilot.domain.ApplicationSubmissionSession.METHOD_AUTO)
+                        .build();
+        when(submissionSessions.findByUserIdOrderByCreatedAtDesc(userId)).thenReturn(List.of(session));
+
+        ApplicationCardResponse card = svc.assemble(userId, app());
+
+        assertThat(card.guidedApplyRequired()).isFalse();
+    }
+
+    /** Any other submission-session status must NOT suppress a genuine, still-open Guided Apply blocker. */
+    @Test
+    void guidedApplyStaysRequiredWhenTheLatestSubmissionSessionIsStillWaiting() {
+        ApplicationExecution exec = ApplicationExecution.builder()
+                .id(UUID.randomUUID()).userId(userId).jobId(jobId)
+                .executionStatus(ApplicationExecution.STATUS_ABORTED)
+                .failureReason("captcha or login wall detected — routed to human review")
+                .build();
+        stubExecution(exec, null);
+        ai.careerpilot.domain.ApplicationSubmissionSession session =
+                ai.careerpilot.domain.ApplicationSubmissionSession.builder()
+                        .id(UUID.randomUUID()).userId(userId).jobId(jobId)
+                        .status(ai.careerpilot.domain.ApplicationSubmissionSession.STATUS_WAITING_MANUAL_SUBMISSION)
+                        .submissionMethod(ai.careerpilot.domain.ApplicationSubmissionSession.METHOD_MANUAL)
+                        .build();
+        when(submissionSessions.findByUserIdOrderByCreatedAtDesc(userId)).thenReturn(List.of(session));
+
+        ApplicationCardResponse card = svc.assemble(userId, app());
+
+        assertThat(card.guidedApplyRequired()).isTrue();
+        assertThat(card.blockerReason()).isEqualTo("CAPTCHA");
+    }
+
+    @Test
+    void abortedWithUnspecificReasonIsManualRequiredNeverFabricated() {
+        ApplicationExecution exec = ApplicationExecution.builder()
+                .id(UUID.randomUUID()).userId(userId).jobId(jobId)
+                .executionStatus(ApplicationExecution.STATUS_ABORTED)
+                .failureReason("no execution backend configured (browser + ATS connectors disabled)")
+                .build();
+        stubExecution(exec, null);
+
+        ApplicationCardResponse card = svc.assemble(userId, app());
+
+        assertThat(card.guidedApplyRequired()).isTrue();
+        assertThat(card.blockerReason()).isEqualTo("MANUAL_REQUIRED");
+    }
+
+    @Test
+    void realTechnicalFailureStaysFailedNotGuidedApply() {
+        // A thrown exception mid-attempt is a genuine failure, not a legitimate automation stop —
+        // must never be relabelled as something the user is expected to complete manually.
+        ApplicationExecution exec = ApplicationExecution.builder()
+                .id(UUID.randomUUID()).userId(userId).jobId(jobId)
+                .executionStatus(ApplicationExecution.STATUS_FAILED)
+                .failureReason("java.lang.RuntimeException: boom")
+                .build();
+        stubExecution(exec, null);
+
+        ApplicationCardResponse card = svc.assemble(userId, app());
+
+        assertThat(card.automationHealth()).isEqualTo("FAILED");
+        assertThat(card.guidedApplyRequired()).isFalse();
+        assertThat(card.blockerReason()).isNull();
+        assertThat(card.blockerDetail()).isNull();
+    }
+
+    @Test
+    void nonAbortedExecutionNeverReportsAGuidedApplyBlocker() {
+        ApplicationExecution exec = ApplicationExecution.builder()
+                .id(UUID.randomUUID()).userId(userId).jobId(jobId)
+                .executionStatus(ApplicationExecution.STATUS_SUBMITTED)
+                .build();
+        stubExecution(exec, null);
+
+        ApplicationCardResponse card = svc.assemble(userId, app());
+
+        assertThat(card.guidedApplyRequired()).isFalse();
+        assertThat(card.blockerReason()).isNull();
+    }
+
+    @Test
+    void employerJobIdIsJoinedFromJobExternalId() {
+        when(jobs.findAllById(any())).thenReturn(List.of(Job.builder()
+                .id(jobId).title("Backend Engineer").company("Acme").externalId("GH-847291").build()));
+
+        ApplicationCardResponse card = svc.assemble(userId, app());
+
+        assertThat(card.employerJobId()).isEqualTo("GH-847291");
     }
 }

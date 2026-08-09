@@ -67,4 +67,21 @@ public class ApplicationSubmissionController {
     public List<SessionResponse> queue() {
         return service.queue().stream().map(SessionResponse::from).toList();
     }
+
+    /**
+     * Guided Apply — the candidate explicitly confirms they completed the employer's application
+     * themselves. Legal only from {@code WAITING_MANUAL_SUBMISSION}; any other status is a 409 via
+     * {@link ai.careerpilot.api.GlobalExceptionHandler}'s existing {@code IllegalStateException}
+     * mapping, the same convention {@code WorkflowService#resume} uses. There is deliberately no way
+     * to reach this transition except this explicit call — never inferred from opening the employer
+     * URL, never a timer, never automatic.
+     */
+    @PostMapping("/{id}/report-submitted")
+    public SessionResponse reportSubmitted(AuthenticatedUser user, @PathVariable UUID id,
+                                           @RequestBody(required = false) ReportSubmittedRequest request) {
+        String note = request == null ? null : request.note();
+        ApplicationSubmissionSession session = service.reportUserSubmitted(user.userId(), id, note)
+                .orElseThrow(() -> new NoSuchElementException("submission session not found"));
+        return SessionResponse.from(session);
+    }
 }

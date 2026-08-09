@@ -131,6 +131,98 @@ class FormFillPlannerTest {
         assertThat(plan.blockingGaps().get(0).reason()).contains("not fillable");
     }
 
+    // ── P7 Action 5C-FIX — custom combobox never silently disappears from the plan ──
+
+    /**
+     * Test E — a required custom combobox (role=combobox) with no verified answer must be a blocking
+     * gap, exactly like any other required-and-unresolved field. Before the fix this control
+     * classified UNSUPPORTED and, since discovery's native required/aria-required signals don't
+     * always fire on custom widgets, could vanish from the plan entirely with no blocking gap raised.
+     */
+    @Test
+    void aRequiredCustomComboboxWithNoVerifiedAnswerIsABlockingGap() {
+        DiscoveredField combobox = f(FieldControlType.COMBOBOX,
+                "Will you now or in the future require sponsorship for employment visa status?", true);
+        FormFillPlan plan = planner.plan(List.of(combobox), userId, null, docs(true));
+
+        assertThat(plan.fills()).isEmpty();
+        assertThat(plan.hasBlockingGaps()).isTrue();
+        assertThat(plan.covers(CanonicalField.VISA_SPONSORSHIP)).isTrue();
+    }
+
+    /**
+     * Test F — an optional custom combobox with no verified answer must remain observable in
+     * {@code unresolved()} (and hence in the plan summary / skipped map), never silently dropped and
+     * never counted as filled.
+     */
+    @Test
+    void anOptionalCustomComboboxWithNoVerifiedAnswerStaysObservableNeverFilled() {
+        DiscoveredField combobox = f(FieldControlType.COMBOBOX,
+                "Will you now or in the future require sponsorship for employment visa status?", false);
+        FormFillPlan plan = planner.plan(List.of(combobox), userId, null, docs(true));
+
+        assertThat(plan.fills()).isEmpty();
+        assertThat(plan.hasBlockingGaps()).isFalse();
+        assertThat(plan.unresolved()).hasSize(1);
+        assertThat(plan.covers(CanonicalField.VISA_SPONSORSHIP)).isTrue();
+    }
+
+    /**
+     * Every discovered control must be accounted for in fills()+unresolved() — the structural
+     * invariant the HIGH finding violated (14 discovered, 11 planned, 3 silently vanished).
+     */
+    @Test
+    void everyDiscoveredComboboxIsAccountedForInFillsOrUnresolved() {
+        DiscoveredField required = f(FieldControlType.COMBOBOX, "Are you legally authorized to work here?", true);
+        DiscoveredField optional = f(FieldControlType.COMBOBOX, "How did you hear about this job?", false);
+        FormFillPlan plan = planner.plan(List.of(required, optional), userId, null, docs(true));
+
+        assertThat(plan.fills().size() + plan.unresolved().size()).isEqualTo(2);
+    }
+
+    /**
+     * Test G — WORK_AUTHORIZATION end-to-end: question text classifies to the canonical field, which
+     * resolves against a real seeded {@code CandidateAtsProfile.workAuthorization}, and the resolved
+     * value reaches the plan with correct provenance. This is a fix-verification, not a fix: reading
+     * {@code FieldMappingService}/{@code AtsProfileField}/{@code AnswerResolver} showed the mapping
+     * already exists end-to-end (case WORK_AUTHORIZATION -> fromMapping(ctx, "workAuthorization"),
+     * backed by AtsProfileField.WORK_AUTHORIZATION) and is already exercised by
+     * {@code FieldMappingAtsProfileTest#allFieldsResolve}; the MEDIUM finding from the prior report
+     * was a test-harness gap (CandidateAtsProfileService never mocked/seeded there), not a production
+     * defect — this test proves that conclusion by seeding the real service and getting a real value.
+     */
+    @Test
+    void workAuthorizationResolvesEndToEndFromASeededAtsProfile() {
+        ai.careerpilot.repo.CandidateAtsProfileRepository atsRepo =
+                mock(ai.careerpilot.repo.CandidateAtsProfileRepository.class);
+        ai.careerpilot.service.profile.ats.CandidateAtsProfileService atsService =
+                new ai.careerpilot.service.profile.ats.CandidateAtsProfileService(atsRepo, true);
+        when(atsRepo.save(org.mockito.ArgumentMatchers.any(ai.careerpilot.domain.CandidateAtsProfile.class)))
+                .thenAnswer(inv -> inv.getArgument(0));
+        when(atsRepo.findByUserId(userId)).thenReturn(Optional.empty());
+        ai.careerpilot.domain.CandidateAtsProfile seeded = atsService.update(userId,
+                        java.util.Map.of(ai.careerpilot.service.profile.ats.AtsProfileField.WORK_AUTHORIZATION.fieldName(),
+                                "Authorized to work without sponsorship"),
+                        ai.careerpilot.domain.FieldVerificationSource.USER_ENTERED)
+                .orElseThrow();
+        when(atsRepo.findByUserId(userId)).thenReturn(Optional.of(seeded));
+
+        FormFillPlanner plannerWithAts = new FormFillPlanner(
+                new FieldClassifier(new QuestionDetectionService()),
+                new AnswerResolver(new FieldMappingService(users, profiles, atsService), users,
+                        mock(ApplicationSubmissionAnswerRepository.class)));
+
+        DiscoveredField workAuthField = f(FieldControlType.COMBOBOX,
+                "Are you legally authorized to work in this country?", true);
+        FormFillPlan plan = plannerWithAts.plan(List.of(workAuthField), userId, null, docs(true));
+
+        assertThat(plan.hasBlockingGaps()).isFalse();
+        assertThat(plan.fills()).hasSize(1);
+        assertThat(plan.fills().get(0).canonical()).isEqualTo(CanonicalField.WORK_AUTHORIZATION);
+        assertThat(plan.fills().get(0).value()).isEqualTo("Authorized to work without sponsorship");
+        assertThat(plan.fills().get(0).source()).isEqualTo("CandidateAtsProfile.workAuthorization");
+    }
+
     // ── choice controls ──
 
     @Test

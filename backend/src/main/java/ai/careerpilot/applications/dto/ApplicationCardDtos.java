@@ -51,6 +51,9 @@ public final class ApplicationCardDtos {
             String source,
             String externalUrl,
             Boolean sponsorshipAvailable,
+            // Guided Apply — the employer's own job identifier (Job.externalId), when the discovery
+            // source recorded one. Null is honest for manually-added jobs, which have none.
+            String employerJobId,
 
             // Artifact-presence signals (read-only joins; drive WorkflowStageChecklist)
             boolean resumeTailored,
@@ -82,7 +85,25 @@ public final class ApplicationCardDtos {
             String executionStatus,
             String automationHealth,
             Integer retryCount,
-            String verificationStatus
+            String verificationStatus,
+
+            // Guided Apply — populated only when automationHealth is "GUIDED_APPLY_REQUIRED" (i.e.
+            // the latest execution is ABORTED). blockerReason is the deterministic classification
+            // (ai.careerpilot.domain.GuidedApplyReason); blockerDetail is the underlying raw
+            // ApplicationExecution.failureReason text, for honest "why manual" copy the enum alone
+            // can't carry. Both null otherwise — never fabricated.
+            boolean guidedApplyRequired,
+            String blockerReason,
+            String blockerDetail,
+
+            // P1.1 — Application lifecycle tracking. All derived from the same lifecycle/status-history
+            // join already fetched for health/recommendation scoring and lifecycleStatus above — no new
+            // query. previousStatus/statusChangedAt are null when no Phase 3A lifecycle row exists yet
+            // (workflow.tracking.enabled off, or no transition has ever been recorded) — never fabricated.
+            String previousStatus,
+            Instant statusChangedAt,
+            Long applicationAgeDays,
+            Long daysSinceLastActivity
     ) {}
 
     public record BulkActionRequest(List<UUID> ids, String action, java.util.Map<String, String> payload) {}

@@ -17,13 +17,16 @@ public final class ApplicationSubmissionDtos {
                                   UUID companyKnowledgeId, UUID approvalQueueEntryId, UUID applicationExecutionId,
                                   String status, String submissionMethod, String provider, UUID correlationId,
                                   String failureReason, Instant startedAt, Instant completedAt,
-                                  Instant createdAt, Instant updatedAt) {
+                                  Instant createdAt, Instant updatedAt,
+                                  // Guided Apply — null unless reportUserSubmitted was ever called for this session.
+                                  Instant userReportedSubmittedAt, String userSubmissionNote) {
         public static SessionResponse from(ApplicationSubmissionSession s) {
             return new SessionResponse(s.getId(), s.getUserId(), s.getJobId(), s.getApplicationId(), s.getResumeId(),
                     s.getResumeTailoringId(), s.getApplicationPackageId(), s.getApplicationReviewId(),
                     s.getCompanyKnowledgeId(), s.getApprovalQueueEntryId(), s.getApplicationExecutionId(),
                     s.getStatus(), s.getSubmissionMethod(), s.getProvider(), s.getCorrelationId(),
-                    s.getFailureReason(), s.getStartedAt(), s.getCompletedAt(), s.getCreatedAt(), s.getUpdatedAt());
+                    s.getFailureReason(), s.getStartedAt(), s.getCompletedAt(), s.getCreatedAt(), s.getUpdatedAt(),
+                    s.getUserReportedSubmittedAt(), s.getUserSubmissionNote());
         }
     }
 
@@ -48,4 +51,7 @@ public final class ApplicationSubmissionDtos {
     }
 
     public record StartRequest(UUID jobId, UUID resumeId) {}
+
+    /** Guided Apply — the candidate's own note is optional; the confirmation itself is not. */
+    public record ReportSubmittedRequest(String note) {}
 }

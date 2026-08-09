@@ -220,7 +220,35 @@ public class OperationsService {
         cancelledQueue.put("items", executions.countByExecutionStatusAndFailureReasonStartingWith(
                 ApplicationExecution.STATUS_ABORTED, "cancelled by user:"));
         out.put("cancelledQueue", cancelledQueue);
+        // P7 Action 4 — SUBMITTING was previously invisible on this dashboard entirely (no counter
+        // anywhere). It reuses the same queueInfo shape every other status already gets — items,
+        // oldest/newest, average wait — nothing SUBMITTING-specific was invented.
+        out.put("submittingQueue", queueInfo(ApplicationExecution.STATUS_SUBMITTING));
         return out;
+    }
+
+    /**
+     * P7 Action 4 — the actual rows behind {@code submittingQueue}, for human investigation. A row
+     * here means the process died (or is still working) between the atomic claim (Action 1) and the
+     * terminal write — genuinely ambiguous, since the browser click may or may not have reached the
+     * employer. Deliberately read-only: this method only lists rows, exactly like {@link #detail}.
+     * Nothing in this class — or anywhere reachable from it — automatically retries or transitions
+     * a SUBMITTING row; see {@code STATUS_SUBMITTING}'s own javadoc for why that must stay true.
+     */
+    public List<Map<String, Object>> staleSubmittingExecutions(Duration staleAfter) {
+        Instant cutoff = Instant.now().minus(staleAfter);
+        return executions.findByExecutionStatusAndCreatedAtBefore(ApplicationExecution.STATUS_SUBMITTING, cutoff)
+                .stream()
+                .map(exec -> {
+                    Map<String, Object> row = new LinkedHashMap<>();
+                    row.put("executionId", exec.getId());
+                    row.put("userId", exec.getUserId());
+                    row.put("jobId", exec.getJobId());
+                    row.put("createdAt", exec.getCreatedAt());
+                    row.put("ageMs", Duration.between(exec.getCreatedAt(), Instant.now()).toMillis());
+                    return row;
+                })
+                .toList();
     }
 
     private Map<String, Object> queueInfo(String status) {

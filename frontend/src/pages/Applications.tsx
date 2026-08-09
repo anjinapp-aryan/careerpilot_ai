@@ -16,6 +16,7 @@ import {
   Gauge,
   KanbanSquare,
   Percent,
+  ShieldAlert,
   Target,
   TrendingUp,
   Trophy,
@@ -176,8 +177,8 @@ export default function Applications() {
     return (
       <div className="space-y-6">
         <PageHeader title="Applications" description="Track every opportunity through your pipeline." />
-        <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 xl:grid-cols-9">
-          {Array.from({ length: 9 }).map((_, i) => (
+        <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 xl:grid-cols-10">
+          {Array.from({ length: 10 }).map((_, i) => (
             <Skeleton key={i} className="h-24 rounded-xl" />
           ))}
         </div>
@@ -215,8 +216,9 @@ export default function Applications() {
         }
       />
 
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 xl:grid-cols-9">
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 xl:grid-cols-10">
         <KpiCard label="Applications" value={kpis.applications} icon={Briefcase} tone="primary" />
+        <KpiCard label="Guided Apply" value={kpis.guidedApply} icon={ShieldAlert} tone="warning" hint="Needs manual completion" />
         <KpiCard label="Interviews" value={kpis.interviews} icon={Users} tone="info" />
         <KpiCard label="Offers" value={kpis.offers} icon={Trophy} tone="success" />
         <KpiCard label="Response rate" value={kpis.responseRate} suffix="%" icon={Percent} tone="info" />
@@ -291,7 +293,9 @@ function computeKpis(cards: ApplicationCard[]) {
   const pipelineVelocity =
     active.length === 0 ? 0 : Math.round((active.filter((c) => !STALE_HEALTH.has(c.healthStatus)).length / active.length) * 100);
 
-  return { applications: total, interviews, offers, responseRate, avgAts, avgMatch, successRate, avgResponseDays, pipelineVelocity };
+  const guidedApply = cards.filter((c) => c.guidedApplyRequired).length;
+
+  return { applications: total, interviews, offers, responseRate, avgAts, avgMatch, successRate, avgResponseDays, pipelineVelocity, guidedApply };
 }
 
 function KanbanColumn({

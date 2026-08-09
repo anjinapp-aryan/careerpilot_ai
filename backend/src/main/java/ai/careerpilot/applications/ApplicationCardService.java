@@ -157,6 +157,14 @@ public class ApplicationCardService {
                     return latestChange == null ? l.getUpdatedAt() : latestChange;
                 })
                 .orElse(null);
+        // P1.1 — Application lifecycle tracking. Reuses the same lifecycle/status-history join
+        // already fetched above for health/recommendation scoring; no new query.
+        String previousStatus = lifecycle.map(l -> data.previousStatusByLifecycle().get(l.getId())).orElse(null);
+        Instant activityAnchor = lastStatusChangeAt != null ? lastStatusChangeAt : app.getUpdatedAt();
+        Long daysSinceLastActivity = activityAnchor == null ? null
+                : java.time.Duration.between(activityAnchor, Instant.now()).toDays();
+        Long applicationAgeDays = app.getCreatedAt() == null ? null
+                : java.time.Duration.between(app.getCreatedAt(), Instant.now()).toDays();
 
         // Refresh the app's computed match/ATS onto a shallow copy so health/recommendation see fresh values
         // without ever writing them back to the dead columns.
@@ -230,7 +238,8 @@ public class ApplicationCardService {
                 lifecycleStatus,
                 latestExecution == null ? null : latestExecution.getId(),
                 executionStatus, automationHealth, retryCount, verificationStatus,
-                guidedApplyRequired, blockerReason, blockerDetail
+                guidedApplyRequired, blockerReason, blockerDetail,
+                previousStatus, lastStatusChangeAt, applicationAgeDays, daysSinceLastActivity
         );
     }
 
@@ -249,6 +258,7 @@ public class ApplicationCardService {
                               CandidateProfile profile,
                               Map<UUID, ApplicationLifecycle> lifecycles,
                               Map<UUID, Instant> lastStatusChangeByLifecycle,
+                              Map<UUID, String> previousStatusByLifecycle,
                               Map<UUID, ApplicationExecution> latestExecutions,
                               Map<UUID, Long> retryCounts,
                               Map<UUID, ApplicationSubmissionSession> latestSubmissionSessions) {
@@ -294,11 +304,13 @@ public class ApplicationCardService {
                 .filter(l -> jobIds.contains(l.getJobId()))
                 .collect(Collectors.toMap(ApplicationLifecycle::getJobId, l -> l, (a, b) -> a));
         Map<UUID, Instant> lastChange = new HashMap<>();
+        Map<UUID, String> previousStatus = new HashMap<>();
         if (!lifecyclesByJob.isEmpty()) {
             Set<UUID> lifecycleIds = lifecyclesByJob.values().stream()
                     .map(ApplicationLifecycle::getId).collect(Collectors.toSet());
             for (var row : statusHistory.findLatestChangePerLifecycle(lifecycleIds)) {
                 lastChange.put(row.getLifecycleId(), row.getChangedAt());
+                if (row.getFromStatus() != null) previousStatus.put(row.getLifecycleId(), row.getFromStatus());
             }
         }
 
@@ -324,7 +336,7 @@ public class ApplicationCardService {
                 .collect(Collectors.toMap(ApplicationSubmissionSession::getJobId, s -> s, (a, b) -> a));
 
         return new JoinedData(jobsById, recoScores, tailored, atsScores, withCoverLetter,
-                packageIdsByJob, reviewed, profile, lifecyclesByJob, lastChange,
+                packageIdsByJob, reviewed, profile, lifecyclesByJob, lastChange, previousStatus,
                 latestExecutions, retryCounts, latestSubmissionByJob);
     }
 

@@ -94,7 +94,16 @@ public final class ApplicationCardDtos {
             // can't carry. Both null otherwise — never fabricated.
             boolean guidedApplyRequired,
             String blockerReason,
-            String blockerDetail
+            String blockerDetail,
+
+            // P1.1 — Application lifecycle tracking. All derived from the same lifecycle/status-history
+            // join already fetched for health/recommendation scoring and lifecycleStatus above — no new
+            // query. previousStatus/statusChangedAt are null when no Phase 3A lifecycle row exists yet
+            // (workflow.tracking.enabled off, or no transition has ever been recorded) — never fabricated.
+            String previousStatus,
+            Instant statusChangedAt,
+            Long applicationAgeDays,
+            Long daysSinceLastActivity
     ) {}
 
     public record BulkActionRequest(List<UUID> ids, String action, java.util.Map<String, String> payload) {}

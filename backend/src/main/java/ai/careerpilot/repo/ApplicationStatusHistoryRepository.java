@@ -14,14 +14,19 @@ public interface ApplicationStatusHistoryRepository extends JpaRepository<Applic
     interface LatestChange {
         UUID getLifecycleId();
         java.time.Instant getChangedAt();
+        /** P1.1 — the status this lifecycle transitioned FROM on its most recent change; null for
+         *  the very first history row (nothing preceded it). */
+        String getFromStatus();
     }
 
     /**
-     * The newest {@code changed_at} per lifecycle, for a whole page of cards in one query. The card
-     * only ever reads the first element of the descending history, so nothing else is fetched.
+     * The newest {@code changed_at} (+ {@code from_status}, for "previous status") per lifecycle,
+     * for a whole page of cards in one query. The card only ever reads the first element of the
+     * descending history, so nothing else is fetched.
      */
     @org.springframework.data.jpa.repository.Query(value = """
-            SELECT DISTINCT ON (lifecycle_id) lifecycle_id AS lifecycleId, changed_at AS changedAt
+            SELECT DISTINCT ON (lifecycle_id) lifecycle_id AS lifecycleId, changed_at AS changedAt,
+                   from_status AS fromStatus
             FROM application_status_history
             WHERE lifecycle_id IN (:lifecycleIds)
             ORDER BY lifecycle_id, changed_at DESC

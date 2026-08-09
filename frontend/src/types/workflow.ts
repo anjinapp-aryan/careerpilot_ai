@@ -969,6 +969,13 @@ export interface ApplicationCard {
   guidedApplyRequired: boolean;
   blockerReason?: string | null;
   blockerDetail?: string | null;
+
+  /** P1.1 — Application lifecycle tracking. Null when no Phase 3A lifecycle row exists yet
+   *  (workflow.tracking.enabled off, or no transition recorded) — never fabricated. */
+  previousStatus?: string | null;
+  statusChangedAt?: string | null;
+  applicationAgeDays?: number | null;
+  daysSinceLastActivity?: number | null;
 }
 
 /** Guided Apply — one candidate-profile fact shown in the Application Profile section. */

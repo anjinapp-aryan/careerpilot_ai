@@ -294,6 +294,11 @@ export function ApplicationDrawer({
                   <div><dt className="font-medium text-foreground">Sponsorship</dt><dd>{card.sponsorshipAvailable == null ? '—' : card.sponsorshipAvailable ? 'Yes' : 'No'}</dd></div>
                   <div><dt className="font-medium text-foreground">Visa required</dt><dd>{card.visaRequired == null ? '—' : card.visaRequired ? 'Yes' : 'No'}</dd></div>
                   <div><dt className="font-medium text-foreground">Source</dt><dd>{card.source ?? '—'}</dd></div>
+                  <div><dt className="font-medium text-foreground">Application age</dt><dd>{card.applicationAgeDays == null ? '—' : `${card.applicationAgeDays}d`}</dd></div>
+                  <div><dt className="font-medium text-foreground">Last activity</dt><dd>{card.daysSinceLastActivity == null ? '—' : card.daysSinceLastActivity === 0 ? 'Today' : `${card.daysSinceLastActivity}d ago`}</dd></div>
+                  {card.previousStatus && (
+                    <div><dt className="font-medium text-foreground">Previous status</dt><dd>{card.previousStatus}</dd></div>
+                  )}
                 </dl>
                 <div>
                   <h4 className="mb-2 text-sm font-semibold text-foreground">Workflow pipeline</h4>

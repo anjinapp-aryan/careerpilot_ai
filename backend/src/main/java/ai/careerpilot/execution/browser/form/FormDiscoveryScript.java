@@ -526,6 +526,115 @@ public final class FormDiscoveryScript {
             """;
 
     /**
+     * Iframe-aware form + CAPTCHA discovery — the frame-traversal counterpart to {@link
+     * #DISCOVER_PAGE_IDENTITY} and {@link #DISCOVER_ENVIRONMENT}, both of which query the top
+     * document only. Real Greenhouse/Lever forms are routinely embedded in an iframe (measured: a
+     * live Lever posting scored 0/5 top-level signals and was rejected as {@code
+     * INVALID_APPLICATION_PAGE} before the already frame-capable {@link #DISCOVER_FIELDS} ever ran),
+     * so verification and CAPTCHA detection needed the same traversal {@code DISCOVER_FIELDS} already
+     * has — this script is that traversal, scoped to signal-counting rather than full field
+     * extraction.
+     *
+     * <p>Same-origin frames only, walked recursively (depth and frame-count capped, mirroring {@code
+     * DISCOVER_FIELDS}' own {@code roots.length > 60} guard against a pathological page). A
+     * cross-origin frame is never worked around — its element is recorded as inaccessible (parent
+     * frame path + {@code src}, both readable without crossing the boundary) rather than silently
+     * skipped, so an empty result behind a cross-origin frame is diagnosable instead of looking like
+     * an empty page.
+     *
+     * <p>Per-frame CAPTCHA detection reuses the same provider-marker vocabulary as {@link
+     * #DISCOVER_ENVIRONMENT}'s regex, evaluated against each frame's own document rather than only
+     * the top one — a CAPTCHA embedded solely inside an iframe was previously invisible to both this
+     * class and {@code CaptchaLoginDetector} (which only ever sees {@code page().content()}, the top
+     * document's serialised HTML).
+     */
+    public static final String DISCOVER_FRAME_REPORT = """
+            () => {
+              const CAPTCHA_RE = /recaptcha|hcaptcha|cf-turnstile|g-recaptcha|captcha-delivery/i;
+              const q = (doc, sel) => { try { return doc.querySelectorAll(sel).length; } catch (e) { return 0; } };
+
+              const signalsOf = (doc, framePath) => {
+                const fileInputs = q(doc, 'input[type="file"]');
+                const emailInputs = q(doc, 'input[type="email"]');
+                const passwordInputs = q(doc, 'input[type="password"]') > 0;
+                let textInputs = 0;
+                try {
+                  doc.querySelectorAll('input').forEach(el => {
+                    const t = (el.getAttribute('type') || 'text').toLowerCase();
+                    if (t === 'text' || t === 'tel' || t === 'url' || t === 'search') textInputs++;
+                  });
+                } catch (e) { /* leave at 0 */ }
+
+                let submitButtons = 0;
+                try {
+                  doc.querySelectorAll('button, input[type="submit"], [role="button"]').forEach(el => {
+                    const label = ((el.innerText || '') + ' ' + (el.value || '') + ' '
+                        + (el.getAttribute('aria-label') || '')).toLowerCase();
+                    const type = (el.getAttribute('type') || '').toLowerCase();
+                    if (type === 'submit' || /submit|apply|send application/.test(label)) submitButtons++;
+                  });
+                } catch (e) { /* leave at 0 */ }
+
+                let applicationHeading = false;
+                try {
+                  const headingText = Array.from(doc.querySelectorAll('h1, h2, h3, legend, [role="heading"]'))
+                      .map(h => (h.innerText || '').toLowerCase()).join(' | ');
+                  const bodyText = (doc.body && doc.body.innerText ? doc.body.innerText : '').slice(0, 4000).toLowerCase();
+                  applicationHeading = /apply for this job|apply to |submit your application|application form|submit application|apply now/
+                      .test(headingText + ' ' + bodyText);
+                } catch (e) { /* leave false */ }
+
+                let captchaDetected = false;
+                try {
+                  const html = doc.documentElement ? doc.documentElement.outerHTML : '';
+                  captchaDetected = CAPTCHA_RE.test(html);
+                } catch (e) { /* leave false */ }
+
+                let frameUrl = '';
+                let title = '';
+                try { frameUrl = (doc.defaultView && doc.defaultView.location) ? doc.defaultView.location.href : ''; } catch (e) {}
+                try { title = doc.title || ''; } catch (e) {}
+
+                return {
+                  framePath: framePath, frameUrl: frameUrl, title: title,
+                  fileInputs: fileInputs, emailInputs: emailInputs, textInputs: textInputs,
+                  submitButtons: submitButtons, applicationHeading: applicationHeading,
+                  passwordInputs: passwordInputs, captchaDetected: captchaDetected
+                };
+              };
+
+              const frames = [];
+              const inaccessible = [];
+              const seen = new Set();
+
+              const walk = (doc, framePath, depth) => {
+                if (!doc || seen.has(doc) || frames.length > 40 || depth > 6) return;
+                seen.add(doc);
+                frames.push(signalsOf(doc, framePath));
+
+                let els = [];
+                try { els = Array.from(doc.querySelectorAll('iframe, frame')); } catch (e) { els = []; }
+                els.forEach((f, i) => {
+                  let childDoc = null;
+                  try { childDoc = f.contentDocument; } catch (e) { childDoc = null; }
+                  const path = (framePath ? framePath + ' >> ' : '')
+                      + (f.id ? '#' + f.id : 'iframe:nth-of-type(' + (i + 1) + ')');
+                  if (!childDoc) {
+                    let src = '';
+                    try { src = f.getAttribute('src') || ''; } catch (e) {}
+                    inaccessible.push({ parentFramePath: framePath, src: src });
+                    return;
+                  }
+                  walk(childDoc, path, depth + 1);
+                });
+              };
+              walk(document, '', 0);
+
+              return { frames: frames, inaccessible: inaccessible };
+            }
+            """;
+
+    /**
      * Phase F4 — page identity, read <b>before</b> any discovery so an invalid page can be rejected
      * without ever being scored.
      *
@@ -611,6 +720,38 @@ public final class FormDiscoveryScript {
                 str(map, "title"),
                 str(map, "visibleText"),
                 signals);
+    }
+
+    /**
+     * Parse {@link #DISCOVER_FRAME_REPORT}. An unusable or missing result degrades to {@link
+     * FrameDiscoveryReport#empty()} — the same "a broken probe must never reject a real form"
+     * discipline as every other parser in this class — which makes {@code AtsPageVerifier}'s
+     * frame-aware fallback a no-op rather than a false rejection when the probe itself failed.
+     */
+    public static FrameDiscoveryReport parseFrameReport(Object scriptResult) {
+        if (!(scriptResult instanceof Map<?, ?> envelope)) {
+            return FrameDiscoveryReport.empty();
+        }
+        List<FramePageSignals> frames = new ArrayList<>();
+        if (envelope.get("frames") instanceof List<?> rows) {
+            for (Object row : rows) {
+                if (!(row instanceof Map<?, ?> map)) continue;
+                frames.add(new FramePageSignals(
+                        str(map, "framePath"), str(map, "frameUrl"), str(map, "title"),
+                        count(map, "fileInputs"), count(map, "emailInputs"), count(map, "textInputs"),
+                        count(map, "submitButtons"), bool(map, "applicationHeading"),
+                        bool(map, "passwordInputs"), bool(map, "captchaDetected")));
+            }
+        }
+        List<FrameDiscoveryReport.InaccessibleFrame> inaccessible = new ArrayList<>();
+        if (envelope.get("inaccessible") instanceof List<?> rows) {
+            for (Object row : rows) {
+                if (!(row instanceof Map<?, ?> map)) continue;
+                inaccessible.add(new FrameDiscoveryReport.InaccessibleFrame(
+                        str(map, "parentFramePath"), str(map, "src")));
+            }
+        }
+        return new FrameDiscoveryReport(frames, inaccessible);
     }
 
     /** Parse {@link #DISCOVER_ENVIRONMENT}. Missing keys degrade to a neutral value, never a throw. */

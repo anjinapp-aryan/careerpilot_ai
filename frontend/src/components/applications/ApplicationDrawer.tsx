@@ -37,10 +37,13 @@ import { AiRecommendationPanel } from './AiRecommendationPanel';
 import { NextActionCard } from './NextActionCard';
 import { InterviewReadinessPanel } from './InterviewReadinessPanel';
 import { WorkflowStageChecklist } from './WorkflowStageChecklist';
+import { GuidedApplyBriefPanel } from './GuidedApplyBriefPanel';
+import { ExecutionEvidencePanel } from './ExecutionEvidencePanel';
 import type { ApplicationCard, LifecycleView, TimelineEntry } from '@/types/workflow';
 
 const TABS = [
   { value: 'overview', label: 'Overview' },
+  { value: 'guidedApply', label: 'Guided Apply' },
   { value: 'timeline', label: 'Timeline' },
   { value: 'resume', label: 'Resume' },
   { value: 'coverLetter', label: 'Cover Letter' },
@@ -55,6 +58,7 @@ const TABS = [
 const AUTOMATION_HEALTH_TONE: Record<string, 'success' | 'warning' | 'danger' | 'neutral' | 'primary'> = {
   RUNNING: 'primary', WAITING: 'warning', RETRYING: 'warning', MANUAL_REVIEW: 'danger',
   RECOVERED: 'success', COMPLETED: 'success', VERIFICATION_FAILED: 'danger', FAILED: 'danger',
+  GUIDED_APPLY_REQUIRED: 'warning',
 };
 
 const SUGGESTED_PROMPTS = [
@@ -101,6 +105,14 @@ export function ApplicationDrawer({
     retry: false,
   });
   const card = cardQuery.data ?? null;
+
+  // Guided Apply — jump straight to the Guided Apply tab when an application needs it, since it's
+  // the most important thing for the user to see (Section 16's information hierarchy).
+  useEffect(() => {
+    if (card?.guidedApplyRequired) setTab('guidedApply');
+  }, [applicationId, card?.guidedApplyRequired]);
+
+  const tabItems = card?.guidedApplyRequired ? TABS : TABS.filter((t) => t.value !== 'guidedApply');
 
   useEffect(() => {
     setNotes(card?.notes ?? '');
@@ -247,7 +259,7 @@ export function ApplicationDrawer({
           )}
         </DrawerDescription>
       </DrawerHeader>
-      <Tabs items={TABS} value={tab} onChange={setTab} className="px-6" />
+      <Tabs items={tabItems} value={tab} onChange={setTab} className="px-6" />
       <DrawerBody className="space-y-4">
         {cardQuery.isLoading || !card ? (
           <div className="space-y-3">
@@ -259,6 +271,18 @@ export function ApplicationDrawer({
           <>
             {tab === 'overview' && (
               <div className="space-y-4">
+                {card.guidedApplyRequired && (
+                  <button
+                    type="button"
+                    onClick={() => setTab('guidedApply')}
+                    className="flex w-full items-center justify-between gap-3 rounded-lg border border-warning/30 bg-warning/10 px-4 py-3 text-left"
+                  >
+                    <span className="text-sm font-medium text-foreground">
+                      🟡 Guided Apply — CareerPilot prepared your application; you'll need to complete it manually.
+                    </span>
+                    <Badge tone="warning">View brief</Badge>
+                  </button>
+                )}
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                   <NextActionCard card={card} />
                   <AiRecommendationPanel card={card} />
@@ -277,6 +301,10 @@ export function ApplicationDrawer({
                 </div>
                 <CompanyIntelPanel companyName={card.company} jobId={card.jobId} />
               </div>
+            )}
+
+            {tab === 'guidedApply' && card.guidedApplyRequired && (
+              <GuidedApplyBriefPanel applicationId={card.id} card={card} />
             )}
 
             {tab === 'timeline' && (
@@ -384,11 +412,11 @@ export function ApplicationDrawer({
 
             {tab === 'automation' && (
               <div className="space-y-4">
-                {!executionId ? (
-                  <p className="rounded-lg border border-dashed border-border bg-muted/20 p-4 text-sm text-muted-foreground">
-                    <Bot className="mb-1 h-4 w-4" /> No automation execution has run for this application yet.
-                  </p>
-                ) : executionDetail.isLoading ? (
+                {/* P7 Action 7 — always available regardless of application.operations.enabled;
+                    the richer detail/explain/evidence-download blocks below stay ops-flag-gated. */}
+                <ExecutionEvidencePanel applicationId={card.id} />
+
+                {!executionId ? null : executionDetail.isLoading ? (
                   <Skeleton className="h-40 rounded-lg" />
                 ) : !executionDetail.data ? (
                   <p className="rounded-lg border border-dashed border-border bg-muted/20 p-4 text-sm text-muted-foreground">

@@ -232,6 +232,49 @@ public class ApplicationSubmissionSessionService {
                 List.of(ApplicationSubmissionSession.STATUS_WAITING_APPROVAL, ApplicationSubmissionSession.STATUS_SUBMITTING));
     }
 
+    /**
+     * Guided Apply — the candidate explicitly confirms they completed the employer's application
+     * themselves. This is the ONLY way {@link ApplicationSubmissionSession#STATUS_USER_REPORTED_SUBMITTED}
+     * is ever reached (see {@link SubmissionStateMachine}) — no timer, no inference from the user
+     * opening the employer URL, no automatic transition. Legal only from {@code
+     * WAITING_MANUAL_SUBMISSION}; any other current status is a 409-shaped refusal via {@link
+     * IllegalStateException}, the same convention {@code WorkflowService#resume} already uses for
+     * "action not valid in this state" (see CLAUDE.md).
+     *
+     * <p>Deliberately does not reuse {@code SUBMITTED}/{@code SUBMIT_UNVERIFIED}: those mean
+     * CareerPilot's own automation acted. This status means CareerPilot never touched the employer's
+     * form — the candidate is the only witness, and the label must not overstate what is known.
+     *
+     * <p><b>Atomic conditional UPDATE, not read-then-write.</b> The same class of race Action 2
+     * closed for {@code ApprovalQueueRepository.claimDecision}: a double-tap on "Yes, I submitted
+     * it", or two open tabs, could otherwise both pass a read-then-check and both write — the
+     * second silently overwriting the first's note/timestamp. Only one caller's UPDATE can match
+     * {@code WHERE status = 'WAITING_MANUAL_SUBMISSION'}; the loser gets an honest 409 instead.
+     *
+     * @return empty when the session doesn't exist or isn't owned by {@code userId}
+     */
+    public Optional<ApplicationSubmissionSession> reportUserSubmitted(UUID userId, UUID sessionId, String note) {
+        // Existence/ownership check only — the actual state transition is the atomic claim below,
+        // so a session found here can still legitimately fail the claim (already reported, or
+        // advanced elsewhere) without this read ever being the arbiter.
+        if (sessions.findByIdAndUserId(sessionId, userId).isEmpty()) return Optional.empty();
+
+        Instant now = Instant.now();
+        String normalisedNote = (note == null || note.isBlank()) ? null : note;
+        int claimed = sessions.claimUserReportedSubmitted(sessionId, userId,
+                ApplicationSubmissionSession.STATUS_USER_REPORTED_SUBMITTED, now, normalisedNote);
+        if (claimed == 0) {
+            String currentStatus = sessions.findByIdAndUserId(sessionId, userId)
+                    .map(ApplicationSubmissionSession::getStatus).orElse("UNKNOWN");
+            throw new IllegalStateException(
+                    "session is not awaiting manual submission (status=" + currentStatus + ")");
+        }
+        ApplicationSubmissionSession session = sessions.findByIdAndUserId(sessionId, userId).orElseThrow();
+        publish(session);
+        log.info("APP_SUBMISSION USER_REPORTED_SUBMITTED session={} user={}", sessionId, userId);
+        return Optional.of(session);
+    }
+
     public List<ApplicationSubmissionAnswer> answersFor(UUID sessionId) {
         return answers.findBySessionIdOrderByCreatedAtAsc(sessionId);
     }

@@ -202,6 +202,67 @@ class BrowserFormAutomationEngineTimelineTest {
     }
 
     /**
+     * P7 Action 5C-FIX, Test B/C wiring — a verified combobox selection becomes a real filled field,
+     * not a silent drop and not a fabricated success. Proves {@code BrowserFormAutomationEngine}
+     * calls the real script with the field's own selector and the resolved answer, and honours a
+     * {@code matched:true, verified:true} result as success.
+     */
+    @Test
+    void verifiedComboboxSelectionIsReportedAsFilled() {
+        stubStageIds();
+        when(browser.evaluate(FormDiscoveryScript.DISCOVER_FIELDS)).thenReturn(Map.of(
+                "fields", List.of(fieldMap("visa_sponsorship", true))));
+        DiscoveredField field = new DiscoveredField("#visa_sponsorship", FieldControlType.COMBOBOX,
+                "", "", "Will you now or in the future require sponsorship?", "", "", "", "",
+                true, false, false, false, -1, List.of());
+        FormFillPlan.PlannedFill fill = new FormFillPlan.PlannedFill(
+                field, CanonicalField.VISA_SPONSORSHIP, "No", "CandidateProfile.visaRequired");
+        when(planner.plan(any(), any(), any(), any())).thenReturn(new FormFillPlan(List.of(fill), List.of()));
+        when(browser.evaluate(eq(FormDiscoveryScript.SELECT_COMBOBOX_OPTION), any())).thenReturn(Map.of(
+                "opened", true, "matched", true, "verified", true,
+                "selectedText", "No", "matchedOptionText", "No",
+                "availableOptions", List.of("Yes", "No")));
+
+        BrowserFormAutomationEngine.FillOutcome outcome = engine.fillForm(UUID.randomUUID(), UUID.randomUUID(),
+                BrowserFormAutomationEngine.DocumentPaths.none(), run);
+
+        assertThat(outcome.filled()).contains(CanonicalField.VISA_SPONSORSHIP.name());
+        assertThat(outcome.blockingGaps()).isEmpty();
+        verify(browser).evaluate(eq(FormDiscoveryScript.SELECT_COMBOBOX_OPTION),
+                eq(Map.of("selector", "#visa_sponsorship", "expected", "No")));
+    }
+
+    /**
+     * P7 Action 5C-FIX, Test D wiring — when the live combobox has no option matching the resolved
+     * answer, the field must become a skip with a reason (and a blocking gap if required), never a
+     * fabricated fill. This is the exact scenario the HIGH finding's fix exists to make impossible:
+     * the field stays visible and accounted for instead of disappearing from every count.
+     */
+    @Test
+    void unmatchedComboboxSelectionIsABlockingGapNeverAFabricatedFill() {
+        stubStageIds();
+        when(browser.evaluate(FormDiscoveryScript.DISCOVER_FIELDS)).thenReturn(Map.of(
+                "fields", List.of(fieldMap("visa_sponsorship", true))));
+        DiscoveredField field = new DiscoveredField("#visa_sponsorship", FieldControlType.COMBOBOX,
+                "", "", "Will you now or in the future require sponsorship?", "", "", "", "",
+                true, false, false, false, -1, List.of());
+        FormFillPlan.PlannedFill fill = new FormFillPlan.PlannedFill(
+                field, CanonicalField.VISA_SPONSORSHIP, "No", "CandidateProfile.visaRequired");
+        when(planner.plan(any(), any(), any(), any())).thenReturn(new FormFillPlan(List.of(fill), List.of()));
+        when(browser.evaluate(eq(FormDiscoveryScript.SELECT_COMBOBOX_OPTION), any())).thenReturn(Map.of(
+                "opened", true, "matched", false, "verified", false,
+                "reason", "no rendered option matches the verified answer",
+                "availableOptions", List.of("Maybe", "Unsure")));
+
+        BrowserFormAutomationEngine.FillOutcome outcome = engine.fillForm(UUID.randomUUID(), UUID.randomUUID(),
+                BrowserFormAutomationEngine.DocumentPaths.none(), run);
+
+        assertThat(outcome.filled()).doesNotContain(CanonicalField.VISA_SPONSORSHIP.name());
+        assertThat(outcome.blockingGaps()).hasSize(1);
+        assertThat(outcome.blockingGaps().get(0)).contains("no rendered option matches");
+    }
+
+    /**
      * The pre-existing 3-arg overload delegates to the 4-arg one with {@code run = null} — against a
      * mock, that still registers as a method call (the mock does not know the real recorder's
      * null-run contract), so what actually needs proving is the real recorder's behaviour: nothing

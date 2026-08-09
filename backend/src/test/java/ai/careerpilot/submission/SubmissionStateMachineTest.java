@@ -67,14 +67,65 @@ class SubmissionStateMachineTest {
     }
 
     @Test
-    void waitingManualSubmissionHasNoForwardTransitionsButCanFail() {
-        // A deliberate resting state (like WAITING_APPROVAL) — not currently auto-progressed
-        // anywhere; only fail-closed FAILED is legal until a future manual-confirm action exists.
+    void waitingManualSubmissionOnlyAdvancesToUserReportedSubmittedOrFailed() {
+        // Guided Apply — the one legal way out: an explicit user confirmation. No automatic
+        // progression to TRACKING/SUBMITTED (CareerPilot never inferred a real submission).
         assertFalse(SubmissionStateMachine.isTerminal(STATUS_WAITING_MANUAL_SUBMISSION));
         assertTrue(SubmissionStateMachine.isKnown(STATUS_WAITING_MANUAL_SUBMISSION));
         assertFalse(SubmissionStateMachine.canTransition(STATUS_WAITING_MANUAL_SUBMISSION, STATUS_TRACKING));
         assertFalse(SubmissionStateMachine.canTransition(STATUS_WAITING_MANUAL_SUBMISSION, STATUS_SUBMITTED));
+        assertTrue(SubmissionStateMachine.canTransition(STATUS_WAITING_MANUAL_SUBMISSION, STATUS_USER_REPORTED_SUBMITTED));
         assertTrue(SubmissionStateMachine.canTransition(STATUS_WAITING_MANUAL_SUBMISSION, STATUS_FAILED));
+    }
+
+    @Test
+    void userReportedSubmittedIsTerminalWithNoOutgoingTransitions() {
+        // Deliberately distinct from SUBMITTED/SUBMIT_UNVERIFIED: this is the candidate's own claim,
+        // never verified by CareerPilot, and must never be relabelled as something stronger.
+        assertTrue(SubmissionStateMachine.isTerminal(STATUS_USER_REPORTED_SUBMITTED));
+        assertFalse(SubmissionStateMachine.canTransition(STATUS_USER_REPORTED_SUBMITTED, STATUS_FAILED));
+        assertFalse(SubmissionStateMachine.canTransition(STATUS_USER_REPORTED_SUBMITTED, STATUS_TRACKING));
+        assertFalse(SubmissionStateMachine.canTransition(STATUS_USER_REPORTED_SUBMITTED, STATUS_COMPLETED));
+    }
+
+    /**
+     * Final Hardening Pass — {@code resolvesManualCompletion} is what {@code ApplicationCardService}
+     * uses to suppress a stale Guided Apply banner. Every status here must be reachable ONLY via a
+     * genuine {@code SUBMITTING} attempt or the explicit user confirmation — never via a path that
+     * still leaves the candidate needing to act.
+     */
+    @Test
+    void resolvesManualCompletionCoversEveryPostSubmitAndUserConfirmedStatus() {
+        for (String resolved : new String[] {
+                STATUS_SUBMITTED, STATUS_SUBMIT_UNVERIFIED, STATUS_VERIFYING, STATUS_VERIFIED,
+                STATUS_VERIFICATION_FAILED, STATUS_TRACKING, STATUS_COMPLETED, STATUS_USER_REPORTED_SUBMITTED}) {
+            assertTrue(SubmissionStateMachine.resolvesManualCompletion(resolved),
+                    resolved + " must resolve manual completion");
+        }
+    }
+
+    @Test
+    void resolvesManualCompletionIsFalseForEveryStillOpenOrFailedStatus() {
+        for (String open : new String[] {
+                STATUS_CREATED, STATUS_VALIDATING, STATUS_PACKAGE_READY, STATUS_REVIEW_READY,
+                STATUS_COMPANY_READY, STATUS_STAR_READY, STATUS_READY_FOR_SUBMISSION, STATUS_WAITING_APPROVAL,
+                STATUS_SUBMITTING, STATUS_WAITING_MANUAL_SUBMISSION, STATUS_FAILED}) {
+            assertFalse(SubmissionStateMachine.resolvesManualCompletion(open),
+                    open + " must NOT resolve manual completion — a failed pipeline does not mean "
+                            + "the application need went away, and every other status here is still in flight");
+        }
+    }
+
+    @Test
+    void onlyWaitingManualSubmissionCanReachUserReportedSubmitted() {
+        for (String active : new String[] {
+                STATUS_CREATED, STATUS_VALIDATING, STATUS_PACKAGE_READY, STATUS_REVIEW_READY,
+                STATUS_COMPANY_READY, STATUS_STAR_READY, STATUS_READY_FOR_SUBMISSION, STATUS_WAITING_APPROVAL,
+                STATUS_SUBMITTING, STATUS_SUBMITTED, STATUS_VERIFYING, STATUS_VERIFIED,
+                STATUS_VERIFICATION_FAILED, STATUS_TRACKING}) {
+            assertFalse(SubmissionStateMachine.canTransition(active, STATUS_USER_REPORTED_SUBMITTED),
+                    active + " -> USER_REPORTED_SUBMITTED must be illegal");
+        }
     }
 
     @Test
@@ -175,7 +226,8 @@ class SubmissionStateMachineTest {
                 STATUS_CREATED, STATUS_VALIDATING, STATUS_PACKAGE_READY, STATUS_REVIEW_READY,
                 STATUS_COMPANY_READY, STATUS_STAR_READY, STATUS_READY_FOR_SUBMISSION, STATUS_WAITING_APPROVAL,
                 STATUS_SUBMITTING, STATUS_SUBMITTED, STATUS_VERIFYING, STATUS_VERIFIED,
-                STATUS_VERIFICATION_FAILED, STATUS_TRACKING, STATUS_COMPLETED, STATUS_FAILED}) {
+                STATUS_VERIFICATION_FAILED, STATUS_TRACKING, STATUS_COMPLETED, STATUS_FAILED,
+                STATUS_WAITING_MANUAL_SUBMISSION, STATUS_USER_REPORTED_SUBMITTED}) {
             assertTrue(SubmissionStateMachine.isKnown(s), s + " should be known");
         }
         assertFalse(SubmissionStateMachine.isKnown("BOGUS"));

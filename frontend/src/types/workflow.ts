@@ -90,6 +90,10 @@ export interface ApplicationSubmissionSession {
   completedAt?: string | null;
   createdAt: string;
   updatedAt: string;
+
+  /** Guided Apply — set only after `POST /{id}/report-submitted`. Null on every other status. */
+  userReportedSubmittedAt?: string | null;
+  userSubmissionNote?: string | null;
 }
 
 export interface ApplicationSubmissionAnswer {
@@ -921,6 +925,8 @@ export interface ApplicationCard {
   source?: string | null;
   externalUrl?: string | null;
   sponsorshipAvailable?: boolean | null;
+  /** Guided Apply — the employer's own job identifier (Job.externalId), when the source recorded one. */
+  employerJobId?: string | null;
 
   resumeTailored: boolean;
   atsAnalysisReady: boolean;
@@ -952,6 +958,91 @@ export interface ApplicationCard {
   automationHealth?: string | null;
   retryCount?: number | null;
   verificationStatus?: string | null;
+
+  /**
+   * Guided Apply — populated only when `automationHealth === 'GUIDED_APPLY_REQUIRED'` (the latest
+   * execution is ABORTED). `blockerReason` is the deterministic classification (CAPTCHA/
+   * BOT_PROTECTION/LOGIN_REQUIRED/UNSUPPORTED_CONTROL/EMPLOYER_RESTRICTION/AUTOMATION_BLOCKED/
+   * MANUAL_REQUIRED/UNKNOWN_BLOCKER); `blockerDetail` is the underlying raw reason text. Both null
+   * otherwise — never fabricated.
+   */
+  guidedApplyRequired: boolean;
+  blockerReason?: string | null;
+  blockerDetail?: string | null;
+}
+
+/** Guided Apply — one candidate-profile fact shown in the Application Profile section. */
+export interface GuidedApplyProfileFact {
+  label: string;
+  value: string;
+  source: string;
+}
+
+/**
+ * Guided Apply — one predictable application question, resolved (or honestly not) against
+ * verified data. `confidence` is null exactly when `needsUserInput` is true.
+ */
+export interface GuidedApplyRecommendedAnswer {
+  question: string;
+  canonicalField: string;
+  value?: string | null;
+  source?: string | null;
+  confidence?: 'HIGH' | 'MEDIUM' | 'LOW' | null;
+  needsUserInput: boolean;
+}
+
+/** `GET /api/applications/{id}/guided-apply-brief` response. */
+export interface GuidedApplyBrief {
+  candidateName?: string | null;
+  candidateEmail?: string | null;
+  resumeFilename?: string | null;
+  profile: GuidedApplyProfileFact[];
+  recommendedAnswers: GuidedApplyRecommendedAnswer[];
+}
+
+/** One row of `ExecutionEvidence.timeline` — mirrors `ExecutionTimelineService#renderStages`. */
+export interface ExecutionStageEntry {
+  sequence: number;
+  stage: string;
+  displayName: string;
+  status: 'STARTED' | 'COMPLETED' | 'FAILED' | 'SKIPPED';
+  startedAt?: string | null;
+  endedAt?: string | null;
+  durationMs?: number | null;
+  failureCategory?: string | null;
+  reason?: string | null;
+  detail?: string | null;
+}
+
+/**
+ * `GET /api/applications/{id}/execution-evidence` response (P7 Action 7 — Execution Visibility).
+ * Category A only (automation execution evidence) — every boolean/count is either proven by a
+ * specific recorded stage or explicitly `null` ("unknown"), never fabricated. See
+ * `ExecutionEvidenceService`'s own javadoc for the derivation rules.
+ */
+export interface ExecutionEvidence {
+  hasExecution: boolean;
+  executionId?: string | null;
+  executionStatus?: string | null;
+  instrumentationEnabled: boolean | null;
+  automationStarted: boolean;
+  state: 'NOT_STARTED' | 'STARTED' | 'EMPLOYER_PAGE_REACHED' | 'FORM_DISCOVERED' | 'FILLING'
+    | 'PARTIALLY_FILLED' | 'STOPPED' | 'COMPLETED' | 'UNKNOWN';
+  employerPageReached?: boolean | null;
+  formDiscovered?: boolean | null;
+  /** Single field, not separate captcha/login booleans — the backend's own `CaptchaLoginDetector`
+   *  returns one combined signal and cannot honestly be split further. See
+   *  `ExecutionEvidenceService`'s javadoc for why. */
+  captchaOrLoginDetected?: boolean | null;
+  fieldsDiscovered?: number | null;
+  fieldsFilled?: number | null;
+  fieldsResolved?: number | null;
+  fieldsUnresolved?: number | null;
+  automationStopped?: boolean;
+  stopReason?: string | null;
+  stoppedAtStage?: string | null;
+  failureCategory?: string | null;
+  timeline: ExecutionStageEntry[];
 }
 
 export type ApplicationBulkAction = 'STATUS' | 'ARCHIVE' | 'NOTES' | 'NEXT_ACTION' | 'RESUME' | 'EXPORT';

@@ -159,6 +159,56 @@ class GuestApplyAutomationServiceTest {
         assertThat(outcome.kind()).isEqualTo(GuestApplyAutomationService.AttemptOutcome.Kind.AWAITING_APPROVAL);
     }
 
+    // ── P7 Action 7 — Execution Visibility: attemptFill must record real timeline stages, not just
+    // finalizeSubmit. Real (not disabled) `ExecutionTimelineRecorder`, real `ExecutionStageEventRepository`
+    // mock, so what gets persisted is verified directly rather than assuming the wiring compiles. ──
+
+    private GuestApplyAutomationService serviceWithEnabledRecorder(
+            ai.careerpilot.repo.ExecutionStageEventRepository events) {
+        ai.careerpilot.execution.timeline.ExecutionTimelineRecorder recorder =
+                new ai.careerpilot.execution.timeline.ExecutionTimelineRecorder(
+                        events, new ai.careerpilot.execution.timeline.ExecutionStageMetrics(), true);
+        return new GuestApplyAutomationService(browser, metrics, storage, approvalService, screenshots, users,
+                formEngine,
+                mock(ai.careerpilot.repo.ApplicationPackageRepository.class),
+                mock(ai.careerpilot.repo.ResumeRepository.class),
+                mock(ai.careerpilot.repo.CoverLetterRepository.class),
+                mock(ai.careerpilot.repo.ApplicationSubmissionSessionRepository.class),
+                mock(org.springframework.beans.factory.ObjectProvider.class),
+                recorder, true);
+    }
+
+    @Test
+    void attemptFillOnCaptchaDetectionRecordsNavigationCompletedThenFailedPageClassified() {
+        ai.careerpilot.repo.ExecutionStageEventRepository events = mock(ai.careerpilot.repo.ExecutionStageEventRepository.class);
+        // findById must return the same row `started()` produced, so `completed()`/`failed()` can
+        // close it — captured in this map rather than stubbed statically.
+        java.util.Map<UUID, ai.careerpilot.domain.ExecutionStageEvent> saved = new java.util.HashMap<>();
+        when(events.save(any())).thenAnswer(inv -> {
+            ai.careerpilot.domain.ExecutionStageEvent row = inv.getArgument(0);
+            if (row.getId() == null) row.setId(UUID.randomUUID());
+            saved.put(row.getId(), row);
+            return row;
+        });
+        when(events.findById(any())).thenAnswer(inv -> Optional.ofNullable(saved.get(inv.getArgument(0))));
+
+        when(browser.currentPageHtml()).thenReturn("<html><body><div class=\"g-recaptcha\"></div></body></html>");
+        GuestApplyAutomationService svc = serviceWithEnabledRecorder(events);
+
+        GuestApplyAutomationService.AttemptOutcome outcome = svc.attemptFill(exec(), job(), connector("greenhouse"));
+
+        assertThat(outcome.kind()).isEqualTo(GuestApplyAutomationService.AttemptOutcome.Kind.ABORTED);
+        java.util.List<String> stages = saved.values().stream()
+                .map(ai.careerpilot.domain.ExecutionStageEvent::getStage).toList();
+        assertThat(stages).contains("NAVIGATION_STARTED", "NAVIGATION_COMPLETED", "PAGE_CLASSIFIED");
+        ai.careerpilot.domain.ExecutionStageEvent pageClassified = saved.values().stream()
+                .filter(e -> "PAGE_CLASSIFIED".equals(e.getStage())).findFirst().orElseThrow();
+        assertThat(pageClassified.getStatus()).isEqualTo(ai.careerpilot.domain.ExecutionStageEvent.STATUS_FAILED);
+        assertThat(pageClassified.getReason()).contains("captcha or login wall detected");
+        // Never reached field-fill — a real automation stop, not a manufactured one.
+        assertThat(stages).doesNotContain("FIELD_FILL_STARTED");
+    }
+
     @Test
     void aFormEngineFailureDegradesToTheConnectorOnlyBehaviour() {
         when(formEngine.isEnabled()).thenReturn(true);

@@ -272,6 +272,16 @@ public class PlaywrightAutomationProvider implements BrowserAutomationProvider {
         return withRetry(() -> page().evaluate(script));
     }
 
+    /**
+     * P7 Action 5C-FIX — same as {@link #evaluate(String)}, passing one JSON-serialisable argument
+     * through to the script. Used for {@code FormDiscoveryScript.SELECT_COMBOBOX_OPTION}, which is
+     * parameterised by the control's selector and the expected value rather than being rebuilt as a
+     * literal string per call.
+     */
+    public Object evaluate(String script, Object arg) {
+        return withRetry(() -> page().evaluate(script, arg));
+    }
+
     /** The page's current URL, used to detect whether a submit actually navigated. */
     public String currentUrl() {
         return page().url();

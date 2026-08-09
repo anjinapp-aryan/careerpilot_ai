@@ -5,8 +5,11 @@ import ai.careerpilot.applications.dto.ApplicationCardDtos.ApplicationCardRespon
 import ai.careerpilot.applications.dto.ApplicationCardDtos.BulkActionRequest;
 import ai.careerpilot.applications.dto.ApplicationCardDtos.BulkActionResult;
 import ai.careerpilot.domain.Application;
+import ai.careerpilot.execution.timeline.ExecutionEvidenceService;
 import ai.careerpilot.security.AuthenticatedUser;
 import ai.careerpilot.service.ApplicationService;
+import ai.careerpilot.submission.GuidedApplyBriefService;
+import ai.careerpilot.submission.GuidedApplyBriefService.GuidedApplyBrief;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.Instant;
@@ -21,10 +24,16 @@ public class ApplicationController {
 
     private final ApplicationService apps;
     private final ApplicationCardService cards;
+    private final GuidedApplyBriefService guidedApplyBrief;
+    private final ExecutionEvidenceService executionEvidence;
 
-    public ApplicationController(ApplicationService apps, ApplicationCardService cards) {
+    public ApplicationController(ApplicationService apps, ApplicationCardService cards,
+                                 GuidedApplyBriefService guidedApplyBrief,
+                                 ExecutionEvidenceService executionEvidence) {
         this.apps = apps;
         this.cards = cards;
+        this.guidedApplyBrief = guidedApplyBrief;
+        this.executionEvidence = executionEvidence;
     }
 
     @PostMapping
@@ -53,6 +62,32 @@ public class ApplicationController {
     public ApplicationCardResponse get(AuthenticatedUser user, @PathVariable UUID id) {
         Application app = apps.getOwned(user.userId(), id);
         return cards.assemble(user.userId(), app);
+    }
+
+    /**
+     * Guided Apply — the "CareerPilot prepares" projection for one application: candidate profile
+     * facts and recommended answers, resolved via the same {@code AnswerResolver}/{@code
+     * FieldMappingService} the browser form engine uses, never fabricated.
+     */
+    @GetMapping("/{id}/guided-apply-brief")
+    public GuidedApplyBrief guidedApplyBrief(AuthenticatedUser user, @PathVariable UUID id) {
+        Application app = apps.getOwned(user.userId(), id);
+        return guidedApplyBrief.buildFor(user.userId(), app.getResumeId());
+    }
+
+    /**
+     * P7 Action 7 — Execution Visibility. Category A (automation execution evidence) only — never
+     * Guided Apply readiness or human-action facts, which stay on {@link #guidedApplyBrief} and the
+     * submission-session endpoints respectively. Reuses {@code ExecutionTimelineService} verbatim;
+     * no new table, no new event. Deliberately NOT gated behind {@code application.operations.enabled}
+     * (that flag is the separate admin-only Operations Center) — this is the applicant's own
+     * transparency into their own execution, gated only by the existing auth+ownership check.
+     */
+    @GetMapping("/{id}/execution-evidence")
+    public Map<String, Object> executionEvidence(AuthenticatedUser user, @PathVariable UUID id) {
+        Application app = apps.getOwned(user.userId(), id);
+        ApplicationCardResponse card = cards.assemble(user.userId(), app);
+        return executionEvidence.evidenceFor(user.userId(), card.executionId());
     }
 
     @PatchMapping("/{id}")

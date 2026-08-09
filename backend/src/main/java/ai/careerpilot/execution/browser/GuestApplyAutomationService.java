@@ -176,15 +176,38 @@ public class GuestApplyAutomationService {
         }
         metrics.recordRequest();
         long start = System.currentTimeMillis();
+        // P7 Action 7 — Execution Visibility. `attemptFill` is the path that actually runs for
+        // every first-time Guided Apply case (CAPTCHA/login detected, or a blocking gap found), so
+        // leaving it uninstrumented meant the exact runs a user most needs explained produced zero
+        // timeline evidence, while `finalizeSubmit` (post-approval only) recorded a full stage
+        // sequence for the same class of work. Threading the same existing RunContext/ExecutionStage
+        // calls `finalizeSubmit` already uses is additive observability only — no navigation, CAPTCHA
+        // detection, form-filling, or approval logic below is changed.
+        var run = new ai.careerpilot.execution.timeline.ExecutionTimelineRecorder.RunContext(
+                exec.getId(), exec.getUserId(), job.getId());
+        java.util.UUID openStage = null;
         try {
+            openStage = timeline.started(run, ai.careerpilot.execution.timeline.ExecutionStage.NAVIGATION_STARTED);
             browser.navigate(url);
+            timeline.completed(openStage);
+            timeline.mark(run, ai.careerpilot.execution.timeline.ExecutionStage.NAVIGATION_COMPLETED, null);
+
+            openStage = timeline.started(run, ai.careerpilot.execution.timeline.ExecutionStage.PAGE_CLASSIFIED);
             if (CaptchaLoginDetector.looksLikeCaptchaOrLogin(browser.currentPageHtml())) {
                 metrics.recordCaptchaOrLoginWallDetected();
+                timeline.failed(openStage,
+                        ai.careerpilot.execution.timeline.FailureCategory.ATS_DETECTION,
+                        "captcha or login wall detected — routed to human review");
+                openStage = null;
                 log.info("GUEST_APPLY captcha/login wall detected execution={} — routed to human review", exec.getId());
                 return AttemptOutcome.aborted("captcha or login wall detected — routed to human review");
             }
+            timeline.completed(openStage);
+
+            openStage = timeline.started(run, ai.careerpilot.execution.timeline.ExecutionStage.FIELD_FILL_STARTED);
             Map<String, String> filled = resolveFields(connector.extractForm(job), exec.getUserId());
             browser.fillForm(filled);
+            timeline.completed(openStage, Map.of("connectorFieldsFilled", filled.size()));
 
             // Phase 12C — the universal form engine runs AFTER the connector's own known-good
             // selectors, never instead of them. The connector schema is hand-verified for its ATS;
@@ -192,10 +215,11 @@ public class GuestApplyAutomationService {
             // ADD fields (resume upload, cover letter, screening questions) that the connector
             // never knew about — it cannot regress a field the connector already filled correctly.
             // With the flag off this is a no-op and attemptFill is byte-identical to Phase 12B.
-            // P7 Action 4 — no RunContext threaded through here: attemptFill had zero P5
-            // instrumentation before this action, and adding a full stage sequence to it is a
-            // separate, larger scope decision (see the Action 4 gate report), not an oversight.
-            FormFillReport formReport = runFormEngine(exec, null);
+            // `run` is now threaded through (see Action 7 note above) so the engine's own
+            // FORM_DISCOVERED/QUESTIONS_EXTRACTED/DOCUMENT_UPLOAD stages are recorded here too,
+            // exactly as they already are on the finalizeSubmit path.
+            openStage = timeline.started(run, ai.careerpilot.execution.timeline.ExecutionStage.FIELD_FILL_COMPLETED);
+            FormFillReport formReport = runFormEngine(exec, run);
 
             // A required field we cannot honestly fill means this application would be incomplete.
             // Abort to human review rather than parking an approval: asking someone to approve a
@@ -203,11 +227,20 @@ public class GuestApplyAutomationService {
             // that will either be rejected by the employer's own validation or — worse — delivered
             // incomplete under the candidate's real name. Only reachable when the form engine ran.
             if (formReport.hasBlockingGaps()) {
+                timeline.failed(openStage,
+                        ai.careerpilot.execution.timeline.FailureCategory.QUESTION_RESOLUTION,
+                        "required fields could not be filled from verified data: "
+                                + String.join("; ", formReport.blockingGaps()),
+                        Map.of("blockingGaps", formReport.blockingGaps()));
+                openStage = null;
                 log.info("GUEST_APPLY aborting execution={} — {} required field(s) have no verified value: {}",
                         exec.getId(), formReport.blockingGaps().size(), formReport.blockingGaps());
                 return AttemptOutcome.aborted("required fields could not be filled from verified data: "
                         + String.join("; ", formReport.blockingGaps()));
             }
+            timeline.completed(openStage, Map.of(
+                    "engineFieldsFilled", formReport.filled().size(),
+                    "engineFieldsSkipped", formReport.skipped().size()));
 
             Path tmp = Files.createTempFile("exec-screenshot-", ".png");
             try {
@@ -239,6 +272,7 @@ public class GuestApplyAutomationService {
             metrics.recordFailure();
             log.warn("GUEST_APPLY attemptFill error execution={}: {}", exec.getId(), e.toString());
             captureFailureScreenshot(exec);
+            timeline.failed(openStage, ai.careerpilot.execution.timeline.FailureCategory.BROWSER, e.toString());
             return AttemptOutcome.error(e.toString());
         } finally {
             safeLogout();
@@ -311,7 +345,9 @@ public class GuestApplyAutomationService {
                         + String.join("; ", formReport.blockingGaps()));
             }
 
-            timeline.completed(openStage);
+            timeline.completed(openStage, Map.of(
+                    "engineFieldsFilled", formReport.filled().size(),
+                    "engineFieldsSkipped", formReport.skipped().size()));
 
             // Everything after this line may already have created an application at the employer.
             // The flag is set BEFORE the call, not after, because the dangerous case is precisely

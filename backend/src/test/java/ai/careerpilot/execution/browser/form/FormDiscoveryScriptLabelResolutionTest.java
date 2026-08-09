@@ -126,6 +126,46 @@ class FormDiscoveryScriptLabelResolutionTest {
         assertThat(combobox.label()).isEmpty();
     }
 
+    /**
+     * P7 Action 5C-FIX, Step 3 requiredness safety — {@code data-required="true"} is a real
+     * requiredness signal for a custom widget that never sets native {@code required}/
+     * {@code aria-required} (the exact pattern the HIGH finding's own fixture used). Only the
+     * literal string {@code "true"} counts: presence alone does not, since a data-* attribute's
+     * meaning is not standardised across ATS platforms.
+     */
+    @Test
+    void dataRequiredTrueIsARequirednessSignalWhenNativeSignalsAreAbsent() {
+        String html = """
+                <html><body>
+                  <div class="select-shell">
+                    <label>Will you now or in the future require sponsorship?</label>
+                    <div class="select__control" role="combobox" aria-label="Select..."
+                         tabindex="0" data-required="true">
+                      <div class="select__placeholder">Select...</div>
+                    </div>
+                  </div>
+                </body></html>
+                """;
+        assertThat(discoverSingleComboboxField(html).required()).isTrue();
+    }
+
+    /** A data-required value other than the literal "true" must NOT be trusted as requiredness. */
+    @Test
+    void dataRequiredWithAnyOtherValueIsNotTrusted() {
+        String html = """
+                <html><body>
+                  <div class="select-shell">
+                    <label>Optional widget preference</label>
+                    <div class="select__control" role="combobox" aria-label="Select..."
+                         tabindex="0" data-required="conditional">
+                      <div class="select__placeholder">Select...</div>
+                    </div>
+                  </div>
+                </body></html>
+                """;
+        assertThat(discoverSingleComboboxField(html).required()).isFalse();
+    }
+
     private DiscoveredField discoverSingleComboboxField(String html) {
         try (Page page = browser.newPage()) {
             page.setContent(html);

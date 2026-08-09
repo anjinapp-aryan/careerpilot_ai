@@ -7,10 +7,14 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 public interface ResumeRepository extends JpaRepository<Resume, UUID> {
     List<Resume> findByUserIdOrderByCreatedAtDesc(UUID userId);
+
+    /** Ownership-scoped read — see {@code GuidedApplyBriefService} for why a bare {@code findById} is unsafe here. */
+    Optional<Resume> findByIdAndUserId(UUID id, UUID userId);
 
     /** Distinct users who have at least one resume — the backfill candidate set. */
     @Query("select distinct r.userId from Resume r")

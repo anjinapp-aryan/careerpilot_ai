@@ -308,6 +308,9 @@ public class BrowserFormAutomationEngine {
                     browser.setCheckedAt(selector, checked);
                 }
                 case RICH_TEXT -> browser.fillRichText(selector, fill.value());
+                case COMBOBOX -> {
+                    return applyComboboxFill(selector, fill.value());
+                }
                 case FILE -> {
                     return "file input reached without a resolved document";
                 }
@@ -320,6 +323,32 @@ public class BrowserFormAutomationEngine {
         } catch (Exception e) {
             return "interaction failed: " + e;
         }
+    }
+
+    /**
+     * P7 Action 5C-FIX — the fill strategy for {@link FieldControlType#COMBOBOX}: click to open,
+     * live-read the now-rendered options, match the verified answer against them, click the match,
+     * then read the control's own displayed text back to confirm the click actually took effect.
+     *
+     * <p>Deliberately not implemented with coordinates or a blind keyboard sequence — see
+     * {@code FormDiscoveryScript.SELECT_COMBOBOX_OPTION}'s javadoc for the full interaction and
+     * verification contract. Returns {@code null} on a verified success, or the reason otherwise;
+     * same contract as every other branch of {@link #applyFill}.
+     */
+    private String applyComboboxFill(String selector, String expectedValue) {
+        Map<String, Object> args = Map.of("selector", selector, "expected",
+                expectedValue == null ? "" : expectedValue);
+        FormDiscoveryScript.ComboboxSelectionResult result = FormDiscoveryScript.parseComboboxSelection(
+                browser.evaluate(FormDiscoveryScript.SELECT_COMBOBOX_OPTION, args));
+        if (!result.matched()) {
+            return "combobox: " + (result.reason() == null
+                    ? "no option matched the verified answer" : result.reason());
+        }
+        if (!result.verified()) {
+            return "combobox: " + (result.reason() == null
+                    ? "selection could not be verified in the DOM after click" : result.reason());
+        }
+        return null;
     }
 
     /**

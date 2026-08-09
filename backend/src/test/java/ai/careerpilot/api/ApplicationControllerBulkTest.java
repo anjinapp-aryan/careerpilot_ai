@@ -4,8 +4,10 @@ import ai.careerpilot.applications.ApplicationCardService;
 import ai.careerpilot.applications.dto.ApplicationCardDtos.BulkActionRequest;
 import ai.careerpilot.applications.dto.ApplicationCardDtos.BulkActionResult;
 import ai.careerpilot.domain.Application;
+import ai.careerpilot.execution.timeline.ExecutionEvidenceService;
 import ai.careerpilot.security.AuthenticatedUser;
 import ai.careerpilot.service.ApplicationService;
+import ai.careerpilot.submission.GuidedApplyBriefService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -27,6 +29,8 @@ class ApplicationControllerBulkTest {
 
     private final ApplicationService apps = mock(ApplicationService.class);
     private final ApplicationCardService cards = mock(ApplicationCardService.class);
+    private final GuidedApplyBriefService guidedApplyBrief = mock(GuidedApplyBriefService.class);
+    private final ExecutionEvidenceService executionEvidence = mock(ExecutionEvidenceService.class);
     private ApplicationController controller;
     private UUID userId;
     private AuthenticatedUser user;
@@ -38,7 +42,7 @@ class ApplicationControllerBulkTest {
 
     @BeforeEach
     void setUp() {
-        controller = new ApplicationController(apps, cards);
+        controller = new ApplicationController(apps, cards, guidedApplyBrief, executionEvidence);
         userId = UUID.randomUUID();
         user = new AuthenticatedUser(userId, UUID.randomUUID(), "u@example.com", "USER");
     }

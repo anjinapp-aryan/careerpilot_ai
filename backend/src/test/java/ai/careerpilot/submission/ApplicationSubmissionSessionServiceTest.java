@@ -730,4 +730,85 @@ class ApplicationSubmissionSessionServiceTest {
         assertEquals(ApplicationSubmissionSession.STATUS_FAILED, session.getStatus());
         assertTrue(session.getFailureReason().contains("resume error"));
     }
+
+    // ── Guided Apply — reportUserSubmitted ──
+
+    /**
+     * {@code claimUserReportedSubmitted} is the real atomic-UPDATE repository method (proven against
+     * real Postgres in {@code ApplicationSubmissionSessionRepositoryClaimTest}); here it's a mock, so
+     * this stub simulates what that UPDATE does to the row — the same convention {@code
+     * stubWinningClaim}/{@code stubLosingClaim} already established for {@code ApprovalServiceTest}.
+     */
+    private void stubWinningReportSubmittedClaim() {
+        when(sessions.claimUserReportedSubmitted(eq(sessionId), eq(userId),
+                eq(ApplicationSubmissionSession.STATUS_USER_REPORTED_SUBMITTED), any(), any()))
+                .thenAnswer(inv -> {
+                    session.setStatus(inv.getArgument(2));
+                    session.setUserReportedSubmittedAt(inv.getArgument(3));
+                    session.setUserSubmissionNote(inv.getArgument(4));
+                    session.setCompletedAt(inv.getArgument(3));
+                    return 1;
+                });
+    }
+
+    @Test
+    void reportUserSubmittedFromWaitingManualSubmissionSucceeds() {
+        session.setStatus(ApplicationSubmissionSession.STATUS_WAITING_MANUAL_SUBMISSION);
+        when(sessions.findByIdAndUserId(sessionId, userId)).thenReturn(Optional.of(session));
+        stubWinningReportSubmittedClaim();
+
+        ApplicationSubmissionSessionService s = service(true, false, true, true);
+        Optional<ApplicationSubmissionSession> result = s.reportUserSubmitted(userId, sessionId, "submitted via careers page");
+
+        assertTrue(result.isPresent());
+        assertEquals(ApplicationSubmissionSession.STATUS_USER_REPORTED_SUBMITTED, session.getStatus());
+        assertNotNull(session.getUserReportedSubmittedAt());
+        assertEquals("submitted via careers page", session.getUserSubmissionNote());
+        assertNotNull(session.getCompletedAt());
+    }
+
+    @Test
+    void reportUserSubmittedWithNoNoteLeavesNoteNull() {
+        session.setStatus(ApplicationSubmissionSession.STATUS_WAITING_MANUAL_SUBMISSION);
+        when(sessions.findByIdAndUserId(sessionId, userId)).thenReturn(Optional.of(session));
+        stubWinningReportSubmittedClaim();
+
+        service(true, false, true, true).reportUserSubmitted(userId, sessionId, null);
+
+        assertEquals(ApplicationSubmissionSession.STATUS_USER_REPORTED_SUBMITTED, session.getStatus());
+        assertNull(session.getUserSubmissionNote());
+    }
+
+    @Test
+    void reportUserSubmittedIsRejectedWhenTheClaimLoses() {
+        // Simulates the race this fix closes: another caller already won the atomic UPDATE, so this
+        // caller's claim affects 0 rows even though its own initial read saw WAITING_MANUAL_SUBMISSION.
+        session.setStatus(ApplicationSubmissionSession.STATUS_WAITING_MANUAL_SUBMISSION);
+        when(sessions.findByIdAndUserId(sessionId, userId)).thenReturn(Optional.of(session));
+        when(sessions.claimUserReportedSubmitted(eq(sessionId), eq(userId), any(), any(), any())).thenReturn(0);
+
+        ApplicationSubmissionSessionService s = service(true, false, true, true);
+        assertThrows(IllegalStateException.class, () -> s.reportUserSubmitted(userId, sessionId, null));
+        // The loser's attempt must never mutate the shared row.
+        assertEquals(ApplicationSubmissionSession.STATUS_WAITING_MANUAL_SUBMISSION, session.getStatus());
+    }
+
+    @Test
+    void reportUserSubmittedFromAnyOtherStatusIsRejected() {
+        session.setStatus(ApplicationSubmissionSession.STATUS_CREATED);
+        when(sessions.findByIdAndUserId(sessionId, userId)).thenReturn(Optional.of(session));
+
+        ApplicationSubmissionSessionService s = service(true, false, true, true);
+        assertThrows(IllegalStateException.class, () -> s.reportUserSubmitted(userId, sessionId, null));
+        // Never silently relabelled — status is untouched by the rejected attempt.
+        assertEquals(ApplicationSubmissionSession.STATUS_CREATED, session.getStatus());
+    }
+
+    @Test
+    void reportUserSubmittedForUnownedOrMissingSessionReturnsEmpty() {
+        when(sessions.findByIdAndUserId(sessionId, userId)).thenReturn(Optional.empty());
+
+        ApplicationSubmissionSessionService s = service(true, false, true, true);
+        assertTrue(s.reportUserSubmitted(userId, sessionId, null).isEmpty());
+    }
 }

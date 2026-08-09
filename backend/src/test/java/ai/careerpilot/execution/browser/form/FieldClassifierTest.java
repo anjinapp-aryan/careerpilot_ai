@@ -200,4 +200,32 @@ class FieldClassifierTest {
         assertThat(FieldControlType.from("select", "", false)).isEqualTo(FieldControlType.SELECT);
         assertThat(FieldControlType.from("div", "", false)).isEqualTo(FieldControlType.UNSUPPORTED);
     }
+
+    /**
+     * P7 Action 5C-FIX, Test A — a role="combobox"/role="listbox" div must not become generic
+     * UNSUPPORTED merely because its tag is DIV. This is the exact root cause of the HIGH finding:
+     * before this fix, {@code from(tagName, inputType, contentEditable)} never saw the role at all.
+     */
+    @Test
+    void roleCombomboxAndListboxAreRecognisedRegardlessOfTag() {
+        assertThat(FieldControlType.from("div", "", false, "combobox")).isEqualTo(FieldControlType.COMBOBOX);
+        assertThat(FieldControlType.from("div", "", false, "listbox")).isEqualTo(FieldControlType.COMBOBOX);
+        assertThat(FieldControlType.from("div", "", false, "COMBOBOX")).isEqualTo(FieldControlType.COMBOBOX);
+        // role wins even for a tag that would otherwise resolve to something else.
+        assertThat(FieldControlType.from("span", "", false, "combobox")).isEqualTo(FieldControlType.COMBOBOX);
+    }
+
+    /** The pre-existing 3-arg overload has no role to pass and must be byte-for-byte unchanged. */
+    @Test
+    void threeArgOverloadNeverBecomesComboboxSinceItHasNoRoleSignal() {
+        assertThat(FieldControlType.from("div", "", false)).isEqualTo(FieldControlType.UNSUPPORTED);
+    }
+
+    /** A role the engine has no fill strategy for is untouched by this fix — a documented gap, not a regression. */
+    @Test
+    void unrelatedRolesAreUnaffectedByTheComboboxFix() {
+        assertThat(FieldControlType.from("div", "", false, "radio")).isEqualTo(FieldControlType.UNSUPPORTED);
+        assertThat(FieldControlType.from("div", "", false, "checkbox")).isEqualTo(FieldControlType.UNSUPPORTED);
+        assertThat(FieldControlType.from("input", "checkbox", false, "")).isEqualTo(FieldControlType.CHECKBOX);
+    }
 }

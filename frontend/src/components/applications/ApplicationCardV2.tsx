@@ -99,7 +99,14 @@ export function ApplicationCardV2({
         {card.atsScore != null && <Badge tone="info" className="text-[10px]">ATS {card.atsScore}</Badge>}
         <ApplicationHealthBadge status={card.healthStatus} className="text-[10px]" />
         {card.remoteType && <Badge tone="neutral" className="text-[10px]">{card.remoteType}</Badge>}
+        {card.guidedApplyRequired && <Badge tone="warning" className="text-[10px]">🟡 Guided Apply</Badge>}
       </div>
+
+      {card.guidedApplyRequired && (
+        <p className="mt-1.5 truncate text-[11px] text-warning">
+          ⚠ Manual completion required
+        </p>
+      )}
 
       {!overlay && onDetails && (
         <button

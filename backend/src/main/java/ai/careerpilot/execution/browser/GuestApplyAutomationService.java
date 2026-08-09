@@ -193,13 +193,19 @@ public class GuestApplyAutomationService {
             timeline.mark(run, ai.careerpilot.execution.timeline.ExecutionStage.NAVIGATION_COMPLETED, null);
 
             openStage = timeline.started(run, ai.careerpilot.execution.timeline.ExecutionStage.PAGE_CLASSIFIED);
-            if (CaptchaLoginDetector.looksLikeCaptchaOrLogin(browser.currentPageHtml())) {
+            // P0.2 — iframe-aware: a CAPTCHA sitting only inside a same-origin iframe was previously
+            // invisible here (CaptchaLoginDetector alone only ever sees the top document's HTML).
+            // Same hard-stop as before, now triggered by either signal.
+            CaptchaDetectionResult captchaCheck = FrameAwareCaptchaCheck.run(browser);
+            if (captchaCheck.detected()) {
                 metrics.recordCaptchaOrLoginWallDetected();
                 timeline.failed(openStage,
                         ai.careerpilot.execution.timeline.FailureCategory.ATS_DETECTION,
-                        "captcha or login wall detected — routed to human review");
+                        "captcha or login wall detected — routed to human review",
+                        captchaCheck.snapshot());
                 openStage = null;
-                log.info("GUEST_APPLY captcha/login wall detected execution={} — routed to human review", exec.getId());
+                log.info("GUEST_APPLY captcha/login wall detected execution={} — routed to human review ({})",
+                        exec.getId(), captchaCheck.reason());
                 return AttemptOutcome.aborted("captcha or login wall detected — routed to human review");
             }
             timeline.completed(openStage);
@@ -304,13 +310,18 @@ public class GuestApplyAutomationService {
             timeline.mark(run, ai.careerpilot.execution.timeline.ExecutionStage.NAVIGATION_COMPLETED, null);
 
             openStage = timeline.started(run, ai.careerpilot.execution.timeline.ExecutionStage.PAGE_CLASSIFIED);
-            if (CaptchaLoginDetector.looksLikeCaptchaOrLogin(browser.currentPageHtml())) {
+            // P0.2 — same iframe-aware check as attemptFill. Re-checked here (defense in depth, the
+            // page may have changed since the screenshot was approved) with the same frame coverage.
+            CaptchaDetectionResult resubmitCaptchaCheck = FrameAwareCaptchaCheck.run(browser);
+            if (resubmitCaptchaCheck.detected()) {
                 metrics.recordCaptchaOrLoginWallDetected();
                 timeline.failed(openStage,
                         ai.careerpilot.execution.timeline.FailureCategory.ATS_DETECTION,
-                        "captcha or login wall detected on resubmit — routed to human review");
+                        "captcha or login wall detected on resubmit — routed to human review",
+                        resubmitCaptchaCheck.snapshot());
                 openStage = null;
-                log.info("GUEST_APPLY captcha/login wall detected on resubmit execution={} — routed to human review", exec.getId());
+                log.info("GUEST_APPLY captcha/login wall detected on resubmit execution={} — routed to human review ({})",
+                        exec.getId(), resubmitCaptchaCheck.reason());
                 return AttemptOutcome.aborted("captcha or login wall detected on resubmit — routed to human review");
             }
             timeline.completed(openStage);

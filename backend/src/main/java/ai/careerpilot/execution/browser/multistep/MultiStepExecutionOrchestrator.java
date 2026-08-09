@@ -4,7 +4,7 @@ import ai.careerpilot.domain.ApprovalQueueEntry;
 import ai.careerpilot.domain.ExecutionScreenshot;
 import ai.careerpilot.domain.ExecutionStep;
 import ai.careerpilot.execution.approval.ApprovalService;
-import ai.careerpilot.execution.browser.CaptchaLoginDetector;
+import ai.careerpilot.execution.browser.FrameAwareCaptchaCheck;
 import ai.careerpilot.execution.browser.PlaywrightAutomationProvider;
 import ai.careerpilot.execution.browser.form.BrowserFormAutomationEngine;
 import ai.careerpilot.execution.browser.form.MultiStepFormNavigator;
@@ -325,7 +325,10 @@ public class MultiStepExecutionOrchestrator {
             browser.clickAt(decision.button().selector());
             browser.waitForStable(settleMs);
 
-            if (CaptchaLoginDetector.looksLikeCaptchaOrLogin(browser.currentPageHtml())) {
+            // P0.2 — iframe-aware: reuses the same DISCOVER_FRAME_REPORT-backed check as
+            // GuestApplyAutomationService, so a CAPTCHA that only appears inside a same-origin
+            // iframe on a replayed page is caught here too, not just on the top document.
+            if (FrameAwareCaptchaCheck.run(browser).detected()) {
                 return Optional.of("captcha or login wall encountered while replaying page " + i);
             }
         }
@@ -338,7 +341,8 @@ public class MultiStepExecutionOrchestrator {
         boolean captcha;
         String urlNow;
         try {
-            captcha = CaptchaLoginDetector.looksLikeCaptchaOrLogin(browser.currentPageHtml());
+            // P0.2 — iframe-aware, same shared check as replay() above.
+            captcha = FrameAwareCaptchaCheck.run(browser).detected();
         } catch (Exception e) {
             captcha = true;   // could not check ⇒ treated as present; the guard fails closed
         }

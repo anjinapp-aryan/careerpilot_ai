@@ -10,6 +10,7 @@ import ai.careerpilot.repo.ExecutionScreenshotRepository;
 import ai.careerpilot.repo.UserRepository;
 import ai.careerpilot.storage.S3StorageService;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
@@ -207,6 +208,73 @@ class GuestApplyAutomationServiceTest {
         assertThat(pageClassified.getReason()).contains("captcha or login wall detected");
         // Never reached field-fill — a real automation stop, not a manufactured one.
         assertThat(stages).doesNotContain("FIELD_FILL_STARTED");
+    }
+
+    // ── P0.2 — iframe-aware CAPTCHA hard-stop in production execution ──
+
+    @Test
+    @DisplayName("6/7: CAPTCHA only inside a same-origin iframe aborts before any field is filled or uploaded")
+    void attemptFillAbortsOnIframeOnlyCaptchaBeforeAnyFillOrUpload() {
+        // Top document is clean — only the frame-aware probe would catch this, proving the fix is
+        // load-bearing rather than redundant with the pre-existing top-level check.
+        when(browser.currentPageHtml()).thenReturn("<html><body>clean top document</body></html>");
+        java.util.Map<String, Object> frame = new java.util.LinkedHashMap<>();
+        frame.put("framePath", "iframe:nth-of-type(1)");
+        frame.put("frameUrl", "https://example.com/challenge");
+        frame.put("title", "Verify");
+        frame.put("fileInputs", 0);
+        frame.put("emailInputs", 0);
+        frame.put("textInputs", 0);
+        frame.put("submitButtons", 0);
+        frame.put("applicationHeading", false);
+        frame.put("passwordInputs", false);
+        frame.put("captchaDetected", true);
+        java.util.Map<String, Object> envelope = new java.util.LinkedHashMap<>();
+        envelope.put("frames", java.util.List.of(frame));
+        envelope.put("inaccessible", java.util.List.of());
+        when(browser.evaluate(ai.careerpilot.execution.browser.form.FormDiscoveryScript.DISCOVER_FRAME_REPORT))
+                .thenReturn(envelope);
+        enableFormEngineWith(new ai.careerpilot.execution.browser.form.BrowserFormAutomationEngine.FillOutcome(
+                true, true, null, java.util.List.of("EMAIL", "RESUME_UPLOAD"), java.util.Map.of(),
+                java.util.List.of(), java.util.Map.of()));
+
+        GuestApplyAutomationService.AttemptOutcome outcome =
+                service.attemptFill(exec(), job(), connector("greenhouse"));
+
+        assertThat(outcome.kind()).isEqualTo(GuestApplyAutomationService.AttemptOutcome.Kind.ABORTED);
+        verify(browser, never()).fillForm(any());
+        verify(formEngine, never()).fillForm(any(), any(), any());
+        verify(formEngine, never()).fillForm(any(), any(), any(), any());
+        verify(approvalService, never()).enqueueFormScreenshot(any(), any(), any(), any(), any(), anyString());
+    }
+
+    @Test
+    @DisplayName("8: CAPTCHA only inside a same-origin iframe on resubmit aborts before the submit click")
+    void finalizeSubmitAbortsOnIframeOnlyCaptchaBeforeSubmit() {
+        ATSConnector connector = connector("greenhouse");
+        when(browser.currentPageHtml()).thenReturn("<html><body>clean top document</body></html>");
+        java.util.Map<String, Object> frame = new java.util.LinkedHashMap<>();
+        frame.put("framePath", "iframe:nth-of-type(1)");
+        frame.put("frameUrl", "https://example.com/challenge");
+        frame.put("title", "Verify");
+        frame.put("fileInputs", 0);
+        frame.put("emailInputs", 0);
+        frame.put("textInputs", 0);
+        frame.put("submitButtons", 0);
+        frame.put("applicationHeading", false);
+        frame.put("passwordInputs", false);
+        frame.put("captchaDetected", true);
+        java.util.Map<String, Object> envelope = new java.util.LinkedHashMap<>();
+        envelope.put("frames", java.util.List.of(frame));
+        envelope.put("inaccessible", java.util.List.of());
+        when(browser.evaluate(ai.careerpilot.execution.browser.form.FormDiscoveryScript.DISCOVER_FRAME_REPORT))
+                .thenReturn(envelope);
+
+        GuestApplyAutomationService.AttemptOutcome outcome = service.finalizeSubmit(exec(), job(), connector);
+
+        assertThat(outcome.kind()).isEqualTo(GuestApplyAutomationService.AttemptOutcome.Kind.ABORTED);
+        verify(connector, never()).submit(any(), any());
+        verify(browser, never()).fillForm(any());
     }
 
     @Test

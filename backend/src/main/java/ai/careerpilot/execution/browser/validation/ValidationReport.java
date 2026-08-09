@@ -4,6 +4,7 @@ import ai.careerpilot.execution.browser.form.CanonicalField;
 import ai.careerpilot.execution.browser.form.DiscoveredField;
 import ai.careerpilot.execution.browser.form.DiscoveryDiagnostics;
 import ai.careerpilot.execution.browser.form.FieldControlType;
+import ai.careerpilot.execution.browser.form.FrameDiscoveryReport;
 
 import java.time.Instant;
 import java.util.LinkedHashMap;
@@ -36,7 +37,25 @@ public record ValidationReport(
         PageEnvironment environment,
         String screenshotKey,
         List<String> notes,
-        DiscoveryDiagnostics discovery) {
+        DiscoveryDiagnostics discovery,
+        FrameDiscoveryReport frameDiscovery) {
+
+    /**
+     * Pre-frame-discovery compatibility constructor. A report built before iframe-aware discovery
+     * existed carries an empty {@link FrameDiscoveryReport} rather than a null, so every consumer can
+     * read the section unconditionally — same discipline as {@link DiscoveryDiagnostics#empty()}
+     * below.
+     */
+    public ValidationReport(String url, AtsPlatform platform, Status status, String message,
+                            Instant startedAt, long totalDurationMs, long navigationDurationMs,
+                            long discoveryDurationMs, long planningDurationMs,
+                            List<FieldEntry> fields, SelectorCoverage coverage,
+                            AutomationConfidence confidence, PageEnvironment environment,
+                            String screenshotKey, List<String> notes, DiscoveryDiagnostics discovery) {
+        this(url, platform, status, message, startedAt, totalDurationMs, navigationDurationMs,
+                discoveryDurationMs, planningDurationMs, fields, coverage, confidence, environment,
+                screenshotKey, notes, discovery, FrameDiscoveryReport.empty());
+    }
 
     /**
      * Pre-Phase-B compatibility constructor. A report built without discovery diagnostics — the
@@ -51,7 +70,7 @@ public record ValidationReport(
                             String screenshotKey, List<String> notes) {
         this(url, platform, status, message, startedAt, totalDurationMs, navigationDurationMs,
                 discoveryDurationMs, planningDurationMs, fields, coverage, confidence, environment,
-                screenshotKey, notes, DiscoveryDiagnostics.empty());
+                screenshotKey, notes, DiscoveryDiagnostics.empty(), FrameDiscoveryReport.empty());
     }
 
     public enum Status {
@@ -99,6 +118,8 @@ public record ValidationReport(
     public ValidationReport {
         fields = fields == null ? List.of() : List.copyOf(fields);
         notes = notes == null ? List.of() : List.copyOf(notes);
+        discovery = discovery == null ? DiscoveryDiagnostics.empty() : discovery;
+        frameDiscovery = frameDiscovery == null ? FrameDiscoveryReport.empty() : frameDiscovery;
     }
 
     /**
@@ -264,6 +285,21 @@ public record ValidationReport(
                                                long durationMs, long navigationMs,
                                                PageEnvironment environment, String screenshotKey,
                                                List<String> notes) {
+        return invalidPage(url, platform, outcome, startedAt, durationMs, navigationMs, environment,
+                screenshotKey, notes, FrameDiscoveryReport.empty());
+    }
+
+    /**
+     * Iframe-aware overload. Frame evidence is carried through even on a rejection — an operator
+     * asking "why was this rejected" for a page with an iframe should see {@code framesInspected}/
+     * {@code inaccessibleFrames} on the very report that rejected it, not just on a later successful
+     * run against a different posting.
+     */
+    public static ValidationReport invalidPage(String url, AtsPlatform platform,
+                                               AtsPageVerifier.Outcome outcome, Instant startedAt,
+                                               long durationMs, long navigationMs,
+                                               PageEnvironment environment, String screenshotKey,
+                                               List<String> notes, FrameDiscoveryReport frameDiscovery) {
         List<String> allNotes = new java.util.ArrayList<>(notes == null ? List.of() : notes);
         allNotes.addAll(outcome.evidence());
         allNotes.add("Discovery and planning were skipped — this page was not an application form, "
@@ -272,7 +308,8 @@ public record ValidationReport(
                 startedAt, durationMs, navigationMs, 0, 0, List.of(), SelectorCoverage.empty(),
                 AutomationConfidence.none(outcome.reason()),
                 environment == null ? PageEnvironment.unknown() : environment,
-                screenshotKey, allNotes);
+                screenshotKey, allNotes, DiscoveryDiagnostics.empty(),
+                frameDiscovery == null ? FrameDiscoveryReport.empty() : frameDiscovery);
     }
 
     /** Full detail, for the API response. */
@@ -301,6 +338,12 @@ public record ValidationReport(
         out.put("selectorsDiscovered", fields.size());
         out.put("discovery", discovery == null
                 ? DiscoveryDiagnostics.empty().snapshot() : discovery.snapshot());
+        // Iframe-aware discovery evidence — present on every report, including rejections, so
+        // "why was this rejected" and "what did frame traversal actually see" are never two
+        // different requests. Never invented: an empty FrameDiscoveryReport (the probe wasn't run,
+        // or found nothing) reports honest zeros/nulls, not omitted keys.
+        out.put("frames", frameDiscovery == null
+                ? FrameDiscoveryReport.empty().snapshot() : frameDiscovery.snapshot());
         out.put("coverage", coverage == null ? Map.of() : coverage.snapshot());
         out.put("confidence", confidence == null ? Map.of() : confidence.snapshot());
         out.put("environment", environment == null ? Map.of() : environment.snapshot());

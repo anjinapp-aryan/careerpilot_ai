@@ -1,5 +1,8 @@
 package ai.careerpilot.execution.browser.validation;
 
+import ai.careerpilot.execution.browser.form.FrameDiscoveryReport;
+import ai.careerpilot.execution.browser.form.FramePageSignals;
+
 import java.net.URI;
 import java.util.ArrayList;
 import java.util.List;
@@ -154,11 +157,46 @@ public final class AtsPageVerifier {
      * would also satisfy. Which reason an operator sees is the whole value of this layer.
      */
     public static Outcome verify(PageIdentity identity, AtsPlatform platform) {
+        return verify(identity, platform, FrameDiscoveryReport.empty());
+    }
+
+    /**
+     * Iframe-aware verification. Identical to {@link #verify(PageIdentity, AtsPlatform)} for every
+     * rejection reason that is about the page's own identity (removed, login wall, maintenance,
+     * redirected away, board index) — an iframe cannot make a deleted job exist again, so those rules
+     * stay authoritative regardless of what any frame contains.
+     *
+     * <p>The one rule this changes is the last, generic one: "the page simply is not a form" (rule 6,
+     * {@code INVALID_APPLICATION_PAGE}). Before rejecting on that ground alone, a same-origin frame
+     * scoring at least {@link #MINIMUM_SIGNAL_SCORE} overrides the rejection — the form exists, it is
+     * just not on the top document, and {@code DISCOVER_FIELDS} already knows how to walk into it
+     * (see {@code DiscoveredField#framePath()}). A frame that itself reports a CAPTCHA is <b>still</b>
+     * treated as a valid form here — verification answers "is this a form", not "can we submit it";
+     * the CAPTCHA is surfaced separately as an {@code AutomationBlocker} once discovery runs, which is
+     * where every other CAPTCHA-blocks-readiness (never blocks-discovery) decision in this platform is
+     * made.
+     */
+    public static Outcome verify(PageIdentity identity, AtsPlatform platform, FrameDiscoveryReport frames) {
         if (identity == null) {
             return Outcome.valid(0, List.of("no page identity captured — verification skipped"));
         }
         try {
-            return evaluate(identity, platform);
+            Outcome outcome = evaluate(identity, platform);
+            if (outcome.valid() || outcome.status() != ValidationReport.Status.INVALID_APPLICATION_PAGE) {
+                return outcome;
+            }
+            FrameDiscoveryReport safeFrames = frames == null ? FrameDiscoveryReport.empty() : frames;
+            return safeFrames.bestForm()
+                    .filter(f -> !f.isTopDocument())
+                    .map(f -> {
+                        List<String> evidence = new ArrayList<>(outcome.evidence());
+                        evidence.add("no form at the top level, but frame \"" + f.framePath()
+                                + "\" scores " + f.score() + "/5 " + f.snapshot());
+                        evidence.add("form frame overrides the top-level rejection — "
+                                + "DISCOVER_FIELDS already traverses same-origin frames");
+                        return Outcome.valid(f.score(), evidence);
+                    })
+                    .orElse(outcome);
         } catch (Exception e) {
             return Outcome.valid(0, List.of("verification error, proceeding: " + e));
         }

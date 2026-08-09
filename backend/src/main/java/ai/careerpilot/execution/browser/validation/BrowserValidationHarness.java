@@ -169,7 +169,22 @@ public class BrowserValidationHarness {
             } catch (Exception e) {
                 notes.add("page identity probe failed, proceeding to discovery: " + e);
             }
-            AtsPageVerifier.Outcome verification = AtsPageVerifier.verify(identity, verdict.platform());
+            // Iframe-aware fix — a real form embedded in a same-origin iframe scores 0/5 on the
+            // top-level-only signals above and was rejected before DISCOVER_FIELDS (which already
+            // traverses frames) ever ran. This traversal answers the question "is there a form in
+            // ANY reachable frame" so that case is no longer indistinguishable from a genuinely empty
+            // page. Never throws into the caller: a broken probe degrades to an empty report, which
+            // is a no-op for verification (see AtsPageVerifier.verify's frame overload).
+            ai.careerpilot.execution.browser.form.FrameDiscoveryReport frameReport =
+                    ai.careerpilot.execution.browser.form.FrameDiscoveryReport.empty();
+            try {
+                frameReport = FormDiscoveryScript.parseFrameReport(
+                        browser.evaluate(FormDiscoveryScript.DISCOVER_FRAME_REPORT));
+            } catch (Exception e) {
+                notes.add("frame discovery probe failed, proceeding without it: " + e);
+            }
+            AtsPageVerifier.Outcome verification =
+                    AtsPageVerifier.verify(identity, verdict.platform(), frameReport);
             if (!verification.valid()) {
                 // The screenshot is still captured: "what did it actually load?" is exactly the
                 // question an operator asks about a rejection, and answering it costs one image.
@@ -178,7 +193,7 @@ public class BrowserValidationHarness {
                 long rejectedMs = System.currentTimeMillis() - start;
                 ValidationReport report = ValidationReport.invalidPage(url, verdict.platform(),
                         verification, startedAt, rejectedMs, navigationMs, rejectedEnv,
-                        rejectedShot, notes);
+                        rejectedShot, notes, frameReport);
                 metrics.recordInvalidPage(report);
                 log.warn("BROWSER_VALIDATION rejected url={} finalUrl={} status={} reason={}",
                         url, identity == null ? "(unknown)" : identity.finalUrl(),
@@ -187,6 +202,10 @@ public class BrowserValidationHarness {
             }
             notes.add("Page verified as an application form (signal score "
                     + verification.signalScore() + "/5).");
+            if (frameReport.bestForm().filter(f -> !f.isTopDocument()).isPresent()) {
+                notes.add("Form was found inside frame \""
+                        + frameReport.bestForm().get().framePath() + "\", not the top document.");
+            }
 
             long discoveryStart = System.currentTimeMillis();
             Object rawDiscovery = browser.evaluate(FormDiscoveryScript.DISCOVER_FIELDS);
@@ -210,7 +229,11 @@ public class BrowserValidationHarness {
 
             SelectorCoverage coverage = SelectorCoverage.from(discovered, classified, plan);
             // P0 — what stops execution, computed separately from how well the page was analysed.
-            List<AutomationBlocker> blockers = blockers(captchaOrLogin, environment, coverage, discovered);
+            // frameReport.anyCaptchaDetected() extends the existing CAPTCHA hard-stop to frames the
+            // top-level-only environment probe cannot see into — a CAPTCHA sitting only inside an
+            // iframe must block readiness exactly like one on the top document, never a weaker path.
+            List<AutomationBlocker> blockers = blockers(captchaOrLogin, environment, coverage,
+                    discovered, frameReport);
             AutomationConfidence confidence = AutomationConfidence.from(coverage, blockers);
             if (!blockers.isEmpty()) {
                 notes.add("AUTOMATION BLOCKED: " + blockers.stream()
@@ -226,7 +249,8 @@ public class BrowserValidationHarness {
                     ValidationReport.Status.COMPLETED,
                     "validation completed — nothing was uploaded, answered or submitted",
                     startedAt, totalMs, navigationMs, discoveryMs, planningMs,
-                    entries, coverage, confidence, environment, screenshotKey, notes, discovery);
+                    entries, coverage, confidence, environment, screenshotKey, notes, discovery,
+                    frameReport);
 
             metrics.recordCompleted(report);
             log.info("BROWSER_VALIDATION completed url={} ats={} controls={} confidence={}% band={} ready={}",
@@ -274,13 +298,26 @@ public class BrowserValidationHarness {
     private static List<AutomationBlocker> blockers(boolean captchaOrLogin,
                                                     ValidationReport.PageEnvironment environment,
                                                     SelectorCoverage coverage,
-                                                    List<DiscoveredField> discovered) {
+                                                    List<DiscoveredField> discovered,
+                                                    ai.careerpilot.execution.browser.form.FrameDiscoveryReport frames) {
         List<AutomationBlocker> out = new ArrayList<>();
 
-        if (environment != null && environment.captchaDetected()) {
+        // Frame-aware CAPTCHA hard-stop, checked first and independently of the top-level-only
+        // signals below: a CAPTCHA sitting only inside an iframe was previously invisible to both
+        // DISCOVER_ENVIRONMENT (queries the top document's outerHTML only) and CaptchaLoginDetector
+        // (operates on page().content(), also top-document-only). Requirement is that a CAPTCHA
+        // inside ANY inspected frame produces the identical hard-stop as one on the main document.
+        ai.careerpilot.execution.browser.form.FrameDiscoveryReport safeFrames =
+                frames == null ? ai.careerpilot.execution.browser.form.FrameDiscoveryReport.empty() : frames;
+        boolean frameCaptcha = safeFrames.anyCaptchaDetected();
+        if ((environment != null && environment.captchaDetected()) || frameCaptcha) {
+            String where = frameCaptcha && (environment == null || !environment.captchaDetected())
+                    ? " (frame \"" + safeFrames.captchaFrame().map(
+                            f -> f.isTopDocument() ? "(top document)" : f.framePath()).orElse("?") + "\")"
+                    : "";
             out.add(AutomationBlocker.of(AutomationBlocker.Reason.CAPTCHA,
-                    "a CAPTCHA provider is present in the page; this platform detects and reports "
-                            + "CAPTCHAs and never solves them, so a submission cannot complete here"));
+                    "a CAPTCHA provider is present in the page" + where + "; this platform detects and "
+                            + "reports CAPTCHAs and never solves them, so a submission cannot complete here"));
         } else if (captchaOrLogin) {
             // The HTML detector fires on either; without a provider script in the environment probe
             // the more likely explanation is a sign-in wall.

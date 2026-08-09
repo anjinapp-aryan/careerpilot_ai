@@ -12,6 +12,7 @@ import ai.careerpilot.storage.S3StorageService;
 import ai.careerpilot.submission.mapping.FieldMappingService;
 import ai.careerpilot.submission.question.QuestionDetectionService;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
@@ -117,6 +118,30 @@ class BrowserValidationHarnessTest {
     }
 
     private static final String URL = "https://boards.greenhouse.io/acme/jobs/1";
+
+    // ── Iframe-aware discovery: DISCOVER_FRAME_REPORT stubbing ──
+
+    private static Map<String, Object> frameSignal(String path, boolean form, boolean captcha) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("framePath", path);
+        m.put("frameUrl", "https://boards.greenhouse.io" + path);
+        m.put("title", "Apply");
+        m.put("fileInputs", form ? 1 : 0);
+        m.put("emailInputs", form ? 1 : 0);
+        m.put("textInputs", form ? 6 : 0);
+        m.put("submitButtons", form ? 1 : 0);
+        m.put("applicationHeading", form);
+        m.put("passwordInputs", false);
+        m.put("captchaDetected", captcha);
+        return m;
+    }
+
+    private void frameReport(List<Map<String, Object>> frames, List<Map<String, Object>> inaccessible) {
+        Map<String, Object> envelope = new LinkedHashMap<>();
+        envelope.put("frames", frames);
+        envelope.put("inaccessible", inaccessible);
+        when(browser.evaluate(FormDiscoveryScript.DISCOVER_FRAME_REPORT)).thenReturn(envelope);
+    }
 
     // ── Phase F4: discovery must never run against a page that is not an application form ──
 
@@ -608,6 +633,103 @@ class BrowserValidationHarnessTest {
         assertThat(metrics.lastReport()).isNotNull();
         assertThat(metrics.lastReport().status()).isEqualTo(ValidationReport.Status.FAILED);
         assertThat(metrics.snapshot().get("lastValidation")).isNotNull();
+    }
+
+    // ── Iframe-aware discovery: end-to-end through the harness ──
+    //
+    // The actual finding: a live Lever posting scored 0/5 on top-level-only signals — the form was
+    // inside an iframe — and was rejected as INVALID_APPLICATION_PAGE before DISCOVER_FIELDS (which
+    // already walks same-origin frames) ever ran. These pin the fix at the orchestration level, not
+    // just in the pure parsers/verifier tested elsewhere.
+
+    @Test
+    @DisplayName("B: top level is empty, a same-origin iframe has the real form — verification now passes")
+    void formInsideIframeIsNoLongerRejected() {
+        pageIs(URL, "Acme - Engineer", "", false); // top-level signals score 0
+        frameReport(List.of(frameSignal("", false, false), frameSignal("iframe:nth-of-type(1)", true, false)),
+                List.of());
+        when(browser.evaluate(FormDiscoveryScript.DISCOVER_FIELDS)).thenReturn(new ArrayList<>(List.of(
+                control("#email", "input", "email", "Email", true))));
+        when(browser.evaluate(FormDiscoveryScript.DISCOVER_ENVIRONMENT))
+                .thenReturn(Map.of("spaFramework", "React", "iframeCount", 1, "shadowRootCount", 0,
+                        "captchaDetected", false, "cookieBannerDetected", false,
+                        "failedRequests", 0, "title", "Apply"));
+
+        ValidationReport report = harness(true, true)
+                .validate(URL, userId, null, BrowserValidationHarness.DocumentAvailability.none());
+
+        assertThat(report.status()).isEqualTo(ValidationReport.Status.COMPLETED);
+        assertThat(report.fields()).hasSize(1);
+        assertThat(report.notes()).anyMatch(n -> n.contains("iframe:nth-of-type(1)"));
+    }
+
+    @Test
+    @DisplayName("no frame has a form anywhere — rejection is preserved, and frame evidence explains why")
+    void noFormInAnyFrameStillRejectsWithEvidence() {
+        pageIs(URL, "Acme - Engineer", "", false);
+        frameReport(List.of(frameSignal("", false, false), frameSignal("iframe:nth-of-type(1)", false, false)),
+                List.of());
+        when(browser.evaluate(FormDiscoveryScript.DISCOVER_ENVIRONMENT))
+                .thenReturn(Map.of("spaFramework", "React", "iframeCount", 1, "shadowRootCount", 0,
+                        "captchaDetected", false, "cookieBannerDetected", false,
+                        "failedRequests", 0, "title", "Apply"));
+
+        ValidationReport report = harness(true, true)
+                .validate(URL, userId, null, BrowserValidationHarness.DocumentAvailability.none());
+
+        assertThat(report.status()).isEqualTo(ValidationReport.Status.INVALID_APPLICATION_PAGE);
+        Map<String, Object> frames = (Map<String, Object>) report.summary().get("frames");
+        assertThat(frames).containsEntry("framesInspected", 2).containsEntry("framesWithForms", 0);
+    }
+
+    @Test
+    @DisplayName("F: CAPTCHA present only inside an iframe still blocks readiness like a top-level one")
+    void captchaOnlyInsideIframeStillBlocksReadiness() {
+        discovers(List.of(control("#email", "input", "email", "Email", true)));
+        frameReport(List.of(frameSignal("", true, false), frameSignal("iframe:nth-of-type(1)", true, true)),
+                List.of());
+
+        ValidationReport report = harness(true, true).validate(URL, userId, null,
+                new BrowserValidationHarness.DocumentAvailability(true, true));
+
+        assertThat(report.confidence().ready()).isFalse();
+        assertThat(report.confidence().blocked()).isTrue();
+        assertThat(report.confidence().blockers()).extracting(AutomationBlocker::reason)
+                .contains(AutomationBlocker.Reason.CAPTCHA);
+        // The top-level environment probe alone would have reported captchaDetected=false — this
+        // only blocks because the frame-aware check caught what the top-level one could not.
+        assertThat(report.environment().captchaDetected()).isFalse();
+    }
+
+    @Test
+    @DisplayName("G: an inaccessible cross-origin frame is reported honestly in the API snapshot")
+    void inaccessibleFrameIsReportedInSnapshot() {
+        discovers(List.of(control("#email", "input", "email", "Email", true)));
+        frameReport(List.of(frameSignal("", true, false)),
+                List.of(Map.of("parentFramePath", "", "src", "https://widget.thirdparty.example/embed")));
+
+        Map<String, Object> snapshot = harness(true, true)
+                .validate(URL, userId, null, BrowserValidationHarness.DocumentAvailability.none()).summary();
+
+        Map<String, Object> frames = (Map<String, Object>) snapshot.get("frames");
+        assertThat(frames).containsEntry("inaccessibleFrames", 1);
+    }
+
+    @Test
+    @DisplayName("a missing DISCOVER_FRAME_REPORT stub degrades to empty frame evidence, never a failure (regression)")
+    void missingFrameReportStubDoesNotBreakExistingTests() {
+        // No frameReport(...) stub at all — exactly what every pre-existing test in this file does.
+        // Mockito returns null for the unstubbed evaluate() call; parseFrameReport(null) must degrade
+        // to FrameDiscoveryReport.empty() rather than throwing, or every test above this one in the
+        // file would already have failed.
+        discovers(List.of(control("#email", "input", "email", "Email", true)));
+
+        ValidationReport report = harness(true, true).validate(URL, userId, null,
+                BrowserValidationHarness.DocumentAvailability.none());
+
+        assertThat(report.status()).isEqualTo(ValidationReport.Status.COMPLETED);
+        Map<String, Object> frames = (Map<String, Object>) report.summary().get("frames");
+        assertThat(frames).containsEntry("framesInspected", 0);
     }
 
     /**

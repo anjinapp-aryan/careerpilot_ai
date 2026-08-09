@@ -9,6 +9,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
+import java.util.List;
+
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -392,5 +394,134 @@ class AtsPageVerifierTest {
                 "https://boards.greenhouse.io/acme", "https://job-boards.greenhouse.io/acme");
 
         assertThat(r.lostPostingIdentity()).isFalse();
+    }
+
+    // ── Iframe-aware verification ──
+    //
+    // The actual root cause of the real-world finding: a live Lever posting scored 0/5 on
+    // top-level-only signals (the form lives in an iframe) and was rejected as
+    // INVALID_APPLICATION_PAGE before DISCOVER_FIELDS — which already walks same-origin frames —
+    // ever ran. These fixtures pin the fallback that fixes exactly that case.
+
+    @Nested
+    @DisplayName("frame-aware verification")
+    class FrameAware {
+
+        private ai.careerpilot.execution.browser.form.FramePageSignals frame(
+                String path, ai.careerpilot.execution.browser.validation.AtsPageVerifier.FormSignals signals) {
+            return new ai.careerpilot.execution.browser.form.FramePageSignals(
+                    path, "https://jobs.lever.co" + path, "Apply",
+                    signals.fileInputs(), signals.emailInputs(), signals.textInputs(),
+                    signals.submitButtons(), signals.applicationHeading(), signals.passwordInputs(), false);
+        }
+
+        @Test
+        @DisplayName("B: top level scores 0, a same-origin iframe has the real form — verification passes")
+        void formInsideIframeOverridesRejection() {
+            var frames = new ai.careerpilot.execution.browser.form.FrameDiscoveryReport(
+                    List.of(frame("", noForm()), frame("iframe:nth-of-type(1)", realForm())), List.of());
+
+            Outcome outcome = AtsPageVerifier.verify(
+                    identity("https://jobs.lever.co/acme/1", "https://jobs.lever.co/acme/1",
+                            "Acme - Apply", "", noForm()),
+                    AtsPlatform.LEVER, frames);
+
+            assertThat(outcome.valid()).isTrue();
+            assertThat(outcome.status()).isEqualTo(ValidationReport.Status.COMPLETED);
+            assertThat(outcome.evidence()).anyMatch(e -> e.contains("iframe:nth-of-type(1)"));
+        }
+
+        @Test
+        @DisplayName("C: form two iframes deep still overrides the top-level rejection")
+        void formInsideNestedIframeOverridesRejection() {
+            var frames = new ai.careerpilot.execution.browser.form.FrameDiscoveryReport(List.of(
+                    frame("", noForm()),
+                    frame("iframe:nth-of-type(1)", noForm()),
+                    frame("iframe:nth-of-type(1) >> #inner", realForm())), List.of());
+
+            Outcome outcome = AtsPageVerifier.verify(
+                    identity("https://jobs.lever.co/acme/1", "https://jobs.lever.co/acme/1",
+                            "Acme - Apply", "", noForm()),
+                    AtsPlatform.LEVER, frames);
+
+            assertThat(outcome.valid()).isTrue();
+        }
+
+        @Test
+        @DisplayName("no frame has a form either — the original rejection is preserved")
+        void noFormAnywhereStillRejects() {
+            var frames = new ai.careerpilot.execution.browser.form.FrameDiscoveryReport(
+                    List.of(frame("", noForm()), frame("iframe:nth-of-type(1)", noForm())), List.of());
+
+            Outcome outcome = AtsPageVerifier.verify(
+                    identity("https://jobs.lever.co/acme/1", "https://jobs.lever.co/acme/1",
+                            "Acme - Apply", "", noForm()),
+                    AtsPlatform.LEVER, frames);
+
+            assertThat(outcome.valid()).isFalse();
+            assertThat(outcome.status()).isEqualTo(ValidationReport.Status.INVALID_APPLICATION_PAGE);
+        }
+
+        @Test
+        @DisplayName("a CAPTCHA-carrying frame still counts as a valid form — CAPTCHA blocks readiness, not identity")
+        void captchaInFormFrameDoesNotBlockVerification() {
+            var withCaptcha = new ai.careerpilot.execution.browser.form.FramePageSignals(
+                    "iframe:nth-of-type(1)", "https://jobs.lever.co/x", "Apply",
+                    1, 1, 6, 1, true, false, true);
+            var frames = new ai.careerpilot.execution.browser.form.FrameDiscoveryReport(
+                    List.of(frame("", noForm()), withCaptcha), List.of());
+
+            Outcome outcome = AtsPageVerifier.verify(
+                    identity("https://jobs.lever.co/acme/1", "https://jobs.lever.co/acme/1",
+                            "Acme - Apply", "", noForm()),
+                    AtsPlatform.LEVER, frames);
+
+            assertThat(outcome.valid()).isTrue();
+        }
+
+        @Test
+        @DisplayName("a removed-job rejection is never overridden by a frame, however good its score")
+        void moreSpecificRejectionReasonsAreNotOverriddenByFrames() {
+            var frames = new ai.careerpilot.execution.browser.form.FrameDiscoveryReport(
+                    List.of(frame("iframe:nth-of-type(1)", realForm())), List.of());
+
+            Outcome outcome = AtsPageVerifier.verify(
+                    identity("https://boards.greenhouse.io/acme/jobs/1",
+                            "https://boards.greenhouse.io/acme/jobs/1", "Acme - Apply",
+                            "This job posting has expired.", noForm()),
+                    AtsPlatform.GREENHOUSE, frames);
+
+            assertThat(outcome.valid()).isFalse();
+            assertThat(outcome.status()).isEqualTo(ValidationReport.Status.JOB_REMOVED);
+        }
+
+        @Test
+        @DisplayName("an empty frame report behaves exactly like the two-argument overload (regression)")
+        void emptyFrameReportMatchesTwoArgOverload() {
+            PageIdentity id = identity("https://jobs.lever.co/acme/1", "https://jobs.lever.co/acme/1",
+                    "Acme - Apply", "", noForm());
+
+            Outcome withEmptyFrames = AtsPageVerifier.verify(id, AtsPlatform.LEVER,
+                    ai.careerpilot.execution.browser.form.FrameDiscoveryReport.empty());
+            Outcome twoArg = AtsPageVerifier.verify(id, AtsPlatform.LEVER);
+
+            assertThat(withEmptyFrames.valid()).isEqualTo(twoArg.valid());
+            assertThat(withEmptyFrames.status()).isEqualTo(twoArg.status());
+        }
+
+        @Test
+        @DisplayName("top-level already valid — frames are consulted but change nothing")
+        void topLevelAlreadyValidIsUnaffectedByFrames() {
+            var frames = new ai.careerpilot.execution.browser.form.FrameDiscoveryReport(
+                    List.of(frame("", realForm())), List.of());
+
+            Outcome outcome = AtsPageVerifier.verify(
+                    identity("https://boards.greenhouse.io/acme/jobs/1",
+                            "https://boards.greenhouse.io/acme/jobs/1", "Acme - Apply",
+                            "Submit your application", realForm()),
+                    AtsPlatform.GREENHOUSE, frames);
+
+            assertThat(outcome.valid()).isTrue();
+        }
     }
 }

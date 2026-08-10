@@ -25,7 +25,7 @@ import { cn } from '@/lib/cn';
 import { ExplainDialog } from '@/components/jobs/ExplainDialog';
 import { RelevanceDrawer } from '@/components/jobs/RelevanceDrawer';
 import { PrepareApplicationDrawer } from '@/components/jobs/PrepareApplicationDrawer';
-import { JobBadges } from '@/components/jobs/JobBadges';
+import { JobBadges, SponsorshipBadge, FreshnessBadge } from '@/components/jobs/JobBadges';
 import { trackJobEvent } from '@/lib/jobTelemetry';
 import type { RecommendedFilter, RecommendedJob, RecommendedJobsResponse, ScoreBreakdown } from '@/types/workflow';
 
@@ -63,8 +63,24 @@ function confidenceTone(c?: string | null): 'success' | 'primary' | 'warning' {
   return 'warning';
 }
 
+/** Global Job Discovery Expansion — client-side country quick-filter, applied over jobs already
+ *  returned by the existing /api/jobs/recommended call. No extra API call: the country list and
+ *  the filtering both work off `job.country`, already present on every RecommendedJob. */
+const COUNTRY_FLAGS: Record<string, string> = {
+  Germany: '🇩🇪',
+  Netherlands: '🇳🇱',
+  'United Kingdom': '🇬🇧',
+  Ireland: '🇮🇪',
+  Canada: '🇨🇦',
+  Australia: '🇦🇺',
+  'United States': '🇺🇸',
+  Singapore: '🇸🇬',
+  'United Arab Emirates': '🇦🇪',
+};
+
 export function RecommendedJobs({ onApply, onSave, busy }: RecommendedJobsProps) {
   const [filter, setFilter] = useState<RecommendedFilter>('all');
+  const [countryFilter, setCountryFilter] = useState<string | null>(null);
   const [explainJob, setExplainJob] = useState<{
     id: string;
     title: string;
@@ -148,8 +164,15 @@ export function RecommendedJobs({ onApply, onSave, busy }: RecommendedJobsProps)
   }
 
   const profile = firstPage.profile;
-  const jobs = data!.pages.flatMap((p) => p.jobs);
-  const total = firstPage.total ?? jobs.length;
+  const allJobs = data!.pages.flatMap((p) => p.jobs);
+  const total = firstPage.total ?? allJobs.length;
+
+  // Country chips only ever list countries actually present in the already-loaded jobs — never a
+  // hardcoded 9-country list that could show a country with zero results.
+  const countriesPresent = Array.from(
+    new Set(allJobs.map((r) => r.job.country).filter((c): c is string => !!c)),
+  ).sort();
+  const jobs = countryFilter ? allJobs.filter((r) => r.job.country === countryFilter) : allJobs;
 
   return (
     <div className="space-y-6">
@@ -206,6 +229,36 @@ export function RecommendedJobs({ onApply, onSave, busy }: RecommendedJobsProps)
           </span>
         )}
       </div>
+
+      {countriesPresent.length > 1 && (
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            onClick={() => setCountryFilter(null)}
+            className={cn(
+              'rounded-full border px-3 py-1 text-xs font-medium transition-colors',
+              countryFilter === null
+                ? 'border-primary bg-primary/10 text-primary'
+                : 'border-border text-muted-foreground hover:bg-muted',
+            )}
+          >
+            All countries
+          </button>
+          {countriesPresent.map((country) => (
+            <button
+              key={country}
+              onClick={() => setCountryFilter(country === countryFilter ? null : country)}
+              className={cn(
+                'rounded-full border px-3 py-1 text-xs font-medium transition-colors',
+                countryFilter === country
+                  ? 'border-primary bg-primary/10 text-primary'
+                  : 'border-border text-muted-foreground hover:bg-muted',
+              )}
+            >
+              {COUNTRY_FLAGS[country] ? `${COUNTRY_FLAGS[country]} ` : ''}{country}
+            </button>
+          ))}
+        </div>
+      )}
 
       {jobs.length === 0 ? (
         <EmptyState
@@ -343,6 +396,12 @@ export function RecommendedJobCard({
         </div>
 
         <JobBadges job={job} className="mt-3" priority={rec.priority} mustApply={rec.mustApply} />
+        {(job.sponsorshipStatus || rec.freshness) && (
+          <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+            <SponsorshipBadge status={job.sponsorshipStatus} />
+            <FreshnessBadge freshness={rec.freshness} />
+          </div>
+        )}
 
         {/* Employer identity — the trust anchor for this card. Company name is always real (it's
             the same field shown in the header); "Careers" is a display label, not a claim about a

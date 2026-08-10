@@ -40,6 +40,10 @@ public class Job {
     // ── Recommendation-engine enrichment (all nullable; keyword-derived at ingest) ──
     @Column(name = "remote_type") private String remoteType;            // REMOTE | HYBRID | ONSITE
     @Column(name = "sponsorship_available") private Boolean sponsorshipAvailable;
+    // Global Job Discovery Expansion: richer signal alongside the boolean above (never a
+    // replacement) — CONFIRMED | MENTIONED | UNKNOWN | NOT_SUPPORTED. Nullable; unset until
+    // re-enriched under career.international.visa-signal.enabled.
+    @Column(name = "sponsorship_status") private String sponsorshipStatus;
     @Column(name = "relocation_support") private Boolean relocationSupport;
     @Column(name = "company_size") private String companySize;          // STARTUP | SMB | MID | ENTERPRISE
     @Column(name = "required_experience") private Integer requiredExperience;

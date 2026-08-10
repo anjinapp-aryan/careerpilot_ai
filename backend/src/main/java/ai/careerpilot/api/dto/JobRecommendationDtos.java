@@ -35,35 +35,44 @@ public final class JobRecommendationDtos {
             String priority,
             Integer priorityScore,
             Boolean mustApply,
-            String atsPlatform) {
+            String atsPlatform,
+            String freshness) {
 
         /**
-         * Backward-compatible constructor preserving the pre-existing 10-arg shape — every prior
-         * call site keeps compiling and serializing exactly as before, with {@code atsPlatform}
-         * defaulting to {@code null} (unknown) rather than a guess.
+         * Backward-compatible constructor preserving the pre-existing 11-arg shape (post-atsPlatform)
+         * — every prior call site keeps compiling and serializing exactly as before, with
+         * {@code freshness} defaulting to {@code null} (not computed) rather than a guess.
          */
+        public RecommendedJob(Job job, int matchScore, List<String> matchedSkills, List<String> missingSkills,
+                              String confidenceLevel, ScoreBreakdown scoreBreakdown, String category,
+                              String priority, Integer priorityScore, Boolean mustApply, String atsPlatform) {
+            this(job, matchScore, matchedSkills, missingSkills, confidenceLevel, scoreBreakdown, category,
+                    priority, priorityScore, mustApply, atsPlatform, null);
+        }
+
+        /** Backward-compatible constructor preserving the pre-existing 10-arg shape. */
         public RecommendedJob(Job job, int matchScore, List<String> matchedSkills, List<String> missingSkills,
                               String confidenceLevel, ScoreBreakdown scoreBreakdown, String category,
                               String priority, Integer priorityScore, Boolean mustApply) {
             this(job, matchScore, matchedSkills, missingSkills, confidenceLevel, scoreBreakdown, category,
-                    priority, priorityScore, mustApply, null);
+                    priority, priorityScore, mustApply, null, null);
         }
 
         /** Backward-compatible constructor for the legacy (no breakdown/confidence) path. */
         public RecommendedJob(Job job, int matchScore, List<String> matchedSkills, List<String> missingSkills) {
-            this(job, matchScore, matchedSkills, missingSkills, null, null, null, null, null, null, null);
+            this(job, matchScore, matchedSkills, missingSkills, null, null, null, null, null, null, null, null);
         }
 
         /** Backward-compatible constructor for the v2 path that predates categorization. */
         public RecommendedJob(Job job, int matchScore, List<String> matchedSkills, List<String> missingSkills,
                               String confidenceLevel, ScoreBreakdown scoreBreakdown) {
-            this(job, matchScore, matchedSkills, missingSkills, confidenceLevel, scoreBreakdown, null, null, null, null, null);
+            this(job, matchScore, matchedSkills, missingSkills, confidenceLevel, scoreBreakdown, null, null, null, null, null, null);
         }
 
         /** Backward-compatible constructor for the 2B-1 path (category, no priority/must-apply). */
         public RecommendedJob(Job job, int matchScore, List<String> matchedSkills, List<String> missingSkills,
                               String confidenceLevel, ScoreBreakdown scoreBreakdown, String category) {
-            this(job, matchScore, matchedSkills, missingSkills, confidenceLevel, scoreBreakdown, category, null, null, null, null);
+            this(job, matchScore, matchedSkills, missingSkills, confidenceLevel, scoreBreakdown, category, null, null, null, null, null);
         }
     }
 

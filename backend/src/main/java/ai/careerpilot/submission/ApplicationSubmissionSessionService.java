@@ -30,6 +30,9 @@ import ai.careerpilot.submission.event.ApplicationSubmissionSessionEvent;
 import ai.careerpilot.submission.mapping.FieldMappingService;
 import ai.careerpilot.submission.question.QuestionCategory;
 import ai.careerpilot.submission.question.QuestionDetectionService;
+import ai.careerpilot.submission.reuse.AnswerReuseDecision;
+import ai.careerpilot.submission.reuse.ApplicationReuseResolver;
+import ai.careerpilot.submission.reuse.JobFingerprint;
 import ai.careerpilot.submission.validation.JobValidationService;
 import ai.careerpilot.workflow.tracking.ApplicationLifecycleService;
 import org.slf4j.Logger;
@@ -88,6 +91,7 @@ public class ApplicationSubmissionSessionService {
     private final FieldMappingService fieldMapping;
     private final QuestionDetectionService questionDetection;
     private final AnswerGenerationService answerGeneration;
+    private final ApplicationReuseResolver reuseResolver;
     private final ApplicationProviderRegistry providerRegistry;
     private final SafetyEngine safetyEngine;
     private final ApprovalService approvalService;
@@ -113,6 +117,7 @@ public class ApplicationSubmissionSessionService {
             ApplicationReviewPipeline reviewPipeline, CompanyKnowledgeService companyKnowledgeService,
             StoryRecommendationEngine storyEngine, FieldMappingService fieldMapping,
             QuestionDetectionService questionDetection, AnswerGenerationService answerGeneration,
+            ApplicationReuseResolver reuseResolver,
             ApplicationProviderRegistry providerRegistry, SafetyEngine safetyEngine,
             ApprovalService approvalService, ApplicationExecutionService executionService,
             ApplicationLifecycleService lifecycleService, ApplicationService applicationService,
@@ -138,6 +143,7 @@ public class ApplicationSubmissionSessionService {
         this.fieldMapping = fieldMapping;
         this.questionDetection = questionDetection;
         this.answerGeneration = answerGeneration;
+        this.reuseResolver = reuseResolver;
         this.providerRegistry = providerRegistry;
         this.safetyEngine = safetyEngine;
         this.approvalService = approvalService;
@@ -353,20 +359,50 @@ public class ApplicationSubmissionSessionService {
             }
             advance(session, ApplicationSubmissionSession.STATUS_STAR_READY);
 
-            // Step 6 — field mapping + question detection/answer generation (always run so the
-            // approval screen always has something to show).
+            // Step 6 — field mapping + question detection/answer generation. The approval screen
+            // must always have something to show, but a same-job repeat Apply should not pay for
+            // 11 fresh AI Gateway calls when nothing that could change the answers has changed —
+            // see ApplicationReuseResolver.
             fieldMapping.map(userId);
-            String resumeText = tailoring != null ? tailoring.getTailoredResumeText() : null;
-            AnswerContext ctx = new AnswerContext(resumeText, pkg.getMetadata(), companyBrief, bestStory);
-            for (Map.Entry<String, QuestionCategory> q : questionDetection.commonQuestions()) {
-                GeneratedAnswer generated = answerGeneration.generate(userId, jobId, q.getKey(), q.getValue(), ctx);
-                answers.save(ApplicationSubmissionAnswer.builder()
-                        .sessionId(session.getId())
-                        .questionText(generated.questionText())
-                        .questionCategory(generated.category().name())
-                        .answerText(generated.answerText())
-                        .sourceRefs(generated.sourceRefs())
-                        .build());
+            UUID starStoryId = bestStory != null ? bestStory.getId() : null;
+            session.setStarStoryId(starStoryId);
+            session.setJobFingerprint(JobFingerprint.of(job));
+
+            ApplicationReuseResolver.Basis basis = new ApplicationReuseResolver.Basis(
+                    session.getResumeTailoringId(), session.getApplicationPackageId(),
+                    session.getCompanyKnowledgeId(), starStoryId);
+            ApplicationReuseResolver.Decision decision = reuseResolver.resolve(userId, jobId, session.getId(), basis);
+            session.setAnswersReuseDecision(decision.reason().name());
+
+            if (decision.reason() == AnswerReuseDecision.REUSED) {
+                ApplicationSubmissionSession source = decision.sourceSession().orElseThrow();
+                session.setAnswersReusedFromSessionId(source.getId());
+                for (ApplicationSubmissionAnswer prior : answers.findBySessionIdOrderByCreatedAtAsc(source.getId())) {
+                    answers.save(ApplicationSubmissionAnswer.builder()
+                            .sessionId(session.getId())
+                            .questionText(prior.getQuestionText())
+                            .questionCategory(prior.getQuestionCategory())
+                            .answerText(prior.getAnswerText())
+                            .sourceRefs(prior.getSourceRefs())
+                            .build());
+                }
+                log.info("APP_SUBMISSION_REUSE answers.reused=true session={} from={} job={}",
+                        session.getId(), source.getId(), jobId);
+            } else {
+                String resumeText = tailoring != null ? tailoring.getTailoredResumeText() : null;
+                AnswerContext ctx = new AnswerContext(resumeText, pkg.getMetadata(), companyBrief, bestStory);
+                for (Map.Entry<String, QuestionCategory> q : questionDetection.commonQuestions()) {
+                    GeneratedAnswer generated = answerGeneration.generate(userId, jobId, q.getKey(), q.getValue(), ctx);
+                    answers.save(ApplicationSubmissionAnswer.builder()
+                            .sessionId(session.getId())
+                            .questionText(generated.questionText())
+                            .questionCategory(generated.category().name())
+                            .answerText(generated.answerText())
+                            .sourceRefs(generated.sourceRefs())
+                            .build());
+                }
+                log.info("APP_SUBMISSION_REUSE answers.reused=false reason={} session={} job={}",
+                        decision.reason(), session.getId(), jobId);
             }
             advance(session, ApplicationSubmissionSession.STATUS_READY_FOR_SUBMISSION);
 

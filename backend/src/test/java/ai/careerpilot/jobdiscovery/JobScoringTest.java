@@ -92,7 +92,7 @@ class JobScoringTest {
 
     @Test
     void countryInferenceResolvesCommonCitiesAndCountries() {
-        JobNormalizer normalizer = new JobNormalizer(scoring, new JobEnricher(taxonomy), true);
+        JobNormalizer normalizer = new JobNormalizer(scoring, new JobEnricher(taxonomy, new VisaSignalClassifier(), false), true);
         assertEquals("Germany", normalizer.inferCountry("Frankfurt"));
         assertEquals("Canada", normalizer.inferCountry("Toronto, Canada"));
         assertEquals("India", normalizer.inferCountry("Bengaluru"));

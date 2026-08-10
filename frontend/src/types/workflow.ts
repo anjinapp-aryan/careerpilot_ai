@@ -45,6 +45,10 @@ export interface Job {
   // Recommendation-engine enrichment (keyword-derived at ingest; nullable).
   remoteType?: 'REMOTE' | 'HYBRID' | 'ONSITE' | null;
   sponsorshipAvailable?: boolean | null;
+  /** Global Job Discovery Expansion — richer signal alongside sponsorshipAvailable (never a
+   *  replacement). Null unless career.international.visa-signal.enabled. Never inferred: UNKNOWN
+   *  means no reliable evidence, not "probably not". */
+  sponsorshipStatus?: 'CONFIRMED' | 'MENTIONED' | 'UNKNOWN' | 'NOT_SUPPORTED' | null;
   relocationSupport?: boolean | null;
   companySize?: string | null;
   requiredExperience?: number | null;
@@ -94,6 +98,14 @@ export interface ApplicationSubmissionSession {
   /** Guided Apply — set only after `POST /{id}/report-submitted`. Null on every other status. */
   userReportedSubmittedAt?: string | null;
   userSubmissionNote?: string | null;
+
+  /** Artifact reuse layer — deterministic job identity, stable across title/salary/description edits. */
+  jobFingerprint?: string | null;
+  /** REUSED, or one of the REBUILT_* reasons explaining why answers were regenerated. Null on rows predating this field. */
+  answersReuseDecision?: 'FULL_BUILD' | 'REUSED' | 'REBUILT_EXPIRED' | 'REBUILT_RESUME_CHANGED'
+    | 'REBUILT_PACKAGE_CHANGED' | 'REBUILT_CONTEXT_CHANGED' | null;
+  /** Set only when answersReuseDecision === 'REUSED' — the prior session the answers were copied from. */
+  answersReusedFromSessionId?: string | null;
 }
 
 export interface ApplicationSubmissionAnswer {
@@ -164,6 +176,9 @@ export interface RecommendedJob {
   /** ATS platform detected from the job's real employer URL (GREENHOUSE/LEVER/etc.), or absent
    *  when unrecognised — never a guess. Mirrors `AtsPlatform.detect(job.sourceUrl)`. */
   atsPlatform?: string | null;
+  /** Global Job Discovery Expansion — freshness band computed from postedDate/createdAt. Null
+   *  unless career.international.freshness.enabled. */
+  freshness?: 'VERY_FRESH' | 'FRESH' | 'RECENT' | 'AGING' | 'STALE' | null;
 }
 
 /** `GET /api/jobs/{id}/relevance` response (Phase 3B.1 explainability). Mirrors

@@ -19,14 +19,18 @@ public final class ApplicationSubmissionDtos {
                                   String failureReason, Instant startedAt, Instant completedAt,
                                   Instant createdAt, Instant updatedAt,
                                   // Guided Apply — null unless reportUserSubmitted was ever called for this session.
-                                  Instant userReportedSubmittedAt, String userSubmissionNote) {
+                                  Instant userReportedSubmittedAt, String userSubmissionNote,
+                                  // Artifact reuse layer (ai.careerpilot.submission.reuse) — null on rows
+                                  // predating this column, which the UI treats identically to FULL_BUILD.
+                                  String jobFingerprint, String answersReuseDecision, UUID answersReusedFromSessionId) {
         public static SessionResponse from(ApplicationSubmissionSession s) {
             return new SessionResponse(s.getId(), s.getUserId(), s.getJobId(), s.getApplicationId(), s.getResumeId(),
                     s.getResumeTailoringId(), s.getApplicationPackageId(), s.getApplicationReviewId(),
                     s.getCompanyKnowledgeId(), s.getApprovalQueueEntryId(), s.getApplicationExecutionId(),
                     s.getStatus(), s.getSubmissionMethod(), s.getProvider(), s.getCorrelationId(),
                     s.getFailureReason(), s.getStartedAt(), s.getCompletedAt(), s.getCreatedAt(), s.getUpdatedAt(),
-                    s.getUserReportedSubmittedAt(), s.getUserSubmissionNote());
+                    s.getUserReportedSubmittedAt(), s.getUserSubmissionNote(),
+                    s.getJobFingerprint(), s.getAnswersReuseDecision(), s.getAnswersReusedFromSessionId());
         }
     }
 

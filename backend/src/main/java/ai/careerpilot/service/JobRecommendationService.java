@@ -9,6 +9,7 @@ import ai.careerpilot.domain.JobRecommendation;
 import ai.careerpilot.domain.Resume;
 import ai.careerpilot.domain.WorkflowRun;
 import ai.careerpilot.execution.browser.validation.AtsPlatform;
+import ai.careerpilot.jobdiscovery.JobFreshness;
 import ai.careerpilot.jobdiscovery.JobMatchingService;
 import ai.careerpilot.jobdiscovery.JobScoring;
 import ai.careerpilot.jobdiscovery.JobScoring.ScoreBreakdown;
@@ -53,11 +54,13 @@ public class JobRecommendationService {
     private final JobScoring scoring;
     private final CandidateProfileRepository candidateProfiles;
     private final ResumeRepository resumes;
+    private final RecommendationDiversifier diversifier;
     private final ObjectMapper mapper = new ObjectMapper();
 
     /** When true, Recommended is gated to score >= threshold AND confidence >= MEDIUM. */
     private final boolean v2Enabled;
     private final int threshold;
+    private final boolean freshnessEnabled;
 
     public JobRecommendationService(WorkflowRunRepository runs,
                                     JobRepository jobs,
@@ -67,8 +70,10 @@ public class JobRecommendationService {
                                     JobScoring scoring,
                                     CandidateProfileRepository candidateProfiles,
                                     ResumeRepository resumes,
+                                    RecommendationDiversifier diversifier,
                                     @Value("${jobs.recommendation.v2-enabled:true}") boolean v2Enabled,
-                                    @Value("${jobs.recommendation.threshold:75}") int threshold) {
+                                    @Value("${jobs.recommendation.threshold:75}") int threshold,
+                                    @Value("${career.international.freshness.enabled:false}") boolean freshnessEnabled) {
         this.runs = runs;
         this.jobs = jobs;
         this.recommendations = recommendations;
@@ -77,8 +82,10 @@ public class JobRecommendationService {
         this.scoring = scoring;
         this.candidateProfiles = candidateProfiles;
         this.resumes = resumes;
+        this.diversifier = diversifier;
         this.v2Enabled = v2Enabled;
         this.threshold = threshold;
+        this.freshnessEnabled = freshnessEnabled;
     }
 
     public RecommendedJobsResponse recommend(UUID userId, UUID orgId, int limit) {
@@ -185,6 +192,10 @@ public class JobRecommendationService {
             all = fromOrgPool(orgId, extractedSkills, targetRole, targetLocations, filter);
         }
 
+        // Bounded country diversification (Global Job Discovery Expansion) — reorders within fixed
+        // score bands only, never displaces a materially better-matching job. No-op when disabled.
+        all = diversifier.diversify(all);
+
         // Paginate in memory (the gated list is small — <= KEEP_TOP).
         int total = all.size();
         int from = Math.min(pageNum * pageSize, total);
@@ -221,7 +232,8 @@ public class JobRecommendationService {
             out.add(new RecommendedJob(job, rec.getMatchScore(),
                     csv(rec.getMatchingSkills()), csv(rec.getMissingSkills()),
                     rec.getConfidenceLevel(), parseBreakdown(rec.getScoreBreakdown()), rec.getCategory(),
-                    rec.getPriority(), rec.getPriorityScore(), rec.getMustApply(), atsPlatformOf(job)));
+                    rec.getPriority(), rec.getPriorityScore(), rec.getMustApply(), atsPlatformOf(job),
+                    freshnessOf(job)));
         }
         return out;
     }
@@ -276,6 +288,17 @@ public class JobRecommendationService {
         return platform == AtsPlatform.UNKNOWN ? null : platform.name();
     }
 
+    /**
+     * Freshness band from the job's own {@code postedDate}/{@code createdAt} — no new persistence,
+     * a pure read-time classification. {@code null} (not a guess) when disabled or neither
+     * timestamp exists.
+     */
+    private String freshnessOf(Job job) {
+        if (!freshnessEnabled) return null;
+        JobFreshness f = JobFreshness.classify(job.getPostedDate(), job.getCreatedAt(), Instant.now());
+        return f == null ? null : f.name();
+    }
+
     private ScoreBreakdown parseBreakdown(String json) {
         if (json == null || json.isBlank()) return null;
         try {
@@ -293,7 +316,7 @@ public class JobRecommendationService {
                 .map(job -> {
                     JobScoring.ScoreResult r = scoring.score(job, skills, targetRole, targetLocations);
                     return new RecommendedJob(job, r.matchScore(), r.matchedSkills(), r.missingSkills(),
-                            null, null, null, null, null, null, atsPlatformOf(job));
+                            null, null, null, null, null, null, atsPlatformOf(job), freshnessOf(job));
                 })
                 .filter(rj -> matchesFilter(rj.job(), rj.matchScore(), filter))
                 .sorted(Comparator.comparingInt(RecommendedJob::matchScore).reversed())

@@ -1,6 +1,7 @@
 package ai.careerpilot.jobdiscovery;
 
 import ai.careerpilot.domain.Job;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.util.regex.Matcher;
@@ -23,9 +24,15 @@ public class JobEnricher {
             "(\\d{1,2})\\s*\\+?\\s*(?:years?|yrs?)(?:\\s+(?:of\\s+)?experience)?", Pattern.CASE_INSENSITIVE);
 
     private final JobTaxonomy taxonomy;
+    private final VisaSignalClassifier visaSignalClassifier;
+    private final boolean visaSignalEnabled;
 
-    public JobEnricher(JobTaxonomy taxonomy) {
+    public JobEnricher(JobTaxonomy taxonomy,
+                       VisaSignalClassifier visaSignalClassifier,
+                       @Value("${career.international.visa-signal.enabled:false}") boolean visaSignalEnabled) {
         this.taxonomy = taxonomy;
+        this.visaSignalClassifier = visaSignalClassifier;
+        this.visaSignalEnabled = visaSignalEnabled;
     }
 
     /** Mutates {@code job} in place with derived enrichment fields. */
@@ -40,6 +47,11 @@ public class JobEnricher {
         job.setRequiredExperience(parseRequiredExperience(safe(job.getDescription()) + " " + safe(job.getTitle())));
         // Industry/job-family classification drives the recommendation quality filter.
         job.setJobFamily(taxonomy.classifyFamily(job.getTitle(), job.getDescription()));
+        // Global Job Discovery Expansion: richer 4-state signal, additive to sponsorshipAvailable
+        // above. Flag-gated so a stock deployment's enrichment output is byte-identical.
+        if (visaSignalEnabled) {
+            job.setSponsorshipStatus(visaSignalClassifier.classify(job.getTitle(), job.getDescription()).name());
+        }
     }
 
     String deriveRemoteType(String haystack, Boolean remoteFlag) {

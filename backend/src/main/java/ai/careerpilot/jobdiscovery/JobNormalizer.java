@@ -95,6 +95,7 @@ public class JobNormalizer {
         // Carry over enrichment derived on the fresh copy (idempotent, keyword-based).
         target.setRemoteType(fresh.getRemoteType());
         target.setSponsorshipAvailable(fresh.getSponsorshipAvailable());
+        target.setSponsorshipStatus(fresh.getSponsorshipStatus());
         target.setRelocationSupport(fresh.getRelocationSupport());
         target.setCompanySize(fresh.getCompanySize());
         target.setRequiredExperience(fresh.getRequiredExperience());

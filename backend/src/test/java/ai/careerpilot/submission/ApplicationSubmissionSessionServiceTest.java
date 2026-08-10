@@ -28,6 +28,8 @@ import ai.careerpilot.submission.answer.AnswerGenerationService.GeneratedAnswer;
 import ai.careerpilot.submission.mapping.FieldMappingService;
 import ai.careerpilot.submission.question.QuestionCategory;
 import ai.careerpilot.submission.question.QuestionDetectionService;
+import ai.careerpilot.submission.reuse.AnswerReuseDecision;
+import ai.careerpilot.submission.reuse.ApplicationReuseResolver;
 import ai.careerpilot.submission.validation.JobValidationService;
 import ai.careerpilot.submission.validation.JobValidationService.ValidationResult;
 import ai.careerpilot.workflow.tracking.ApplicationLifecycleService;
@@ -78,6 +80,7 @@ class ApplicationSubmissionSessionServiceTest {
     private FieldMappingService fieldMapping;
     private QuestionDetectionService questionDetection;
     private AnswerGenerationService answerGeneration;
+    private ApplicationReuseResolver reuseResolver;
     private ApplicationProviderRegistry providerRegistry;
     private SafetyEngine safetyEngine;
     private ApprovalService approvalService;
@@ -111,6 +114,7 @@ class ApplicationSubmissionSessionServiceTest {
         fieldMapping = mock(FieldMappingService.class);
         questionDetection = mock(QuestionDetectionService.class);
         answerGeneration = mock(AnswerGenerationService.class);
+        reuseResolver = mock(ApplicationReuseResolver.class);
         providerRegistry = mock(ApplicationProviderRegistry.class);
         safetyEngine = mock(SafetyEngine.class);
         approvalService = mock(ApprovalService.class);
@@ -152,12 +156,13 @@ class ApplicationSubmissionSessionServiceTest {
         when(safetyEngine.evaluate(eq(userId), eq(jobId), eq(pkg.getId())))
                 .thenReturn(new SafetyResult(SafetyVerdict.SAFE, List.of()));
         when(applications.findFirstByUserIdAndJobIdOrderByCreatedAtDesc(userId, jobId)).thenReturn(Optional.empty());
+        when(reuseResolver.resolve(any(), any(), any(), any())).thenReturn(ApplicationReuseResolver.Decision.fullBuild());
     }
 
     private ApplicationSubmissionSessionService service(boolean enabled, boolean auto, boolean manual, boolean approval) {
         return new ApplicationSubmissionSessionService(sessions, answers, jobs, starStories, applications, users,
                 jobValidation, tailoringService, coverLetterService, packageService, reviewPipeline,
-                companyKnowledgeService, storyEngine, fieldMapping, questionDetection, answerGeneration,
+                companyKnowledgeService, storyEngine, fieldMapping, questionDetection, answerGeneration, reuseResolver,
                 providerRegistry, safetyEngine, approvalService, executionService, lifecycleService,
                 applicationService, learningPipeline, events, executor, enabled, auto, manual, approval);
     }
@@ -615,6 +620,61 @@ class ApplicationSubmissionSessionServiceTest {
         s.runPipeline(sessionId);
 
         verify(answers).save(argThat(a -> "WHY_ROLE".equals(a.getQuestionCategory()) && "Because...".equals(a.getAnswerText())));
+    }
+
+    // ── Eliminate Repeated Validation & Package Preparation — Step 6 reuse wiring ──
+
+    @Test
+    void runPipelineSkipsAiAnswerGenerationWhenResolverSaysReuse() {
+        UUID priorSessionId = UUID.randomUUID();
+        ApplicationSubmissionSession priorSession = ApplicationSubmissionSession.builder()
+                .id(priorSessionId).userId(userId).jobId(jobId).status(ApplicationSubmissionSession.STATUS_COMPLETED)
+                .build();
+        when(reuseResolver.resolve(eq(userId), eq(jobId), eq(sessionId), any()))
+                .thenReturn(ApplicationReuseResolver.Decision.reused(priorSession));
+        when(answers.findBySessionIdOrderByCreatedAtAsc(priorSessionId)).thenReturn(List.of(
+                ApplicationSubmissionAnswer.builder().id(UUID.randomUUID()).sessionId(priorSessionId)
+                        .questionText("Why are you interested in this role?").questionCategory("WHY_ROLE")
+                        .answerText("Reused answer").sourceRefs("{}").build()));
+        when(questionDetection.commonQuestions()).thenReturn(List.of(
+                new AbstractMap.SimpleEntry<>("Why are you interested in this role?", QuestionCategory.WHY_ROLE)));
+        stubExecutionSubmitted();
+
+        ApplicationSubmissionSessionService s = service(true, false, true, false);
+        s.runPipeline(sessionId);
+
+        verifyNoInteractions(answerGeneration);
+        verify(answers).save(argThat(a -> "Reused answer".equals(a.getAnswerText()) && sessionId.equals(a.getSessionId())));
+        assertEquals(AnswerReuseDecision.REUSED.name(), session.getAnswersReuseDecision());
+        assertEquals(priorSessionId, session.getAnswersReusedFromSessionId());
+    }
+
+    @Test
+    void runPipelineCallsAiAnswerGenerationWhenResolverSaysRebuild() {
+        when(reuseResolver.resolve(eq(userId), eq(jobId), eq(sessionId), any()))
+                .thenReturn(ApplicationReuseResolver.Decision.rebuilt(AnswerReuseDecision.REBUILT_RESUME_CHANGED));
+        when(questionDetection.commonQuestions()).thenReturn(List.of(
+                new AbstractMap.SimpleEntry<>("Why are you interested in this role?", QuestionCategory.WHY_ROLE)));
+        when(answerGeneration.generate(eq(userId), eq(jobId), anyString(), eq(QuestionCategory.WHY_ROLE), any()))
+                .thenReturn(new GeneratedAnswer("Why are you interested in this role?", QuestionCategory.WHY_ROLE,
+                        "Freshly generated", "{}"));
+        stubExecutionSubmitted();
+
+        ApplicationSubmissionSessionService s = service(true, false, true, false);
+        s.runPipeline(sessionId);
+
+        verify(answerGeneration).generate(eq(userId), eq(jobId), anyString(), eq(QuestionCategory.WHY_ROLE), any());
+        assertEquals("REBUILT_RESUME_CHANGED", session.getAnswersReuseDecision());
+        assertNull(session.getAnswersReusedFromSessionId());
+    }
+
+    @Test
+    void runPipelineSetsJobFingerprintAndStarStoryIdEveryTime() {
+        stubExecutionSubmitted();
+        ApplicationSubmissionSessionService s = service(true, false, true, false);
+        s.runPipeline(sessionId);
+
+        assertEquals("url:boards.greenhouse.io/acme/jobs/1", session.getJobFingerprint());
     }
 
     // ── onApprovalGranted / continueAfterApproval ──

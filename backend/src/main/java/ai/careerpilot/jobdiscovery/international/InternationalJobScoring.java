@@ -52,9 +52,25 @@ public class InternationalJobScoring {
                 remoteFlexibility, principalGrowth, aiStack);
     }
 
-    /** Curated country visa-probability score blended with the job's own sponsorship signal. */
+    /**
+     * Curated country visa-probability score blended with the job's own sponsorship signal.
+     * Prefers the richer {@code sponsorshipStatus} (CONFIRMED/MENTIONED/UNKNOWN/NOT_SUPPORTED,
+     * Global Job Discovery Expansion) when present — a firm CONFIRMED commitment scores higher
+     * than a bare MENTIONED, which the old boolean collapsed into one TRUE bucket. Falls back to
+     * the legacy boolean when sponsorshipStatus wasn't computed (visa-signal flag off), so this
+     * method's behavior is unchanged for any deployment that hasn't enabled the classifier.
+     */
     private int visaProbabilityScore(Job job, CountryIntelligence intel) {
         int base = intel != null ? intel.getVisaProbabilityScore() : 50;
+        String status = job.getSponsorshipStatus();
+        if (status != null) {
+            return switch (status) {
+                case "CONFIRMED" -> Math.min(100, Math.round(base * 1.2f));
+                case "MENTIONED" -> Math.min(100, Math.round(base * 1.05f));
+                case "NOT_SUPPORTED" -> Math.round(base * 0.4f);
+                default -> base; // UNKNOWN — neutral, no bonus, no penalty
+            };
+        }
         if (Boolean.TRUE.equals(job.getSponsorshipAvailable())) return Math.min(100, Math.round(base * 1.1f));
         if (Boolean.FALSE.equals(job.getSponsorshipAvailable())) return Math.round(base * 0.5f);
         return base;

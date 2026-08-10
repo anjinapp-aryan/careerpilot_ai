@@ -94,6 +94,43 @@ class InternationalJobScoringTest {
     }
 
     @Test
+    void sponsorshipStatusConfirmedScoresHigherThanMentionedHigherThanUnknownHigherThanNotSupported() {
+        JobScoring.CandidateContext ctx = new JobScoring.CandidateContext(
+                java.util.List.of(), "Backend Engineer", java.util.List.of(), null, null);
+        Job confirmed = Job.builder().title("Backend Engineer").description("").sponsorshipStatus("CONFIRMED").build();
+        Job mentioned = Job.builder().title("Backend Engineer").description("").sponsorshipStatus("MENTIONED").build();
+        Job unknown = Job.builder().title("Backend Engineer").description("").sponsorshipStatus("UNKNOWN").build();
+        Job notSupported = Job.builder().title("Backend Engineer").description("").sponsorshipStatus("NOT_SUPPORTED").build();
+
+        CountryIntelligence intel = intel(75, 75, 75);
+        int confirmedScore = scoring.score(confirmed, null, ctx, JobScoring.PreferenceContext.empty(), intel).visaProbabilityScore();
+        int mentionedScore = scoring.score(mentioned, null, ctx, JobScoring.PreferenceContext.empty(), intel).visaProbabilityScore();
+        int unknownScore = scoring.score(unknown, null, ctx, JobScoring.PreferenceContext.empty(), intel).visaProbabilityScore();
+        int notSupportedScore = scoring.score(notSupported, null, ctx, JobScoring.PreferenceContext.empty(), intel).visaProbabilityScore();
+
+        assertThat(confirmedScore).isGreaterThan(mentionedScore);
+        assertThat(mentionedScore).isGreaterThan(unknownScore);
+        assertThat(unknownScore).isGreaterThan(notSupportedScore);
+    }
+
+    @Test
+    void sponsorshipStatusTakesPrecedenceOverTheLegacyBooleanWhenBothArePresent() {
+        JobScoring.CandidateContext ctx = new JobScoring.CandidateContext(
+                java.util.List.of(), "Backend Engineer", java.util.List.of(), null, null);
+        // Legacy boolean says TRUE (sponsored) but the richer signal says NOT_SUPPORTED — the
+        // richer signal must win, since it's the more specific, more recently computed evidence.
+        // NOT_SUPPORTED applies a stronger penalty (0.4x) than the legacy FALSE path (0.5x), so a
+        // score matching the NOT_SUPPORTED formula (rather than the legacy-FALSE formula) proves
+        // sponsorshipStatus, not sponsorshipAvailable, actually drove the result.
+        Job job = Job.builder().title("Backend Engineer").description("")
+                .sponsorshipAvailable(true).sponsorshipStatus("NOT_SUPPORTED").build();
+
+        int score = scoring.score(job, null, ctx, JobScoring.PreferenceContext.empty(), intel(75, 75, 75)).visaProbabilityScore();
+
+        assertThat(score).isEqualTo(Math.round(75 * 0.4f));
+    }
+
+    @Test
     void noCountryIntelFallsBackToNeutralDefaultsRatherThanThrowing() {
         JobScoring.CandidateContext ctx = new JobScoring.CandidateContext(
                 java.util.List.of(), "Backend Engineer", java.util.List.of(), null, null);

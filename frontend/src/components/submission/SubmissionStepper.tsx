@@ -1,6 +1,36 @@
-import { AlertTriangle, Check, Loader2, XCircle } from 'lucide-react';
+import { AlertTriangle, Check, Loader2, RefreshCw, Sparkles, XCircle } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import type { ApplicationSubmissionSession } from '@/types/workflow';
+
+const REBUILD_REASON_LABEL: Record<string, string> = {
+  REBUILT_EXPIRED: 'validation window expired',
+  REBUILT_RESUME_CHANGED: 'resume changed',
+  REBUILT_PACKAGE_CHANGED: 'application package changed',
+  REBUILT_CONTEXT_CHANGED: 'company/story context changed',
+};
+
+/**
+ * Eliminate Repeated Validation & Package Preparation — an honest one-line disclosure of what
+ * Step 6 (question/answer generation) actually did on this attempt. Never claims validation or
+ * package assembly were "reused" — those aren't tracked by this field; see
+ * ApplicationReuseResolver's javadoc for exactly what this codebase can and can't vouch for today.
+ */
+function ReuseNote({ session }: { session: ApplicationSubmissionSession }) {
+  const decision = session.answersReuseDecision;
+  if (!decision || decision === 'FULL_BUILD') return null;
+  if (decision === 'REUSED') {
+    return (
+      <p className="mt-2 flex items-center gap-1.5 text-[11px] text-success">
+        <RefreshCw className="h-3 w-3" /> Reused answers from a previous application to this job — no AI calls needed.
+      </p>
+    );
+  }
+  return (
+    <p className="mt-2 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+      <Sparkles className="h-3 w-3" /> Answers regenerated ({REBUILD_REASON_LABEL[decision] ?? decision.toLowerCase()}).
+    </p>
+  );
+}
 
 /**
  * Phase 7.16 — the 13 raw session states grouped into 6 readable phases, mirroring the visual
@@ -93,6 +123,7 @@ export function SubmissionStepper({ session }: { session: ApplicationSubmissionS
           );
         })}
       </div>
+      <ReuseNote session={session} />
     </div>
   );
 }

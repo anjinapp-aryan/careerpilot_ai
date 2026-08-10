@@ -43,9 +43,11 @@ class JobRecommendationServiceTest {
     private final UUID userId = UUID.randomUUID();
     private final UUID orgId = UUID.randomUUID();
 
+    private final RecommendationDiversifier diversifier = new RecommendationDiversifier(false);
+
     private JobRecommendationService service() {
         return new JobRecommendationService(runs, jobs, recommendations, matching, internationalRanking, scoring,
-                candidateProfiles, resumes, true, 70);
+                candidateProfiles, resumes, diversifier, true, 70, false);
     }
 
     @Test

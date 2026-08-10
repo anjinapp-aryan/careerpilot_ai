@@ -82,6 +82,15 @@ public class ApplicationSubmissionSession {
     @Column(name = "company_knowledge_id") private UUID companyKnowledgeId;
     @Column(name = "approval_queue_entry_id") private UUID approvalQueueEntryId;
     @Column(name = "application_execution_id") private UUID applicationExecutionId;
+    @Column(name = "star_story_id") private UUID starStoryId;
+
+    // ── Artifact reuse layer (see ai.careerpilot.submission.reuse) ──
+    /** Deterministic job identity, stable across title/salary/description edits — see JobFingerprint. */
+    @Column(name = "job_fingerprint") private String jobFingerprint;
+    /** {@code AnswerReuseDecision} name — REUSED or one of the REBUILT_* reasons. Null on rows predating this column. */
+    @Column(name = "answers_reuse_decision") private String answersReuseDecision;
+    /** Set only when answersReuseDecision == REUSED — the prior session the answers were copied from. */
+    @Column(name = "answers_reused_from_session_id") private UUID answersReusedFromSessionId;
 
     @Column(nullable = false) private String status;
     @Builder.Default

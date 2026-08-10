@@ -1,4 +1,4 @@
-import { Flame, Globe, Plane, Stamp, Star, MapPin, TrendingUp } from 'lucide-react';
+import { Clock, Flame, Globe, Plane, Stamp, Star, MapPin, TrendingUp } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/cn';
 import type { Job } from '@/types/workflow';
@@ -66,6 +66,52 @@ export function SeniorityBadge({ seniority }: { seniority?: string | null }) {
   return (
     <Badge tone="primary">
       <TrendingUp className="h-3 w-3" /> {seniority}
+    </Badge>
+  );
+}
+
+const SPONSORSHIP_LABEL: Record<string, string> = {
+  CONFIRMED: 'Sponsorship: Confirmed',
+  MENTIONED: 'Sponsorship: Mentioned',
+  UNKNOWN: 'Sponsorship: Unknown',
+  NOT_SUPPORTED: 'Sponsorship: Not supported',
+};
+const SPONSORSHIP_TONE: Record<string, 'success' | 'primary' | 'neutral' | 'danger'> = {
+  CONFIRMED: 'success',
+  MENTIONED: 'primary',
+  UNKNOWN: 'neutral',
+  NOT_SUPPORTED: 'danger',
+};
+
+/**
+ * Global Job Discovery Expansion — the 4-state sponsorship signal, distinct from the plain
+ * `sponsorshipAvailable` boolean's single "Visa Sponsorship" badge in {@link JobBadges} below.
+ * UNKNOWN renders as a neutral, honest "Sponsorship: Unknown" — never omitted and never implied
+ * to be a positive signal, so a candidate never mistakes silence for a guarantee.
+ */
+export function SponsorshipBadge({ status }: { status?: string | null }) {
+  if (!status || !SPONSORSHIP_LABEL[status]) return null;
+  return (
+    <Badge tone={SPONSORSHIP_TONE[status]}>
+      <Stamp className="h-3 w-3" /> {SPONSORSHIP_LABEL[status]}
+    </Badge>
+  );
+}
+
+const FRESHNESS_LABEL: Record<string, string> = {
+  VERY_FRESH: 'Very Fresh',
+  FRESH: 'Fresh',
+  RECENT: 'Recent',
+  AGING: 'Aging',
+  STALE: 'Stale',
+};
+
+/** Global Job Discovery Expansion — freshness band chip (computed from postedDate/createdAt). */
+export function FreshnessBadge({ freshness }: { freshness?: string | null }) {
+  if (!freshness || !FRESHNESS_LABEL[freshness]) return null;
+  return (
+    <Badge tone={freshness === 'VERY_FRESH' || freshness === 'FRESH' ? 'success' : 'neutral'}>
+      <Clock className="h-3 w-3" /> {FRESHNESS_LABEL[freshness]}
     </Badge>
   );
 }

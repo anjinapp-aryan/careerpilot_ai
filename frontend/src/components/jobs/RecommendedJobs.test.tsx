@@ -133,3 +133,20 @@ describe('RecommendedJobCard — match information', () => {
     expect(screen.getByText('Kubernetes')).toBeInTheDocument();
   });
 });
+
+describe('RecommendedJobCard — Global Job Discovery Expansion (sponsorship + freshness)', () => {
+  it('renders the sponsorship badge from job.sponsorshipStatus when present', () => {
+    renderCard(rec({ job: { ...rec().job, sponsorshipStatus: 'CONFIRMED' } }));
+    expect(screen.getByText(/sponsorship: confirmed/i)).toBeInTheDocument();
+  });
+
+  it('renders nothing sponsorship-related when sponsorshipStatus is absent (flag off)', () => {
+    renderCard(rec({ job: { ...rec().job, sponsorshipStatus: null } }));
+    expect(screen.queryByText(/sponsorship:/i)).not.toBeInTheDocument();
+  });
+
+  it('renders the freshness badge from rec.freshness when present', () => {
+    renderCard(rec({ freshness: 'VERY_FRESH' }));
+    expect(screen.getByText(/very fresh/i)).toBeInTheDocument();
+  });
+});

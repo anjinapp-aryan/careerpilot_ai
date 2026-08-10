@@ -22,6 +22,7 @@ import ai.careerpilot.story.recommender.StoryRecommendationEngine;
 import ai.careerpilot.submission.answer.AnswerGenerationService;
 import ai.careerpilot.submission.mapping.FieldMappingService;
 import ai.careerpilot.submission.question.QuestionDetectionService;
+import ai.careerpilot.submission.reuse.ApplicationReuseResolver;
 import ai.careerpilot.submission.validation.JobValidationService;
 import ai.careerpilot.workflow.tracking.ApplicationLifecycleService;
 import org.junit.jupiter.api.BeforeEach;
@@ -87,6 +88,7 @@ class SubmissionSessionReaperTest {
                 mock(ApplicationReviewPipeline.class), mock(CompanyKnowledgeService.class),
                 mock(StoryRecommendationEngine.class), mock(FieldMappingService.class),
                 mock(QuestionDetectionService.class), mock(AnswerGenerationService.class),
+                mock(ApplicationReuseResolver.class),
                 mock(ApplicationProviderRegistry.class), mock(SafetyEngine.class),
                 mock(ApprovalService.class), mock(ApplicationExecutionService.class),
                 mock(ApplicationLifecycleService.class), mock(ApplicationService.class),

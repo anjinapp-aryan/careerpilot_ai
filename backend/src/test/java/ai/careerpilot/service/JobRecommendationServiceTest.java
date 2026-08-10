@@ -102,4 +102,52 @@ class JobRecommendationServiceTest {
         assertThat(resp.profile().resumeScore()).isEqualTo(88);
         verify(candidateProfiles, never()).findByUserId(any());
     }
+
+    // ── atsPlatform — reuses the existing pure AtsPlatform.detect, never fabricated ──
+
+    @Test
+    void atsPlatformIsDetectedFromTheRealSourceUrlOnThePersistedPath() {
+        var run = mock(ai.careerpilot.domain.WorkflowRun.class);
+        when(run.getState()).thenReturn("{\"extracted_skills\":[],\"target_locations\":[]}");
+        when(runs.findTop20ByUserIdOrderByCreatedAtDesc(userId)).thenReturn(List.of(run));
+
+        UUID jobId = UUID.randomUUID();
+        ai.careerpilot.domain.Job job = ai.careerpilot.domain.Job.builder()
+                .id(jobId).title("Senior Backend Engineer").company("GitLab")
+                .description("desc")
+                .sourceUrl("https://job-boards.greenhouse.io/gitlab/jobs/123")
+                .build();
+        ai.careerpilot.domain.JobRecommendation rec = ai.careerpilot.domain.JobRecommendation.builder()
+                .id(UUID.randomUUID()).userId(userId).jobId(jobId).matchScore(90).build();
+        when(recommendations.findByUserIdOrderByMatchScoreDesc(userId)).thenReturn(List.of(rec));
+        when(jobs.findAllById(any())).thenReturn(List.of(job));
+
+        RecommendedJobsResponse resp = service().recommend(userId, orgId, 0, 10, "all");
+
+        assertThat(resp.jobs()).hasSize(1);
+        assertThat(resp.jobs().get(0).atsPlatform()).isEqualTo("GREENHOUSE");
+    }
+
+    @Test
+    void atsPlatformIsNullNeverAFabricatedGuessWhenTheHostIsUnrecognised() {
+        var run = mock(ai.careerpilot.domain.WorkflowRun.class);
+        when(run.getState()).thenReturn("{\"extracted_skills\":[],\"target_locations\":[]}");
+        when(runs.findTop20ByUserIdOrderByCreatedAtDesc(userId)).thenReturn(List.of(run));
+
+        UUID jobId = UUID.randomUUID();
+        ai.careerpilot.domain.Job job = ai.careerpilot.domain.Job.builder()
+                .id(jobId).title("Backend Engineer").company("Acme")
+                .description("desc")
+                .sourceUrl("https://careers.acme-corp-example.com/job/123")
+                .build();
+        ai.careerpilot.domain.JobRecommendation rec = ai.careerpilot.domain.JobRecommendation.builder()
+                .id(UUID.randomUUID()).userId(userId).jobId(jobId).matchScore(90).build();
+        when(recommendations.findByUserIdOrderByMatchScoreDesc(userId)).thenReturn(List.of(rec));
+        when(jobs.findAllById(any())).thenReturn(List.of(job));
+
+        RecommendedJobsResponse resp = service().recommend(userId, orgId, 0, 10, "all");
+
+        assertThat(resp.jobs()).hasSize(1);
+        assertThat(resp.jobs().get(0).atsPlatform()).isNull();
+    }
 }

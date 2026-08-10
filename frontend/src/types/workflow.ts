@@ -161,6 +161,9 @@ export interface RecommendedJob {
   priority?: 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW' | null;
   priorityScore?: number | null;
   mustApply?: boolean | null;
+  /** ATS platform detected from the job's real employer URL (GREENHOUSE/LEVER/etc.), or absent
+   *  when unrecognised — never a guess. Mirrors `AtsPlatform.detect(job.sourceUrl)`. */
+  atsPlatform?: string | null;
 }
 
 /** `GET /api/jobs/{id}/relevance` response (Phase 3B.1 explainability). Mirrors

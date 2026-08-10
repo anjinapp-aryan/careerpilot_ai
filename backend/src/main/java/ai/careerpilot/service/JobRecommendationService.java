@@ -8,6 +8,7 @@ import ai.careerpilot.domain.Job;
 import ai.careerpilot.domain.JobRecommendation;
 import ai.careerpilot.domain.Resume;
 import ai.careerpilot.domain.WorkflowRun;
+import ai.careerpilot.execution.browser.validation.AtsPlatform;
 import ai.careerpilot.jobdiscovery.JobMatchingService;
 import ai.careerpilot.jobdiscovery.JobScoring;
 import ai.careerpilot.jobdiscovery.JobScoring.ScoreBreakdown;
@@ -220,7 +221,7 @@ public class JobRecommendationService {
             out.add(new RecommendedJob(job, rec.getMatchScore(),
                     csv(rec.getMatchingSkills()), csv(rec.getMissingSkills()),
                     rec.getConfidenceLevel(), parseBreakdown(rec.getScoreBreakdown()), rec.getCategory(),
-                    rec.getPriority(), rec.getPriorityScore(), rec.getMustApply()));
+                    rec.getPriority(), rec.getPriorityScore(), rec.getMustApply(), atsPlatformOf(job)));
         }
         return out;
     }
@@ -259,6 +260,22 @@ public class JobRecommendationService {
         };
     }
 
+    /**
+     * The ATS platform behind this job's employer posting, reusing the existing pure {@code
+     * AtsPlatform.detect} host-match (already proven by the browser validation harness) rather than
+     * inventing a second detector. {@code sourceUrl} is preferred over {@code externalUrl} — same
+     * precedence {@code GuestApplyAutomationService#applyUrl} already uses — so this reports the
+     * platform the real "View Employer Job" link actually points at. Returns {@code null} (never
+     * "UNKNOWN" as a string) when unrecognised, so the frontend can omit the badge rather than
+     * display a claim this platform cannot back.
+     */
+    private static String atsPlatformOf(Job job) {
+        String url = job.getSourceUrl() != null && !job.getSourceUrl().isBlank()
+                ? job.getSourceUrl() : job.getExternalUrl();
+        AtsPlatform platform = AtsPlatform.detect(url);
+        return platform == AtsPlatform.UNKNOWN ? null : platform.name();
+    }
+
     private ScoreBreakdown parseBreakdown(String json) {
         if (json == null || json.isBlank()) return null;
         try {
@@ -275,7 +292,8 @@ public class JobRecommendationService {
         return pool.stream()
                 .map(job -> {
                     JobScoring.ScoreResult r = scoring.score(job, skills, targetRole, targetLocations);
-                    return new RecommendedJob(job, r.matchScore(), r.matchedSkills(), r.missingSkills());
+                    return new RecommendedJob(job, r.matchScore(), r.matchedSkills(), r.missingSkills(),
+                            null, null, null, null, null, null, atsPlatformOf(job));
                 })
                 .filter(rj -> matchesFilter(rj.job(), rj.matchScore(), filter))
                 .sorted(Comparator.comparingInt(RecommendedJob::matchScore).reversed())

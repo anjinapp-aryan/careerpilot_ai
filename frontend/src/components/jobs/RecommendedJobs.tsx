@@ -7,6 +7,8 @@ import {
   Briefcase,
   Building2,
   CheckCircle2,
+  ExternalLink,
+  FileCheck,
   HelpCircle,
   Send,
   Sparkles,
@@ -22,6 +24,7 @@ import { EmptyState } from '@/components/ui/empty-state';
 import { cn } from '@/lib/cn';
 import { ExplainDialog } from '@/components/jobs/ExplainDialog';
 import { RelevanceDrawer } from '@/components/jobs/RelevanceDrawer';
+import { PrepareApplicationDrawer } from '@/components/jobs/PrepareApplicationDrawer';
 import { JobBadges } from '@/components/jobs/JobBadges';
 import { trackJobEvent } from '@/lib/jobTelemetry';
 import type { RecommendedFilter, RecommendedJob, RecommendedJobsResponse, ScoreBreakdown } from '@/types/workflow';
@@ -70,6 +73,7 @@ export function RecommendedJobs({ onApply, onSave, busy }: RecommendedJobsProps)
     country?: string | null;
   } | null>(null);
   const [relevanceJob, setRelevanceJob] = useState<RecommendedJob | null>(null);
+  const [prepareJob, setPrepareJob] = useState<RecommendedJob | null>(null);
 
   const { data, isLoading, fetchNextPage, hasNextPage, isFetchingNextPage } =
     useInfiniteQuery<RecommendedJobsResponse>({
@@ -105,6 +109,13 @@ export function RecommendedJobs({ onApply, onSave, busy }: RecommendedJobsProps)
   const openRelevance = (rec: RecommendedJob) => {
     trackJobEvent('why_seeing', { jobId: rec.job.id });
     setRelevanceJob(rec);
+  };
+  // Prepare Application is a read-only preview — it never calls onApply itself. It exists
+  // alongside Apply, not upstream of it: opening the drawer never starts the existing
+  // application-execution pipeline, and closing it never triggers anything either.
+  const openPrepare = (rec: RecommendedJob) => {
+    trackJobEvent('prepare_application_started', { jobId: rec.job.id });
+    setPrepareJob(rec);
   };
 
   if (isLoading) {
@@ -217,6 +228,7 @@ export function RecommendedJobs({ onApply, onSave, busy }: RecommendedJobsProps)
               onSave={handleSave}
               onExplain={() => openExplain(rec)}
               onRelevance={() => openRelevance(rec)}
+              onPrepare={() => openPrepare(rec)}
               busy={busy}
             />
           ))}
@@ -244,17 +256,26 @@ export function RecommendedJobs({ onApply, onSave, busy }: RecommendedJobsProps)
         rec={relevanceJob}
         onClose={() => setRelevanceJob(null)}
       />
+      <PrepareApplicationDrawer
+        rec={prepareJob}
+        onClose={() => setPrepareJob(null)}
+        onApply={(jobId) => {
+          setPrepareJob(null);
+          handleApply(jobId);
+        }}
+      />
     </div>
   );
 }
 
-function RecommendedJobCard({
+export function RecommendedJobCard({
   rec,
   index,
   onApply,
   onSave,
   onExplain,
   onRelevance,
+  onPrepare,
   busy,
 }: {
   rec: RecommendedJob;
@@ -263,6 +284,9 @@ function RecommendedJobCard({
   onSave: (jobId: string) => void;
   onExplain: () => void;
   onRelevance: () => void;
+  /** Opens the read-only Prepare Application preview. Optional so existing callers/tests that
+   *  don't need it keep compiling unchanged. */
+  onPrepare?: () => void;
   busy: boolean;
 }) {
   const { job, matchScore, matchedSkills, missingSkills, confidenceLevel } = rec;
@@ -273,8 +297,17 @@ function RecommendedJobCard({
   if (job.requiredExperience != null) meta.push(`${job.requiredExperience}+ yrs exp`);
   if (job.salaryRange) meta.push(job.salaryRange);
   const discoveryDate = job.postedDate ?? job.createdAt;
-  if (job.source) meta.push(job.source);
   if (discoveryDate) meta.push(`Discovered ${new Date(discoveryDate).toLocaleDateString()}`);
+
+  // The real employer/source URL, exactly as captured during discovery — never constructed or
+  // guessed from the company name. sourceUrl takes precedence over externalUrl, the same
+  // precedence GuestApplyAutomationService#applyUrl uses, so this is provably the same URL any
+  // later Guided Apply run would actually navigate to.
+  const employerUrl = job.sourceUrl || job.externalUrl || null;
+  const atsLabel = rec.atsPlatform
+    ? rec.atsPlatform.charAt(0) + rec.atsPlatform.slice(1).toLowerCase()
+    : null;
+
   return (
     <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: index * 0.04 }}>
       <Card className="p-5">
@@ -311,8 +344,16 @@ function RecommendedJobCard({
 
         <JobBadges job={job} className="mt-3" priority={rec.priority} mustApply={rec.mustApply} />
 
+        {/* Employer identity — the trust anchor for this card. Company name is always real (it's
+            the same field shown in the header); "Careers" is a display label, not a claim about a
+            distinct source system. ATS is shown only when genuinely detected from the real URL —
+            never guessed — so a company with an unrecognised careers portal simply omits it. */}
+        <p className="mt-2 text-xs text-muted-foreground">
+          Source: {job.company} Careers{atsLabel && <> · ATS: {atsLabel}</>}
+        </p>
+
         {meta.length > 0 && (
-          <p className="mt-2 text-xs text-muted-foreground">{meta.join('  •  ')}</p>
+          <p className="mt-1 text-xs text-muted-foreground">{meta.join('  •  ')}</p>
         )}
 
         {(matchedSkills.length > 0 || missingSkills.length > 0) && (
@@ -338,13 +379,50 @@ function RecommendedJobCard({
           </div>
         )}
 
+        {/* Action hierarchy (section 3): Apply is primary — it is the existing, unmodified
+            application-execution entry point and must look like the main action. Prepare
+            Application is secondary (outline) — it only opens a read-only preview, never
+            executes anything. Save is a lighter supporting action. View Employer Job is kept
+            visually distinct on its own line, as external verification rather than a competing
+            in-app action. */}
         <div className="mt-4 flex flex-wrap items-center gap-2">
-          <Button size="sm" onClick={() => onApply(job.id)} disabled={busy}>
+          <Button size="sm" onClick={() => onApply(job.id)} disabled={busy} title="Starts the existing application process">
             <Send className="h-3.5 w-3.5" /> Apply
           </Button>
+          {onPrepare && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={onPrepare}
+              title="Preview match details, skill gaps and the employer posting — does not submit anything"
+            >
+              <FileCheck className="h-3.5 w-3.5" /> Prepare Application
+            </Button>
+          )}
           <Button size="sm" variant="outline" onClick={() => onSave(job.id)} disabled={busy}>
             <Bookmark className="h-3.5 w-3.5" /> Save
           </Button>
+        </div>
+
+        <div className="mt-2">
+          {employerUrl ? (
+            <a
+              href={employerUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label={`View Employer Job — opens ${job.company}'s real posting in a new tab`}
+              className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
+            >
+              View Employer Job <ExternalLink className="h-3 w-3" />
+            </a>
+          ) : (
+            <span className="text-xs text-muted-foreground" title="This job has no captured employer URL">
+              Employer posting unavailable
+            </span>
+          )}
+        </div>
+
+        <div className="mt-2 flex flex-wrap items-center gap-2">
           <Button size="sm" variant="ghost" onClick={onExplain}>
             <HelpCircle className="h-3.5 w-3.5" /> Why am I a match?
           </Button>

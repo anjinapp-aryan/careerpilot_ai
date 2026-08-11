@@ -3,22 +3,22 @@ import { motion } from 'framer-motion';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Activity,
+  AlertTriangle,
   BarChart3,
   Brain,
   Check,
   ChevronDown,
+  ChevronRight,
   ChevronUp,
   Clock,
+  Compass,
   Download,
-  Globe2,
   Mic,
   Pencil,
   RefreshCw,
   Search,
   ShieldCheck,
-  Sparkles,
   ThumbsDown,
-  Wrench,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { PageHeader } from '@/components/common/PageHeader';
@@ -28,9 +28,9 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
 import { EmptyState } from '@/components/ui/empty-state';
-import { KpiCard } from '@/components/dashboard/KpiCard';
 import { Dialog, DialogBody, DialogFooter, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { useToast } from '@/components/ui/toast';
+import { LearnedPatterns } from '@/components/aimemory/LearnedPatterns';
 import type {
   CandidateProfileDto,
   CareerDecisionMemory,
@@ -38,6 +38,7 @@ import type {
   CareerMemorySummary,
   EditMemoryRequest,
   InterviewDto,
+  OptimizationResponse,
 } from '@/types/workflow';
 
 function pct(v?: number | null): string {
@@ -118,7 +119,7 @@ function recommendationImpact(m: CareerDecisionMemory): { real: boolean; lines: 
   };
 }
 
-/** Category-scoped fields the "Edit Memory" dialog offers — kept in sync with EDITABLE_CATEGORIES. */
+/** Category-scoped fields the "Teach CareerPilot" dialog offers — kept in sync with EDITABLE_CATEGORIES. */
 function EditMemoryDialog({
   open,
   onOpenChange,
@@ -137,7 +138,7 @@ function EditMemoryDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogHeader onClose={() => onOpenChange(false)}>
-        <DialogTitle>Tell the AI something</DialogTitle>
+        <DialogTitle>Teach CareerPilot</DialogTitle>
         <DialogDescription>
           This writes a new, fully-verified memory — it never erases what the AI knew before, but this
           takes priority going forward.
@@ -184,27 +185,58 @@ function EditMemoryDialog({
   );
 }
 
+/** A labelled row inside the Career Identity panel — renders nothing when there's genuinely no data (never a fabricated placeholder). */
+function IdentityField({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{label}</p>
+      <div className="mt-1">{children}</div>
+    </div>
+  );
+}
+
+function BadgeRow({ items, tone = 'neutral' }: { items: string[]; tone?: BadgeTone }) {
+  if (items.length === 0) return <p className="text-sm text-muted-foreground">Not captured yet</p>;
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {items.map((v) => (
+        <Badge key={v} tone={tone}>
+          {v}
+        </Badge>
+      ))}
+    </div>
+  );
+}
+
 /**
- * Phase 7.15.1-7.15.3A — the trust interface between the user and every AI Memory subsystem in
- * this codebase. Every data source is reused, none duplicated:
+ * Phase 7.15.1-7.15.3A + Career Intelligence UX Transformation — the trust interface between the
+ * user and every AI Memory subsystem in this codebase. Every data source is reused, none
+ * duplicated:
  *
  * - `GET /api/career-memory/summary` — header stats (7.15.3)
  * - `GET /api/career-memory?category=` / `POST /api/career-memory` (edit) / `/{id}/confirm` /
  *   `/{id}/forget` — all on the one existing `CareerMemoryController` (7.15.1/7.15.3/7.15.3A)
  * - `GET /api/career-memory/timeline` — Career Timeline (7.15.1)
- * - `GET /api/candidate-profile`, `POST /api/candidate-profile/rebuild` — existing Phase 1 API
- * - `GET /api/interviews` — Interview Intelligence's FIRST REST exposure (service existed, no
- *   controller did — added this phase, no new analysis logic)
+ * - `GET /api/candidate-profile`, `POST /api/candidate-profile/rebuild` — existing Phase 1 API,
+ *   now surfaced far more completely (Career Identity & Job Search DNA below uses nearly every
+ *   field on the DTO, not just 4 of them)
+ * - `GET /api/interviews` — Interview Intelligence's REST exposure
  * - `GET /api/diagnostics/career-memory` — existing, aggregate-only, public diagnostics endpoint
+ * - `GET /api/intelligence/optimization` (Phase 13B/13C) — evidence-backed per-country/company/
+ *   skill success rates from this user's own outcome history. Built long before this page, never
+ *   wired to any UI until now — see `components/aimemory/LearnedPatterns.tsx`. This is what makes
+ *   "what CareerPilot learned from your behavior" a real, evidence-backed section instead of a
+ *   fabricated one — confidence is always a sample-size band (INSUFFICIENT/LOW/MEDIUM/HIGH),
+ *   never a fake percentage.
  *
  * Recommendation Impact text is generated from what `CareerMemoryBooster` ACTUALLY does (read
  * from its source, not assumed) — see `recommendationImpact()` above for the honesty rationale.
  *
  * Scope NOT built this pass, stated plainly: PDF export (no PDF library in this project — JSON
- * export only), "Recommendation Evolution over time" (no historical recommendation-snapshot
- * infrastructure exists anywhere in this codebase to build it from), and a fabricated
- * skill-by-skill Interview Strengths/Weaknesses matrix (no structured data backs that — the
- * Interview Insights section below shows real interview rounds and real feedback text instead).
+ * export only), a fabricated "behavioral pattern" system distinct from the real Phase 13B
+ * evidence above (there is no second, unrelated pattern-detection API to build one from), and a
+ * fabricated skill-by-skill Interview Strengths/Weaknesses matrix (no structured data backs that
+ * — the Interview Insights section shows real interview rounds and real feedback text instead).
  */
 export default function AiMemory() {
   const qc = useQueryClient();
@@ -214,6 +246,8 @@ export default function AiMemory() {
   const [sort, setSort] = useState<'newest' | 'oldest' | 'confidence'>('newest');
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [editOpen, setEditOpen] = useState(false);
+  const [unconfirmedOnly, setUnconfirmedOnly] = useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
 
   const summaryQuery = useQuery<CareerMemorySummary>({
     queryKey: ['career-memory', 'summary'],
@@ -261,6 +295,18 @@ export default function AiMemory() {
   const diagnosticsQuery = useQuery<CareerMemoryDiagnostics>({
     queryKey: ['diagnostics', 'career-memory'],
     queryFn: async () => (await api.get('/api/diagnostics/career-memory')).data,
+    retry: false,
+  });
+
+  const optimizationQuery = useQuery<OptimizationResponse | null>({
+    queryKey: ['intelligence', 'optimization'],
+    queryFn: async () => {
+      try {
+        return (await api.get('/api/intelligence/optimization')).data;
+      } catch {
+        return null; // feature dark or unreachable — section simply omits itself
+      }
+    },
     retry: false,
   });
 
@@ -316,6 +362,7 @@ export default function AiMemory() {
 
   const visibleMemories = useMemo(() => {
     let list = memories;
+    if (unconfirmedOnly) list = list.filter((m) => !m.userConfirmed);
     if (search.trim()) {
       const q = search.trim().toLowerCase();
       list = list.filter(
@@ -327,7 +374,19 @@ export default function AiMemory() {
     else if (sort === 'oldest') sorted.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
     else sorted.sort((a, b) => (b.confidence ?? 0) - (a.confidence ?? 0));
     return sorted;
-  }, [memories, search, sort]);
+  }, [memories, search, sort, unconfirmedOnly]);
+
+  /** Groups the currently visible memories by category, in the order categories were first seen, only when no single category is already selected (grouping a single-category list would just be one group). */
+  const groupedMemories = useMemo(() => {
+    if (categoryFilter) return null;
+    const groups = new Map<string, CareerDecisionMemory[]>();
+    for (const m of visibleMemories) {
+      const list = groups.get(m.category) ?? [];
+      list.push(m);
+      groups.set(m.category, list);
+    }
+    return Array.from(groups.entries());
+  }, [visibleMemories, categoryFilter]);
 
   /** Point-in-time analytics computed from already-fetched data — no new backend calls, no fabricated trend-over-time (no historical snapshots exist to chart). */
   const analytics = useMemo(() => {
@@ -381,16 +440,52 @@ export default function AiMemory() {
   const nothingLearnedYet =
     !summaryQuery.isLoading && !profileQuery.isLoading && (summary?.totalMemories ?? 0) === 0 && !profile;
 
+  // Needs Your Attention — every line here is a direct read of a number the page already fetched,
+  // never a computed/guessed severity. A profile field older than 45 days is the one client-side
+  // staleness check this page can honestly make (no server-side "stale" flag exists yet).
+  const staleProfile = profile?.updatedAt
+    ? (Date.now() - new Date(profile.updatedAt).getTime()) / 86_400_000 > 45
+    : false;
+  const attentionItems: { icon: typeof AlertTriangle; text: string; action?: () => void; actionLabel?: string }[] = [];
+  if (summary && summary.needsReviewCount > 0) {
+    attentionItems.push({
+      icon: AlertTriangle,
+      text: `${summary.needsReviewCount} ${summary.needsReviewCount === 1 ? 'memory needs' : 'memories need'} confirmation.`,
+      action: () => setUnconfirmedOnly(true),
+      actionLabel: 'Review',
+    });
+  }
+  if (summary && summary.conflictingCount > 0) {
+    attentionItems.push({
+      icon: AlertTriangle,
+      text: `${summary.conflictingCount} conflicting ${summary.conflictingCount === 1 ? 'memory' : 'memories'} detected.`,
+    });
+  }
+  if (summary && summary.lowConfidenceCount > 0) {
+    attentionItems.push({
+      icon: AlertTriangle,
+      text: `${summary.lowConfidenceCount} low-confidence ${summary.lowConfidenceCount === 1 ? 'memory' : 'memories'} — worth confirming or correcting.`,
+    });
+  }
+  if (staleProfile) {
+    attentionItems.push({
+      icon: Clock,
+      text: `Your profile hasn't refreshed in over 45 days (last updated ${relativeTime(profile?.updatedAt)}).`,
+      action: () => rebuild.mutate(),
+      actionLabel: 'Refresh now',
+    });
+  }
+
   return (
     <div className="space-y-6">
       <PageHeader
-        title="AI Learned About You"
-        description="My understanding improves every time we interact. Everything below is grounded in your actual resume, conversations, and application activity — nothing here is guessed without evidence."
+        title="Career Intelligence"
+        description="The evolving profile CareerPilot uses to personalize your jobs, applications and career strategy — grounded in your actual resume, conversations, and application activity."
         actions={
           <>
             <Button size="sm" variant="outline" onClick={() => setEditOpen(true)}>
               <Pencil className="h-4 w-4" />
-              Tell the AI something
+              Teach CareerPilot
             </Button>
             <Button size="sm" variant="outline" onClick={exportProfile}>
               <Download className="h-4 w-4" />
@@ -410,167 +505,190 @@ export default function AiMemory() {
         <EmptyState
           icon={Brain}
           title="Nothing learned yet"
-          description="Upload a resume and start using the Copilot / job recommendations — the AI Memory Dashboard fills in automatically as you interact with CareerPilot. This feature may also be disabled for your account."
+          description="Upload a resume and start using the Copilot / job recommendations — Career Intelligence fills in automatically as you interact with CareerPilot. This feature may also be disabled for your account."
         />
       ) : (
         <>
-          {/* Header stats */}
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            {summaryQuery.isLoading ? (
-              Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-32 w-full" />)
-            ) : (
-              <>
-                <KpiCard label="AI confidence" value={pct(summary?.averageConfidence)} icon={Sparkles} tone="primary" />
-                <KpiCard
-                  label="Memory entries"
-                  value={summary?.totalMemories ?? 0}
-                  icon={Brain}
-                  tone="info"
-                  hint={`${summary?.verifiedCount ?? 0} verified`}
-                />
-                <KpiCard
-                  label="Verified memories"
-                  value={summary && summary.totalMemories > 0 ? pct(summary.verifiedCount / summary.totalMemories) : '—'}
-                  icon={ShieldCheck}
-                  tone="success"
-                />
-                <KpiCard label="Last updated" value={relativeTime(summary?.lastUpdated)} icon={Clock} tone="warning" />
-              </>
-            )}
-          </div>
+          {/* ── AI Career Profile Hero — the single most important thing on this page ── */}
+          <Card className="border-primary/20 bg-gradient-to-br from-primary/[0.04] to-transparent">
+            <CardContent className="flex flex-col gap-4 p-6 sm:flex-row sm:items-center sm:justify-between">
+              <div className="min-w-0">
+                <p className="text-xs font-semibold uppercase tracking-wide text-primary">AI career profile</p>
+                {summaryQuery.isLoading || profileQuery.isLoading ? (
+                  <Skeleton className="mt-2 h-8 w-64" />
+                ) : (
+                  <h2 className="mt-1 text-2xl font-bold text-foreground">
+                    {profile?.currentRole || profile?.careerGoals[0] || 'Building your profile'}
+                  </h2>
+                )}
+                <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">
+                  {profile?.yearsExperience != null && <span>{profile.yearsExperience} years experience</span>}
+                  {profile && profile.yearsExperience != null && profile.technologies.length > 0 && <span>•</span>}
+                  {profile && profile.technologies.length > 0 && <span>{profile.technologies.slice(0, 5).join(' • ')}</span>}
+                </p>
+              </div>
+              <div className="flex shrink-0 items-center gap-6">
+                <div className="text-center">
+                  <p className="text-2xl font-bold tabular-nums text-foreground">{pct(summary?.averageConfidence)}</p>
+                  <p className="text-xs text-muted-foreground">Profile confidence</p>
+                </div>
+                <div className="text-center">
+                  <p className="text-2xl font-bold tabular-nums text-foreground">{relativeTime(summary?.lastUpdated)}</p>
+                  <p className="text-xs text-muted-foreground">Last updated</p>
+                </div>
+                <div className="text-center">
+                  <p className="text-2xl font-bold tabular-nums text-foreground">{summary?.totalMemories ?? 0}</p>
+                  <p className="text-xs text-muted-foreground">Memories held</p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
 
-          {/* Profile-derived preference cards — reuses GET /api/candidate-profile wholesale */}
-          {profile && (
-            <div className="grid gap-4 lg:grid-cols-2">
-              <Card>
-                <CardHeader className="flex-row items-center gap-2">
-                  <Sparkles className="h-4 w-4 text-primary" />
-                  <CardTitle className="text-base">Career goal</CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-2">
-                  <p className="text-lg font-semibold text-foreground">
-                    {profile.currentRole || profile.careerGoals[0] || 'Not yet determined'}
-                  </p>
-                  <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                    {profile.seniority && <Badge tone="neutral">{profile.seniority}</Badge>}
-                    {profile.confidenceScore != null && (
-                      <Badge tone={confidenceTone(profile.confidenceScore)}>{pct(profile.confidenceScore)} confidence</Badge>
+          {/* ── Needs Your Attention — only rendered when there's genuinely something to act on ── */}
+          {attentionItems.length > 0 && (
+            <Card className="border-warning/30 bg-warning/[0.04]">
+              <CardHeader className="flex-row items-center gap-2">
+                <AlertTriangle className="h-4 w-4 text-warning" />
+                <CardTitle className="text-base">Needs your attention</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-2">
+                {attentionItems.map((item, i) => (
+                  <div key={i} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-warning/20 bg-card p-2.5">
+                    <span className="flex items-center gap-2 text-sm text-foreground">
+                      <item.icon className="h-3.5 w-3.5 shrink-0 text-warning" /> {item.text}
+                    </span>
+                    {item.action && (
+                      <Button size="sm" variant="outline" onClick={item.action}>
+                        {item.actionLabel}
+                      </Button>
                     )}
-                    <span>Source: Resume analysis</span>
                   </div>
-                </CardContent>
-              </Card>
-
-              <Card>
-                <CardHeader className="flex-row items-center gap-2">
-                  <Globe2 className="h-4 w-4 text-primary" />
-                  <CardTitle className="text-base">Preferred countries</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  {profile.preferredCountries.length === 0 ? (
-                    <p className="text-sm text-muted-foreground">No preference captured yet.</p>
-                  ) : (
-                    <div className="flex flex-wrap gap-2">
-                      {profile.preferredCountries.map((c) => (
-                        <Badge key={c} tone="primary">
-                          {c}
-                        </Badge>
-                      ))}
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
-
-              <Card>
-                <CardHeader>
-                  <CardTitle className="text-base">Preferred technologies</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  {profile.technologies.length === 0 ? (
-                    <p className="text-sm text-muted-foreground">No technologies captured yet.</p>
-                  ) : (
-                    <div className="flex flex-wrap gap-2">
-                      {profile.technologies.map((t) => (
-                        <Badge key={t} tone="info">
-                          {t}
-                        </Badge>
-                      ))}
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
-
-              <Card>
-                <CardHeader>
-                  <CardTitle className="text-base">Expected salary</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  {profile.salaryTarget != null ? (
-                    <>
-                      <p className="text-lg font-semibold text-foreground">
-                        {profile.salaryTarget.toLocaleString()} {profile.salaryCurrency || ''}
-                      </p>
-                      <p className="mt-1 text-xs text-muted-foreground">Based on: resume, offer analysis, and preferences you've set</p>
-                    </>
-                  ) : (
-                    <p className="text-sm text-muted-foreground">No salary expectation captured yet.</p>
-                  )}
-                </CardContent>
-              </Card>
-
-              {profile.excludedRoles.length > 0 && (
-                <Card className="lg:col-span-2">
-                  <CardHeader className="flex-row items-center gap-2">
-                    <ThumbsDown className="h-4 w-4 text-danger" />
-                    <CardTitle className="text-base">The AI knows you want to avoid</CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="flex flex-wrap gap-2">
-                      {profile.excludedRoles.map((r) => (
-                        <Badge key={r} tone="danger">
-                          {r}
-                        </Badge>
-                      ))}
-                    </div>
-                  </CardContent>
-                </Card>
-              )}
-            </div>
+                ))}
+              </CardContent>
+            </Card>
           )}
 
-          {/* Memory Health */}
-          {summary && summary.totalMemories > 0 && (
+          {/* ── Career Identity & Job Search DNA — one consolidated panel, not four tiny cards ── */}
+          {profile && (
             <Card>
               <CardHeader className="flex-row items-center gap-2">
-                <Wrench className="h-4 w-4 text-muted-foreground" />
-                <CardTitle className="text-base">Memory health</CardTitle>
+                <Compass className="h-4 w-4 text-primary" />
+                <CardTitle className="text-base">Career identity & job search DNA</CardTitle>
               </CardHeader>
-              <CardContent className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-                <div>
-                  <p className="text-2xl font-semibold tabular-nums text-foreground">{pct(summary.averageConfidence)}</p>
-                  <p className="text-xs text-muted-foreground">Overall confidence</p>
+              <CardContent className="space-y-6">
+                <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
+                  <IdentityField label="Target role">
+                    <p className="text-sm font-semibold text-foreground">
+                      {profile.currentRole || profile.targetRoles[0] || 'Not yet determined'}
+                    </p>
+                    {profile.seniority && <p className="text-xs text-muted-foreground">{profile.seniority}</p>}
+                  </IdentityField>
+                  <IdentityField label="Experience">
+                    <p className="text-sm font-semibold text-foreground">
+                      {profile.yearsExperience != null ? `${profile.yearsExperience} years` : 'Not captured'}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      {[profile.leadershipExperience && 'Leadership', profile.cloudExpertise && 'Cloud'].filter(Boolean).join(' • ') || '—'}
+                    </p>
+                  </IdentityField>
+                  <IdentityField label="Salary target">
+                    <p className="text-sm font-semibold text-foreground">
+                      {profile.salaryTarget != null
+                        ? `${profile.salaryTarget.toLocaleString()} ${profile.salaryCurrency || ''}`
+                        : 'Not captured'}
+                    </p>
+                  </IdentityField>
+                  <IdentityField label="Visa / sponsorship">
+                    <p className="text-sm font-semibold text-foreground">
+                      {profile.visaRequired == null ? 'Not captured' : profile.visaRequired ? 'Required' : 'Not required'}
+                    </p>
+                  </IdentityField>
                 </div>
-                <div>
-                  <p className="text-2xl font-semibold tabular-nums text-success">{summary.verifiedCount}</p>
-                  <p className="text-xs text-muted-foreground">Verified</p>
+
+                <div className="grid gap-5 sm:grid-cols-2">
+                  <IdentityField label="Target roles">
+                    <BadgeRow items={profile.targetRoles} tone="primary" />
+                  </IdentityField>
+                  <IdentityField label="Primary expertise">
+                    <BadgeRow items={profile.technologies.length > 0 ? profile.technologies : profile.skills} tone="info" />
+                  </IdentityField>
+                  <IdentityField label="Target locations">
+                    <BadgeRow items={[...(profile.homeCountry ? [profile.homeCountry] : []), ...profile.preferredCountries]} tone="primary" />
+                  </IdentityField>
+                  <IdentityField label="Work mode">
+                    <BadgeRow items={profile.workModes} />
+                  </IdentityField>
+                  <IdentityField label="Industries">
+                    <BadgeRow items={profile.industries} />
+                  </IdentityField>
+                  <IdentityField label="Certifications">
+                    <BadgeRow items={profile.certifications} />
+                  </IdentityField>
                 </div>
-                <div>
-                  <p className="text-2xl font-semibold tabular-nums text-warning">{summary.needsReviewCount}</p>
-                  <p className="text-xs text-muted-foreground">Needs review</p>
-                </div>
-                <div>
-                  <p className="text-2xl font-semibold tabular-nums text-danger">{summary.conflictingCount}</p>
-                  <p className="text-xs text-muted-foreground">Conflicting</p>
+
+                {profile.excludedRoles.length > 0 && (
+                  <div className="rounded-lg border border-danger/20 bg-danger/[0.03] p-3">
+                    <p className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold text-danger">
+                      <ThumbsDown className="h-3.5 w-3.5" /> The AI knows you want to avoid
+                    </p>
+                    <BadgeRow items={profile.excludedRoles} tone="danger" />
+                  </div>
+                )}
+
+                <div className="flex items-center justify-between border-t border-border pt-3 text-xs text-muted-foreground">
+                  <span>Source: resume analysis, conversations, application behavior.</span>
+                  {profile.confidenceScore != null && (
+                    <Badge tone={confidenceTone(profile.confidenceScore)}>{pct(profile.confidenceScore)} confidence</Badge>
+                  )}
                 </div>
               </CardContent>
             </Card>
           )}
 
-          {/* Memory cards — search, filter, sort, expandable explainability + recommendation impact */}
+          {/* ── What CareerPilot learned from your behavior — real evidence, real confidence bands ── */}
+          <LearnedPatterns data={optimizationQuery.data ?? undefined} />
+
+          {/* Memory Health */}
+          {summary && summary.totalMemories > 0 && (
+            <Card>
+              <CardHeader className="flex-row items-center gap-2">
+                <ShieldCheck className="h-4 w-4 text-muted-foreground" />
+                <CardTitle className="text-base">Memory health</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="mb-3 h-2 w-full overflow-hidden rounded-full bg-muted">
+                  <div
+                    className="h-full rounded-full bg-success transition-all"
+                    style={{ width: `${Math.round((summary.averageConfidence ?? 0) * 100)}%` }}
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+                  <div>
+                    <p className="text-2xl font-semibold tabular-nums text-foreground">{pct(summary.averageConfidence)}</p>
+                    <p className="text-xs text-muted-foreground">Overall confidence</p>
+                  </div>
+                  <div>
+                    <p className="text-2xl font-semibold tabular-nums text-success">{summary.verifiedCount}</p>
+                    <p className="text-xs text-muted-foreground">Verified</p>
+                  </div>
+                  <div>
+                    <p className="text-2xl font-semibold tabular-nums text-warning">{summary.needsReviewCount}</p>
+                    <p className="text-xs text-muted-foreground">Needs review</p>
+                  </div>
+                  <div>
+                    <p className="text-2xl font-semibold tabular-nums text-danger">{summary.conflictingCount}</p>
+                    <p className="text-xs text-muted-foreground">Conflicting</p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* ── What CareerPilot knows — grouped by category, not one flat grid ── */}
           <Card>
             <CardHeader className="flex-col items-stretch gap-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <CardTitle className="text-base">Remembered decisions</CardTitle>
+                <CardTitle className="text-base">What CareerPilot knows</CardTitle>
                 <div className="flex items-center gap-2">
                   <div className="relative">
                     <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
@@ -592,7 +710,7 @@ export default function AiMemory() {
                   </select>
                 </div>
               </div>
-              <div className="flex flex-wrap gap-1.5">
+              <div className="flex flex-wrap items-center gap-1.5">
                 <Button size="sm" variant={categoryFilter === null ? 'secondary' : 'ghost'} onClick={() => setCategoryFilter(null)}>
                   All
                 </Button>
@@ -601,6 +719,10 @@ export default function AiMemory() {
                     {categoryLabel(c)}
                   </Button>
                 ))}
+                <label className="ml-auto flex items-center gap-1.5 text-xs text-muted-foreground">
+                  <input type="checkbox" checked={unconfirmedOnly} onChange={(e) => setUnconfirmedOnly(e.target.checked)} />
+                  Unconfirmed only
+                </label>
               </div>
             </CardHeader>
             <CardContent>
@@ -612,6 +734,30 @@ export default function AiMemory() {
                 </div>
               ) : visibleMemories.length === 0 ? (
                 <EmptyState compact icon={Brain} title="No memories match" />
+              ) : groupedMemories ? (
+                <div className="space-y-6">
+                  {groupedMemories.map(([cat, items]) => (
+                    <div key={cat}>
+                      <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                        {categoryLabel(cat)} <span className="tabular-nums">({items.length})</span>
+                      </p>
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        {items.map((m) => (
+                          <MemoryCard
+                            key={m.id}
+                            m={m}
+                            isOpen={expanded.has(m.id)}
+                            onToggle={() => toggleExpanded(m.id)}
+                            onConfirm={() => confirm.mutate(m.id)}
+                            onForget={() => forget.mutate(m.id)}
+                            confirmPending={confirm.isPending}
+                            forgetPending={forget.isPending}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
               ) : (
                 <motion.div
                   key={categoryFilter ?? 'all'}
@@ -620,98 +766,18 @@ export default function AiMemory() {
                   transition={{ duration: 0.25, ease: 'easeOut' }}
                   className="grid gap-3 sm:grid-cols-2"
                 >
-                  {visibleMemories.map((m) => {
-                    const isOpen = expanded.has(m.id);
-                    const impact = recommendationImpact(m);
-                    return (
-                      <div key={m.id} className="rounded-xl border border-border bg-card p-4">
-                        <div className="flex items-start justify-between gap-2">
-                          <div>
-                            <p className="text-sm font-semibold text-foreground">{m.value || m.decisionType}</p>
-                            <p className="text-xs text-muted-foreground">{categoryLabel(m.category)}</p>
-                          </div>
-                          <Badge tone={confidenceTone(m.confidence)}>{pct(m.confidence)}</Badge>
-                        </div>
-                        {m.reason && <p className="mt-2 text-xs text-muted-foreground">"{m.reason}"</p>}
-                        <div className="mt-3 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
-                          <Badge tone="neutral">{m.source.replace(/_/g, ' ').toLowerCase()}</Badge>
-                          {m.userConfirmed && (
-                            <Badge tone="success">
-                              <ShieldCheck className="h-3 w-3" /> Verified
-                            </Badge>
-                          )}
-                          <span>{relativeTime(m.createdAt)}</span>
-                        </div>
-
-                        <button
-                          type="button"
-                          onClick={() => toggleExpanded(m.id)}
-                          aria-expanded={isOpen}
-                          className="mt-3 flex items-center gap-1 text-xs font-medium text-primary hover:underline"
-                        >
-                          {isOpen ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
-                          {isOpen ? 'Hide details' : 'Why did the AI learn this?'}
-                        </button>
-
-                        {isOpen && (
-                          <div className="mt-3 space-y-3 rounded-lg bg-muted/40 p-3 text-xs">
-                            <div className="grid grid-cols-2 gap-2 text-muted-foreground">
-                              <div>
-                                <span className="font-medium text-foreground">Source: </span>
-                                {m.source.replace(/_/g, ' ').toLowerCase()}
-                              </div>
-                              <div>
-                                <span className="font-medium text-foreground">Decision type: </span>
-                                {m.decisionType}
-                              </div>
-                              <div>
-                                <span className="font-medium text-foreground">Created: </span>
-                                {new Date(m.createdAt).toLocaleString()}
-                              </div>
-                              <div>
-                                <span className="font-medium text-foreground">Times used: </span>
-                                {m.usageCount ?? 0}
-                                {m.lastUsedAt ? ` (last ${relativeTime(m.lastUsedAt)})` : ''}
-                              </div>
-                              {m.workflowId && (
-                                <div className="col-span-2 truncate">
-                                  <span className="font-medium text-foreground">Workflow: </span>
-                                  {m.workflowId}
-                                </div>
-                              )}
-                              {m.correlationId && (
-                                <div className="col-span-2 truncate">
-                                  <span className="font-medium text-foreground">Correlation ID: </span>
-                                  {m.correlationId}
-                                </div>
-                              )}
-                            </div>
-                            <div>
-                              <p className={`font-medium ${impact.real ? 'text-foreground' : 'text-muted-foreground'}`}>
-                                Recommendation impact{!impact.real && ' (informational only)'}
-                              </p>
-                              <ul className="mt-1 list-inside list-disc space-y-0.5 text-muted-foreground">
-                                {impact.lines.map((line, i) => (
-                                  <li key={i}>{line}</li>
-                                ))}
-                              </ul>
-                            </div>
-                          </div>
-                        )}
-
-                        <div className="mt-3 flex gap-2">
-                          {!m.userConfirmed && (
-                            <Button size="sm" variant="outline" onClick={() => confirm.mutate(m.id)} loading={confirm.isPending}>
-                              <Check className="h-3.5 w-3.5" /> Approve
-                            </Button>
-                          )}
-                          <Button size="sm" variant="ghost" onClick={() => forget.mutate(m.id)} loading={forget.isPending}>
-                            Forget
-                          </Button>
-                        </div>
-                      </div>
-                    );
-                  })}
+                  {visibleMemories.map((m) => (
+                    <MemoryCard
+                      key={m.id}
+                      m={m}
+                      isOpen={expanded.has(m.id)}
+                      onToggle={() => toggleExpanded(m.id)}
+                      onConfirm={() => confirm.mutate(m.id)}
+                      onForget={() => forget.mutate(m.id)}
+                      confirmPending={confirm.isPending}
+                      forgetPending={forget.isPending}
+                    />
+                  ))}
                 </motion.div>
               )}
             </CardContent>
@@ -783,100 +849,223 @@ export default function AiMemory() {
             </CardContent>
           </Card>
 
-          {/* Memory Analytics — point-in-time only, computed client-side from already-fetched data. No trend-over-time (no historical snapshots exist). */}
-          <Card>
-            <CardHeader className="flex-row items-center gap-2">
-              <BarChart3 className="h-4 w-4 text-muted-foreground" />
-              <CardTitle className="text-base">Memory analytics</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+          {/* ── Advanced / Diagnostics — collapsed by default; this is operator information, not the primary user experience ── */}
+          <div className="rounded-xl border border-border">
+            <button
+              type="button"
+              onClick={() => setAdvancedOpen((v) => !v)}
+              aria-expanded={advancedOpen}
+              className="flex w-full items-center justify-between gap-2 p-4 text-left"
+            >
+              <span className="flex items-center gap-2 text-sm font-semibold text-foreground">
+                <Activity className="h-4 w-4 text-muted-foreground" /> Advanced / Diagnostics
+              </span>
+              {advancedOpen ? <ChevronDown className="h-4 w-4 text-muted-foreground" /> : <ChevronRight className="h-4 w-4 text-muted-foreground" />}
+            </button>
+            {advancedOpen && (
+              <div className="space-y-4 border-t border-border p-4">
+                {/* Memory Analytics — point-in-time only, computed client-side from already-fetched data. No trend-over-time (no historical snapshots exist). */}
                 <div>
-                  <p className="text-xl font-semibold tabular-nums text-foreground">{Math.round(analytics.avgAgeDays)}d</p>
-                  <p className="text-xs text-muted-foreground">Average memory age</p>
-                </div>
-                <div>
-                  <p className="text-xl font-semibold tabular-nums text-foreground">{pct(analytics.verifiedRatio)}</p>
-                  <p className="text-xs text-muted-foreground">Verification ratio</p>
-                </div>
-                <div>
-                  <p className="text-xl font-semibold tabular-nums text-foreground">{timeline.length}</p>
-                  <p className="text-xs text-muted-foreground">Total (all-time)</p>
-                </div>
-                <div>
-                  <p className="text-xl font-semibold tabular-nums text-foreground">{categories.length}</p>
-                  <p className="text-xs text-muted-foreground">Active categories</p>
-                </div>
-              </div>
-              <div className="grid gap-4 sm:grid-cols-2">
-                <div>
-                  <p className="mb-2 text-xs font-medium text-muted-foreground">By category</p>
-                  <div className="space-y-1.5">
-                    {analytics.byCategory.slice(0, 8).map(([cat, count]) => (
-                      <div key={cat} className="flex items-center justify-between text-xs">
-                        <span className="text-muted-foreground">{categoryLabel(cat)}</span>
-                        <span className="tabular-nums font-medium text-foreground">{count}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-                <div>
-                  <p className="mb-2 text-xs font-medium text-muted-foreground">Most-used memories</p>
-                  <div className="space-y-1.5">
-                    {analytics.mostUsed.map((m) => (
-                      <div key={m.id} className="flex items-center justify-between text-xs">
-                        <span className="truncate text-muted-foreground">{m.value || m.decisionType}</span>
-                        <span className="tabular-nums font-medium text-foreground">{m.usageCount ?? 0}×</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          {/* Admin/system diagnostics — reuses the existing public GET /api/diagnostics/career-memory verbatim, only visualized here. */}
-          {diagnostics && (
-            <Card>
-              <CardHeader className="flex-row items-center gap-2">
-                <Activity className="h-4 w-4 text-muted-foreground" />
-                <CardTitle className="text-base">System diagnostics</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                <div className="flex flex-wrap items-center gap-2">
-                  <Badge tone={diagnostics.health === 'UP' ? 'success' : diagnostics.health === 'DEGRADED' ? 'warning' : 'neutral'}>
-                    {diagnostics.health}
-                  </Badge>
-                  <span className="text-xs text-muted-foreground">
-                    Extraction: {diagnostics.extractionSuccesses ?? 0}/{diagnostics.extractionAttempts ?? 0} succeeded ·
-                    Retrieval avg {diagnostics.avgRetrievalLatencyMs?.toFixed(1) ?? '—'}ms
-                  </span>
-                </div>
-                {diagnostics.conversationIntelligence?.enabled && (
-                  <p className="text-xs text-muted-foreground">
-                    Conversation Intelligence: {diagnostics.conversationIntelligence.conversationsAnalyzed ?? 0} analyzed,{' '}
-                    {diagnostics.conversationIntelligence.memoriesAccepted ?? 0} accepted,{' '}
-                    {diagnostics.conversationIntelligence.rejectedLowConfidence ?? 0} below confidence threshold,{' '}
-                    {diagnostics.conversationIntelligence.duplicatesSkipped ?? 0} duplicates skipped.
+                  <p className="mb-3 flex items-center gap-2 text-sm font-semibold text-foreground">
+                    <BarChart3 className="h-4 w-4 text-muted-foreground" /> Memory analytics
                   </p>
-                )}
-                {diagnostics.topRemembered && diagnostics.topRemembered.length > 0 && (
-                  <div>
-                    <p className="mb-1 text-xs font-medium text-muted-foreground">Top remembered (all users)</p>
-                    <div className="flex flex-wrap gap-1.5">
-                      {diagnostics.topRemembered.slice(0, 8).map((r, i) => (
-                        <Badge key={i} tone="neutral">
-                          {r.value} ({r.uses})
-                        </Badge>
-                      ))}
+                  <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+                    <div>
+                      <p className="text-xl font-semibold tabular-nums text-foreground">{Math.round(analytics.avgAgeDays)}d</p>
+                      <p className="text-xs text-muted-foreground">Average memory age</p>
+                    </div>
+                    <div>
+                      <p className="text-xl font-semibold tabular-nums text-foreground">{pct(analytics.verifiedRatio)}</p>
+                      <p className="text-xs text-muted-foreground">Verification ratio</p>
+                    </div>
+                    <div>
+                      <p className="text-xl font-semibold tabular-nums text-foreground">{timeline.length}</p>
+                      <p className="text-xs text-muted-foreground">Total (all-time)</p>
+                    </div>
+                    <div>
+                      <p className="text-xl font-semibold tabular-nums text-foreground">{categories.length}</p>
+                      <p className="text-xs text-muted-foreground">Active categories</p>
                     </div>
                   </div>
+                  <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                    <div>
+                      <p className="mb-2 text-xs font-medium text-muted-foreground">By category</p>
+                      <div className="space-y-1.5">
+                        {analytics.byCategory.slice(0, 8).map(([cat, count]) => (
+                          <div key={cat} className="flex items-center justify-between text-xs">
+                            <span className="text-muted-foreground">{categoryLabel(cat)}</span>
+                            <span className="tabular-nums font-medium text-foreground">{count}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                    <div>
+                      <p className="mb-2 text-xs font-medium text-muted-foreground">Most-used memories</p>
+                      <div className="space-y-1.5">
+                        {analytics.mostUsed.map((m) => (
+                          <div key={m.id} className="flex items-center justify-between text-xs">
+                            <span className="truncate text-muted-foreground">{m.value || m.decisionType}</span>
+                            <span className="tabular-nums font-medium text-foreground">{m.usageCount ?? 0}×</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* System diagnostics — reuses the existing public GET /api/diagnostics/career-memory verbatim, only visualized here. */}
+                {diagnostics && (
+                  <div className="border-t border-border pt-4">
+                    <p className="mb-2 flex items-center gap-2 text-sm font-semibold text-foreground">
+                      <Activity className="h-4 w-4 text-muted-foreground" /> System diagnostics
+                    </p>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge tone={diagnostics.health === 'UP' ? 'success' : diagnostics.health === 'DEGRADED' ? 'warning' : 'neutral'}>
+                        {diagnostics.health}
+                      </Badge>
+                      <span className="text-xs text-muted-foreground">
+                        Extraction: {diagnostics.extractionSuccesses ?? 0}/{diagnostics.extractionAttempts ?? 0} succeeded ·
+                        Retrieval avg {diagnostics.avgRetrievalLatencyMs?.toFixed(1) ?? '—'}ms
+                      </span>
+                    </div>
+                    {diagnostics.conversationIntelligence?.enabled && (
+                      <p className="mt-2 text-xs text-muted-foreground">
+                        Conversation Intelligence: {diagnostics.conversationIntelligence.conversationsAnalyzed ?? 0} analyzed,{' '}
+                        {diagnostics.conversationIntelligence.memoriesAccepted ?? 0} accepted,{' '}
+                        {diagnostics.conversationIntelligence.rejectedLowConfidence ?? 0} below confidence threshold,{' '}
+                        {diagnostics.conversationIntelligence.duplicatesSkipped ?? 0} duplicates skipped.
+                      </p>
+                    )}
+                    {diagnostics.topRemembered && diagnostics.topRemembered.length > 0 && (
+                      <div className="mt-2">
+                        <p className="mb-1 text-xs font-medium text-muted-foreground">Top remembered (all users)</p>
+                        <div className="flex flex-wrap gap-1.5">
+                          {diagnostics.topRemembered.slice(0, 8).map((r, i) => (
+                            <Badge key={i} tone="neutral">
+                              {r.value} ({r.uses})
+                            </Badge>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 )}
-              </CardContent>
-            </Card>
-          )}
+              </div>
+            )}
+          </div>
         </>
       )}
+    </div>
+  );
+}
+
+/** One memory record — identity, evidence disclosure, and controls (confirm/forget). Factored out so the grouped and flat render paths share exactly one implementation. */
+function MemoryCard({
+  m,
+  isOpen,
+  onToggle,
+  onConfirm,
+  onForget,
+  confirmPending,
+  forgetPending,
+}: {
+  m: CareerDecisionMemory;
+  isOpen: boolean;
+  onToggle: () => void;
+  onConfirm: () => void;
+  onForget: () => void;
+  confirmPending: boolean;
+  forgetPending: boolean;
+}) {
+  const impact = recommendationImpact(m);
+  return (
+    <div className="rounded-xl border border-border bg-card p-4">
+      <div className="flex items-start justify-between gap-2">
+        <div>
+          <p className="text-sm font-semibold text-foreground">{m.value || m.decisionType}</p>
+          <p className="text-xs text-muted-foreground">{categoryLabel(m.category)}</p>
+        </div>
+        <Badge tone={confidenceTone(m.confidence)}>{pct(m.confidence)}</Badge>
+      </div>
+      {m.reason && <p className="mt-2 text-xs text-muted-foreground">"{m.reason}"</p>}
+      <div className="mt-3 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+        <Badge tone="neutral">{m.source.replace(/_/g, ' ').toLowerCase()}</Badge>
+        {m.userConfirmed ? (
+          <Badge tone="success">
+            <ShieldCheck className="h-3 w-3" /> User confirmed
+          </Badge>
+        ) : (
+          <Badge tone="warning">AI inferred</Badge>
+        )}
+        <span>{relativeTime(m.createdAt)}</span>
+      </div>
+
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={isOpen}
+        className="mt-3 flex items-center gap-1 text-xs font-medium text-primary hover:underline"
+      >
+        {isOpen ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+        {isOpen ? 'Hide evidence' : 'Why does CareerPilot believe this?'}
+      </button>
+
+      {isOpen && (
+        <div className="mt-3 space-y-3 rounded-lg bg-muted/40 p-3 text-xs">
+          <div className="grid grid-cols-2 gap-2 text-muted-foreground">
+            <div>
+              <span className="font-medium text-foreground">Source: </span>
+              {m.source.replace(/_/g, ' ').toLowerCase()}
+            </div>
+            <div>
+              <span className="font-medium text-foreground">Decision type: </span>
+              {m.decisionType}
+            </div>
+            <div>
+              <span className="font-medium text-foreground">Created: </span>
+              {new Date(m.createdAt).toLocaleString()}
+            </div>
+            <div>
+              <span className="font-medium text-foreground">Times used: </span>
+              {m.usageCount ?? 0}
+              {m.lastUsedAt ? ` (last ${relativeTime(m.lastUsedAt)})` : ''}
+            </div>
+            {m.workflowId && (
+              <div className="col-span-2 truncate">
+                <span className="font-medium text-foreground">Workflow: </span>
+                {m.workflowId}
+              </div>
+            )}
+            {m.correlationId && (
+              <div className="col-span-2 truncate">
+                <span className="font-medium text-foreground">Correlation ID: </span>
+                {m.correlationId}
+              </div>
+            )}
+          </div>
+          <div>
+            <p className={`font-medium ${impact.real ? 'text-foreground' : 'text-muted-foreground'}`}>
+              Recommendation impact{!impact.real && ' (informational only)'}
+            </p>
+            <ul className="mt-1 list-inside list-disc space-y-0.5 text-muted-foreground">
+              {impact.lines.map((line, i) => (
+                <li key={i}>{line}</li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      )}
+
+      <div className="mt-3 flex gap-2">
+        {!m.userConfirmed && (
+          <Button size="sm" variant="outline" onClick={onConfirm} loading={confirmPending}>
+            <Check className="h-3.5 w-3.5" /> Confirm
+          </Button>
+        )}
+        <Button size="sm" variant="ghost" onClick={onForget} loading={forgetPending}>
+          Forget
+        </Button>
+      </div>
     </div>
   );
 }

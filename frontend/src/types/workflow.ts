@@ -1263,3 +1263,75 @@ export interface CareerMemoryDiagnostics {
     memoryWriteSuccessRate?: number;
   };
 }
+
+/**
+ * `GET /api/intelligence/optimization` — Phase 13B/13C evidence-backed "what the evidence says
+ * works" snapshot. Confidence is deliberately a band, never a percentage — see backend
+ * `Evidence.java`'s own rationale: a sample of 3 applications and 1 interview is a 33% rate, and
+ * any percentage derived from it is arithmetic dressed as certainty.
+ */
+export interface OptimizationEvidence {
+  source: string;
+  sampleSize: number;
+  supporting: Record<string, number>;
+  confidence: 'INSUFFICIENT' | 'LOW' | 'MEDIUM' | 'HIGH';
+  lastUpdated?: string | null;
+  citation: string;
+}
+
+export interface OptimizationDimensionFinding {
+  dimension: string;
+  key: string;
+  applications: number;
+  interviews: number;
+  offers: number;
+  successRate?: number | null;
+  evidence: OptimizationEvidence;
+}
+
+export interface OptimizationResumeIntelligence {
+  recommendedVersion?: string | null;
+  applications: number;
+  interviews: number;
+  offers: number;
+  interviewRate?: number | null;
+  offerRate?: number | null;
+  versionsCompared: number;
+  evidence?: OptimizationEvidence | null;
+  reason?: string | null;
+}
+
+export interface OptimizationAtsIntelligence {
+  bestPlatform?: string | null;
+  bestConfidence?: number | null;
+  weakestPlatform?: string | null;
+  weakestConfidence?: number | null;
+  readyPlatforms: string[];
+  evidence?: OptimizationEvidence | null;
+  caveat?: string | null;
+}
+
+export interface OptimizationSnapshot {
+  generatedAt?: string | null;
+  resume?: OptimizationResumeIntelligence | null;
+  countries: OptimizationDimensionFinding[];
+  companies: OptimizationDimensionFinding[];
+  skills: OptimizationDimensionFinding[];
+  ats?: OptimizationAtsIntelligence | null;
+  notes: string[];
+}
+
+export interface OptimizationRecommendation {
+  priority: number;
+  category: string;
+  action: string;
+  rationale: string;
+  evidence: OptimizationEvidence;
+}
+
+export interface OptimizationResponse {
+  enabled: boolean;
+  snapshot: OptimizationSnapshot | null;
+  recommendations: OptimizationRecommendation[];
+  message?: string | null;
+}

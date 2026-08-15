@@ -52,6 +52,11 @@ public class CountryIntelligence {
     @Column(name = "remote_policy") private String remotePolicy;
     @Column(name = "priority_score") private Integer priorityScore;
 
+    // ── International Job Discovery Phase 2 — additive, nullable, curated (not live) signals ──
+    @Column(name = "language_friendly_score") private Integer languageFriendlyScore;
+    @JdbcTypeCode(SqlTypes.JSON) @Column(name = "industry_fit", columnDefinition = "jsonb")
+    private String industryFitJson;
+
     @CreationTimestamp @Column(name = "created_at", updatable = false) private Instant createdAt;
     @UpdateTimestamp @Column(name = "updated_at") private Instant updatedAt;
 }

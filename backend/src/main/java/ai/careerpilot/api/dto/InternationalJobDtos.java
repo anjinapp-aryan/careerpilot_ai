@@ -16,9 +16,10 @@ public final class InternationalJobDtos {
 
     private InternationalJobDtos() {}
 
-    public record SupportedCountryDto(String countryCode, String displayName, String tier) {
+    public record SupportedCountryDto(String countryCode, String displayName, String tier, String searchPriority) {
         public static SupportedCountryDto from(SupportedCountry c) {
-            return new SupportedCountryDto(c.getCountryCode(), c.getDisplayName(), c.getTier().name());
+            return new SupportedCountryDto(c.getCountryCode(), c.getDisplayName(), c.getTier().name(),
+                    c.getSearchPriority() == null ? null : c.getSearchPriority().name());
         }
     }
 
@@ -27,13 +28,13 @@ public final class InternationalJobDtos {
                                          int costOfLivingIndex, int expectedSavingsScore,
                                          int jobStabilityScore, int techMarketScore,
                                          int principalEngineerGrowthScore, int aiMarketScore,
-                                         String sourceNote) {
+                                         String sourceNote, Integer languageFriendlyScore, String industryFitJson) {
         public static CountryIntelligenceDto from(CountryIntelligence c) {
             return new CountryIntelligenceDto(c.getCountryCode(), c.getVisaProbabilityScore(),
                     c.getRelocationDifficultyScore(), c.getLanguageRequirementScore(),
                     c.getCostOfLivingIndex(), c.getExpectedSavingsScore(), c.getJobStabilityScore(),
                     c.getTechMarketScore(), c.getPrincipalEngineerGrowthScore(), c.getAiMarketScore(),
-                    c.getSourceNote());
+                    c.getSourceNote(), c.getLanguageFriendlyScore(), c.getIndustryFitJson());
         }
     }
 

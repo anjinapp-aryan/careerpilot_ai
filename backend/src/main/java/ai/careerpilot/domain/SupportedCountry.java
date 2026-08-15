@@ -1,6 +1,7 @@
 package ai.careerpilot.domain;
 
 import ai.careerpilot.jobdiscovery.international.CountryTier;
+import ai.careerpilot.jobdiscovery.international.SearchPriority;
 import jakarta.persistence.*;
 import lombok.*;
 import org.hibernate.annotations.CreationTimestamp;
@@ -30,6 +31,11 @@ public class SupportedCountry {
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 10)
     private CountryTier tier;
+
+    /** International Job Discovery Phase 2 — additive, nullable; see {@link SearchPriority}'s javadoc for why this is not {@code tier}. */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "search_priority", length = 20)
+    private SearchPriority searchPriority;
 
     @Column(nullable = false)
     private Boolean active;

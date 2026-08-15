@@ -4,16 +4,24 @@ import ai.careerpilot.api.dto.JobRecommendationDtos.CandidateProfileSummary;
 import ai.careerpilot.api.dto.JobRecommendationDtos.RecommendedJob;
 import ai.careerpilot.api.dto.JobRecommendationDtos.RecommendedJobsResponse;
 import ai.careerpilot.domain.CandidateProfile;
+import ai.careerpilot.domain.CountryIntelligence;
 import ai.careerpilot.domain.Job;
 import ai.careerpilot.domain.JobRecommendation;
 import ai.careerpilot.domain.Resume;
+import ai.careerpilot.domain.SupportedCountry;
 import ai.careerpilot.domain.WorkflowRun;
 import ai.careerpilot.execution.browser.validation.AtsPlatform;
+import ai.careerpilot.jobdiscovery.IndustryFit;
+import ai.careerpilot.jobdiscovery.IndustryFitClassifier;
 import ai.careerpilot.jobdiscovery.JobFreshness;
 import ai.careerpilot.jobdiscovery.JobMatchingService;
 import ai.careerpilot.jobdiscovery.JobScoring;
 import ai.careerpilot.jobdiscovery.JobScoring.ScoreBreakdown;
+import ai.careerpilot.jobdiscovery.international.CandidateCountryFit;
+import ai.careerpilot.jobdiscovery.international.CandidateCountryFitClassifier;
+import ai.careerpilot.jobdiscovery.international.CountryIntelligenceService;
 import ai.careerpilot.jobdiscovery.international.InternationalJobRankingService;
+import ai.careerpilot.jobdiscovery.international.SupportedCountryService;
 import ai.careerpilot.repo.CandidateProfileRepository;
 import ai.careerpilot.repo.JobRecommendationRepository;
 import ai.careerpilot.repo.JobRepository;
@@ -55,12 +63,18 @@ public class JobRecommendationService {
     private final CandidateProfileRepository candidateProfiles;
     private final ResumeRepository resumes;
     private final RecommendationDiversifier diversifier;
+    private final SupportedCountryService supportedCountries;
+    private final CountryIntelligenceService countryIntelligence;
+    private final CandidateCountryFitClassifier candidateCountryFitClassifier;
+    private final IndustryFitClassifier industryFitClassifier;
     private final ObjectMapper mapper = new ObjectMapper();
 
     /** When true, Recommended is gated to score >= threshold AND confidence >= MEDIUM. */
     private final boolean v2Enabled;
     private final int threshold;
     private final boolean freshnessEnabled;
+    private final boolean countryPriorityEnabled;
+    private final boolean industryFitEnabled;
 
     public JobRecommendationService(WorkflowRunRepository runs,
                                     JobRepository jobs,
@@ -71,9 +85,15 @@ public class JobRecommendationService {
                                     CandidateProfileRepository candidateProfiles,
                                     ResumeRepository resumes,
                                     RecommendationDiversifier diversifier,
+                                    SupportedCountryService supportedCountries,
+                                    CountryIntelligenceService countryIntelligence,
+                                    CandidateCountryFitClassifier candidateCountryFitClassifier,
+                                    IndustryFitClassifier industryFitClassifier,
                                     @Value("${jobs.recommendation.v2-enabled:true}") boolean v2Enabled,
                                     @Value("${jobs.recommendation.threshold:75}") int threshold,
-                                    @Value("${career.international.freshness.enabled:false}") boolean freshnessEnabled) {
+                                    @Value("${career.international.freshness.enabled:false}") boolean freshnessEnabled,
+                                    @Value("${career.international.country-priority.enabled:false}") boolean countryPriorityEnabled,
+                                    @Value("${career.international.industry-fit.enabled:false}") boolean industryFitEnabled) {
         this.runs = runs;
         this.jobs = jobs;
         this.recommendations = recommendations;
@@ -83,9 +103,15 @@ public class JobRecommendationService {
         this.candidateProfiles = candidateProfiles;
         this.resumes = resumes;
         this.diversifier = diversifier;
+        this.supportedCountries = supportedCountries;
+        this.countryIntelligence = countryIntelligence;
+        this.candidateCountryFitClassifier = candidateCountryFitClassifier;
+        this.industryFitClassifier = industryFitClassifier;
         this.v2Enabled = v2Enabled;
         this.threshold = threshold;
         this.freshnessEnabled = freshnessEnabled;
+        this.countryPriorityEnabled = countryPriorityEnabled;
+        this.industryFitEnabled = industryFitEnabled;
     }
 
     public RecommendedJobsResponse recommend(UUID userId, UUID orgId, int limit) {
@@ -185,7 +211,7 @@ public class JobRecommendationService {
             matching.refreshForUser(userId);
             refreshInternationalRankingSafely(userId);
         }
-        List<RecommendedJob> all = fromPersisted(userId, filter);
+        List<RecommendedJob> all = fromPersisted(userId, filter, extractedSkills, targetRole);
 
         // Fallback: no discovered recommendations yet → score the org pool on the fly (legacy).
         if (all.isEmpty()) {
@@ -210,7 +236,8 @@ public class JobRecommendationService {
     }
 
     /** All gated + filtered persisted recommendations, ranked by score (no pagination here). */
-    private List<RecommendedJob> fromPersisted(UUID userId, String filter) {
+    private List<RecommendedJob> fromPersisted(UUID userId, String filter,
+                                                List<String> candidateSkills, String targetRole) {
         List<JobRecommendation> recs = recommendations.findByUserIdOrderByMatchScoreDesc(userId);
         if (recs.isEmpty()) return List.of();
 
@@ -233,7 +260,8 @@ public class JobRecommendationService {
                     csv(rec.getMatchingSkills()), csv(rec.getMissingSkills()),
                     rec.getConfidenceLevel(), parseBreakdown(rec.getScoreBreakdown()), rec.getCategory(),
                     rec.getPriority(), rec.getPriorityScore(), rec.getMustApply(), atsPlatformOf(job),
-                    freshnessOf(job)));
+                    freshnessOf(job), searchPriorityOf(job), candidateCountryFitOf(job, candidateSkills, targetRole),
+                    industryFitOf(job), languageFriendlyScoreOf(job)));
         }
         return out;
     }
@@ -299,6 +327,53 @@ public class JobRecommendationService {
         return f == null ? null : f.name();
     }
 
+    /**
+     * International Job Discovery Phase 2 — the business PRIMARY/PRIMARY_SPECIALIST/SECONDARY/
+     * SELECTIVE priority for this job's country, resolved via the same display-name lookup
+     * {@link RecommendationDiversifier} already keys its quota map on. {@code null} when the flag
+     * is off, the job has no country, or that country was never assigned a priority (e.g. UAE).
+     */
+    private String searchPriorityOf(Job job) {
+        if (!countryPriorityEnabled || job.getCountry() == null) return null;
+        return supportedCountries.byDisplayName(job.getCountry())
+                .map(SupportedCountry::getSearchPriority)
+                .map(Enum::name)
+                .orElse(null);
+    }
+
+    private CountryIntelligence countryIntelligenceOf(Job job) {
+        if (job.getCountry() == null) return null;
+        return supportedCountries.byDisplayName(job.getCountry())
+                .flatMap(sc -> countryIntelligence.forCountry(sc.getCountryCode()))
+                .orElse(null);
+    }
+
+    /**
+     * International Job Discovery Phase 2 — VERY_HIGH/HIGH/MEDIUM/LOW, or {@code null} when the
+     * flag is off or the job's country has no curated intelligence to evaluate against.
+     */
+    private String candidateCountryFitOf(Job job, List<String> candidateSkills, String targetRole) {
+        if (!industryFitEnabled) return null;
+        CountryIntelligence intel = countryIntelligenceOf(job);
+        if (intel == null) return null;
+        CandidateCountryFit fit = candidateCountryFitClassifier.classify(candidateSkills, targetRole, intel);
+        return fit == null ? null : fit.name();
+    }
+
+    /** International Job Discovery Phase 2 — the job's own classified industry, or {@code null} when unclassifiable/disabled. */
+    private String industryFitOf(Job job) {
+        if (!industryFitEnabled) return null;
+        IndustryFit fit = industryFitClassifier.classify(job.getTitle(), job.getDescription(), job.getCompany());
+        return fit == IndustryFit.UNKNOWN ? null : fit.name();
+    }
+
+    /** International Job Discovery Phase 2 — the country's curated language-friendliness, or {@code null}. */
+    private Integer languageFriendlyScoreOf(Job job) {
+        if (!industryFitEnabled) return null;
+        CountryIntelligence intel = countryIntelligenceOf(job);
+        return intel == null ? null : intel.getLanguageFriendlyScore();
+    }
+
     private ScoreBreakdown parseBreakdown(String json) {
         if (json == null || json.isBlank()) return null;
         try {
@@ -316,7 +391,9 @@ public class JobRecommendationService {
                 .map(job -> {
                     JobScoring.ScoreResult r = scoring.score(job, skills, targetRole, targetLocations);
                     return new RecommendedJob(job, r.matchScore(), r.matchedSkills(), r.missingSkills(),
-                            null, null, null, null, null, null, atsPlatformOf(job), freshnessOf(job));
+                            null, null, null, null, null, null, atsPlatformOf(job), freshnessOf(job),
+                            searchPriorityOf(job), candidateCountryFitOf(job, skills, targetRole),
+                            industryFitOf(job), languageFriendlyScoreOf(job));
                 })
                 .filter(rj -> matchesFilter(rj.job(), rj.matchScore(), filter))
                 .sorted(Comparator.comparingInt(RecommendedJob::matchScore).reversed())

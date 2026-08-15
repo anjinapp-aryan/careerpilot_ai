@@ -150,3 +150,25 @@ describe('RecommendedJobCard — Global Job Discovery Expansion (sponsorship + f
     expect(screen.getByText(/very fresh/i)).toBeInTheDocument();
   });
 });
+
+describe('RecommendedJobCard — International Job Discovery Phase 2', () => {
+  it('renders search priority, country fit, and industry badges when present', () => {
+    renderCard(rec({ searchPriority: 'PRIMARY', candidateCountryFit: 'VERY_HIGH', industryFit: 'BANKING' }));
+    expect(screen.getByText(/^primary$/i)).toBeInTheDocument();
+    expect(screen.getByText(/country fit: very high/i)).toBeInTheDocument();
+    expect(screen.getByText(/banking/i)).toBeInTheDocument();
+  });
+
+  it('renders nothing Phase-2-related when all four fields are absent (flags off)', () => {
+    renderCard(rec({
+      searchPriority: null, candidateCountryFit: null, industryFit: null, languageFriendlyScore: null,
+    }));
+    expect(screen.queryByText(/country fit:/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/english-friendly market/i)).not.toBeInTheDocument();
+  });
+
+  it('never fabricates: a country with no search-priority assignment (e.g. UAE) omits the badge', () => {
+    renderCard(rec({ job: { ...rec().job, country: 'United Arab Emirates' }, searchPriority: null }));
+    expect(screen.queryByText(/primary|secondary|selective/i)).not.toBeInTheDocument();
+  });
+});

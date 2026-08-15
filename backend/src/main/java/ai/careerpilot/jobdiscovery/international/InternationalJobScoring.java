@@ -2,10 +2,15 @@ package ai.careerpilot.jobdiscovery.international;
 
 import ai.careerpilot.domain.CountryIntelligence;
 import ai.careerpilot.domain.Job;
+import ai.careerpilot.jobdiscovery.IndustryFit;
+import ai.careerpilot.jobdiscovery.IndustryFitClassifier;
 import ai.careerpilot.jobdiscovery.JobScoring;
 import ai.careerpilot.jobdiscovery.JobTaxonomy;
+import ai.careerpilot.service.profile.JsonLists;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
+import java.util.List;
 import java.util.Set;
 
 /**
@@ -22,17 +27,32 @@ public class InternationalJobScoring {
 
     private final JobScoring scoring;
     private final JobTaxonomy taxonomy;
+    private final IndustryFitClassifier industryFitClassifier;
+    private final boolean extendedScoringEnabled;
 
-    public InternationalJobScoring(JobScoring scoring, JobTaxonomy taxonomy) {
+    public InternationalJobScoring(JobScoring scoring, JobTaxonomy taxonomy,
+                                    IndustryFitClassifier industryFitClassifier,
+                                    @Value("${career.international.extended-scoring.enabled:false}") boolean extendedScoringEnabled) {
         this.scoring = scoring;
         this.taxonomy = taxonomy;
+        this.industryFitClassifier = industryFitClassifier;
+        this.extendedScoringEnabled = extendedScoringEnabled;
     }
 
     public record InternationalScoreResult(int rankScore, int skillScore, int visaProbabilityScore,
                                             int salaryScore, int careerGrowthScore, int companyStabilityScore,
                                             int remoteFlexibilityScore, int principalEngineerGrowthScore,
-                                            int aiTechStackScore) {}
+                                            int aiTechStackScore, int languageFitScore, int industryFitScore) {}
 
+    /**
+     * <b>Flag-off (default): the exact, unchanged 40/15/10/10/10/5/5/5 formula</b> this method has
+     * always computed — pinned by the existing test suite, verified byte-identical. {@code
+     * languageFitScore}/{@code industryFitScore} are still computed and returned (so the API/UI can
+     * always show them when the underlying data exists) but contribute nothing to {@code rankScore}
+     * unless {@code career.international.extended-scoring.enabled=true}, in which case the weights
+     * reflow to 35/13/9/9/9/5/5/5/5/5 — skill match stays by far the dominant term (2.7x the next
+     * highest weight), so country/language/industry signals can never outrank raw technical fit.
+     */
     public InternationalScoreResult score(Job job, String effectiveSkills, JobScoring.CandidateContext ctx,
                                            JobScoring.PreferenceContext prefs, CountryIntelligence intel) {
         int skill = scoring.skillScoreOnly(job, effectiveSkills, ctx);
@@ -43,13 +63,40 @@ public class InternationalJobScoring {
         int remoteFlexibility = remoteFlexibilityScore(job);
         int principalGrowth = principalEngineerGrowthScore(intel, careerGrowth);
         int aiStack = aiTechStackScore(job, effectiveSkills, intel);
+        int languageFit = languageFitScore(intel);
+        int industryFit = industryFitScore(job, intel);
 
-        int rank = Math.round(skill * 0.40f + visa * 0.15f + salary * 0.10f + careerGrowth * 0.10f
-                + companyStability * 0.10f + remoteFlexibility * 0.05f + principalGrowth * 0.05f + aiStack * 0.05f);
+        int rank = extendedScoringEnabled
+                ? Math.round(skill * 0.35f + visa * 0.13f + salary * 0.09f + careerGrowth * 0.09f
+                    + companyStability * 0.09f + remoteFlexibility * 0.05f + principalGrowth * 0.05f
+                    + aiStack * 0.05f + languageFit * 0.05f + industryFit * 0.05f)
+                : Math.round(skill * 0.40f + visa * 0.15f + salary * 0.10f + careerGrowth * 0.10f
+                    + companyStability * 0.10f + remoteFlexibility * 0.05f + principalGrowth * 0.05f + aiStack * 0.05f);
         rank = Math.min(100, Math.max(0, rank));
 
         return new InternationalScoreResult(rank, skill, visa, salary, careerGrowth, companyStability,
-                remoteFlexibility, principalGrowth, aiStack);
+                remoteFlexibility, principalGrowth, aiStack, languageFit, industryFit);
+    }
+
+    /** Curated country language-friendliness, or a neutral 50 when the country has no curated value yet. */
+    private int languageFitScore(CountryIntelligence intel) {
+        if (intel == null || intel.getLanguageFriendlyScore() == null) return 50;
+        return intel.getLanguageFriendlyScore();
+    }
+
+    /**
+     * 100 when the job's own classified industry (via {@link IndustryFitClassifier} — never
+     * inferred from country) appears in the country's curated {@code industryFit} list; 50 neutral
+     * when either side has no signal; 30 when the job has a clear industry that this country's
+     * curated list doesn't claim to serve.
+     */
+    private int industryFitScore(Job job, CountryIntelligence intel) {
+        IndustryFit jobIndustry = industryFitClassifier.classify(job.getTitle(), job.getDescription(), job.getCompany());
+        if (jobIndustry == IndustryFit.UNKNOWN || intel == null) return 50;
+        List<String> countryIndustries = JsonLists.toList(intel.getIndustryFitJson());
+        if (countryIndustries.isEmpty()) return 50;
+        boolean overlap = countryIndustries.stream().anyMatch(i -> i.equalsIgnoreCase(jobIndustry.name()));
+        return overlap ? 100 : 30;
     }
 
     /**

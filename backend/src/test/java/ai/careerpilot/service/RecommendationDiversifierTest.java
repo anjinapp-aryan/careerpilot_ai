@@ -24,7 +24,7 @@ class RecommendationDiversifierTest {
 
     @Test
     void flagOffReturnsTheInputListUnchanged() {
-        RecommendationDiversifier diversifier = new RecommendationDiversifier(false);
+        RecommendationDiversifier diversifier = new RecommendationDiversifier(false, false);
         List<RecommendedJob> ranked = List.of(job("Germany", 94), job("Germany", 93), job("Germany", 92));
 
         assertThat(diversifier.diversify(ranked)).isSameAs(ranked);
@@ -32,7 +32,7 @@ class RecommendationDiversifierTest {
 
     @Test
     void aHighScoringJobIsNeverDisplacedByAMaterallyLowerScoringOtherCountryJob() {
-        RecommendationDiversifier diversifier = new RecommendationDiversifier(true);
+        RecommendationDiversifier diversifier = new RecommendationDiversifier(true, false);
         RecommendedJob top = job("Germany", 94);
         RecommendedJob low = job("United Arab Emirates", 55);
         List<RecommendedJob> ranked = List.of(top, low);
@@ -47,7 +47,7 @@ class RecommendationDiversifierTest {
 
     @Test
     void withinASimilarScoreBandCountriesAreInterleavedRoundRobin() {
-        RecommendationDiversifier diversifier = new RecommendationDiversifier(true);
+        RecommendationDiversifier diversifier = new RecommendationDiversifier(true, false);
         // All in the 90-94 band.
         RecommendedJob de1 = job("Germany", 94);
         RecommendedJob de2 = job("Germany", 93);
@@ -66,7 +66,7 @@ class RecommendationDiversifierTest {
 
     @Test
     void singleCountryBandIsLeftInOriginalOrder() {
-        RecommendationDiversifier diversifier = new RecommendationDiversifier(true);
+        RecommendationDiversifier diversifier = new RecommendationDiversifier(true, false);
         List<RecommendedJob> ranked = List.of(job("Germany", 94), job("Germany", 93), job("Germany", 92));
 
         assertThat(diversifier.diversify(ranked)).containsExactlyElementsOf(ranked);
@@ -74,7 +74,7 @@ class RecommendationDiversifierTest {
 
     @Test
     void eachCountrysOwnRelativeOrderIsPreservedWithinTheInterleave() {
-        RecommendationDiversifier diversifier = new RecommendationDiversifier(true);
+        RecommendationDiversifier diversifier = new RecommendationDiversifier(true, false);
         RecommendedJob de1 = job("Germany", 94);
         RecommendedJob de2 = job("Germany", 92);
         RecommendedJob nl1 = job("Netherlands", 93);
@@ -94,10 +94,68 @@ class RecommendationDiversifierTest {
 
     @Test
     void fewerThanTwoJobsIsUnchanged() {
-        RecommendationDiversifier diversifier = new RecommendationDiversifier(true);
+        RecommendationDiversifier diversifier = new RecommendationDiversifier(true, false);
         List<RecommendedJob> single = List.of(job("Germany", 94));
 
         assertThat(diversifier.diversify(single)).isSameAs(single);
         assertThat(diversifier.diversify(null)).isNull();
+    }
+
+    // ── International Job Discovery Phase 2 — quota-weighted pull order ──
+
+    @Test
+    void quotaWeightingNeverCrossesScoreBandsEitherThe94GermanyStaysAheadOf55Usa() {
+        RecommendationDiversifier diversifier = new RecommendationDiversifier(true, true);
+        RecommendedJob top = job("Germany", 94);
+        RecommendedJob low = job("United States", 55);
+
+        List<RecommendedJob> result = diversifier.diversify(List.of(top, low));
+
+        assertThat(result.get(0)).isEqualTo(top);
+        assertThat(result.get(1)).isEqualTo(low);
+    }
+
+    @Test
+    void quotaWeightingPullsTheHigherSoftQuotaCountryFirstWithinABand() {
+        RecommendationDiversifier diversifier = new RecommendationDiversifier(true, true);
+        // Same band (90-94). Germany's soft quota (25) is higher than Poland's (9), so Germany's
+        // representative is pulled before Poland's even though Poland was scored marginally higher
+        // — this is exactly the "soft guidance changes pull order, never the band" contract.
+        RecommendedJob poland = job("Poland", 93);
+        RecommendedJob germany = job("Germany", 92);
+        List<RecommendedJob> ranked = List.of(poland, germany);
+
+        List<RecommendedJob> result = diversifier.diversify(ranked);
+
+        assertThat(result.get(0)).isEqualTo(germany);
+        assertThat(result.get(1)).isEqualTo(poland);
+    }
+
+    @Test
+    void quotaWeightingOffFallsBackToPlainInsertionOrderRoundRobin() {
+        // Same setup as above, but the quota flag is off — plain round-robin (insertion order)
+        // applies, matching the pre-Phase-2 behavior byte-for-byte.
+        RecommendationDiversifier diversifier = new RecommendationDiversifier(true, false);
+        RecommendedJob poland = job("Poland", 93);
+        RecommendedJob germany = job("Germany", 92);
+        List<RecommendedJob> ranked = List.of(poland, germany);
+
+        List<RecommendedJob> result = diversifier.diversify(ranked);
+
+        assertThat(result.get(0)).isEqualTo(poland);
+        assertThat(result.get(1)).isEqualTo(germany);
+    }
+
+    @Test
+    void aCountryWithNoSoftQuotaEntryIsNeverExcludedJustSortsLast() {
+        RecommendationDiversifier diversifier = new RecommendationDiversifier(true, true);
+        RecommendedJob india = job("India", 93); // not in SOFT_QUOTA_PCT at all
+        RecommendedJob germany = job("Germany", 92);
+        List<RecommendedJob> ranked = List.of(india, germany);
+
+        List<RecommendedJob> result = diversifier.diversify(ranked);
+
+        assertThat(result).containsExactlyInAnyOrder(india, germany); // both present, neither dropped
+        assertThat(result.get(0)).isEqualTo(germany); // Germany (quota 25) pulled before India (quota 0)
     }
 }

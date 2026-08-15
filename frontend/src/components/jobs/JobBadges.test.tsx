@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import { SponsorshipBadge, FreshnessBadge } from './JobBadges';
+import {
+  SponsorshipBadge,
+  FreshnessBadge,
+  SearchPriorityBadge,
+  CandidateCountryFitBadge,
+  IndustryFitBadge,
+  LanguageFriendlyBadge,
+} from './JobBadges';
 
 describe('SponsorshipBadge — Global Job Discovery Expansion', () => {
   it('renders "Sponsorship: Confirmed" for CONFIRMED', () => {
@@ -37,6 +44,64 @@ describe('FreshnessBadge — Global Job Discovery Expansion', () => {
 
   it('renders nothing when freshness is absent', () => {
     const { container } = render(<FreshnessBadge freshness={null} />);
+    expect(container).toBeEmptyDOMElement();
+  });
+});
+
+describe('SearchPriorityBadge — International Job Discovery Phase 2', () => {
+  it('renders each priority label', () => {
+    render(<SearchPriorityBadge searchPriority="PRIMARY" />);
+    expect(screen.getByText(/^primary$/i)).toBeInTheDocument();
+  });
+
+  it('renders Primary · Specialist for PRIMARY_SPECIALIST', () => {
+    render(<SearchPriorityBadge searchPriority="PRIMARY_SPECIALIST" />);
+    expect(screen.getByText(/primary.*specialist/i)).toBeInTheDocument();
+  });
+
+  it('renders nothing when absent (flag off, or country has no assignment e.g. UAE)', () => {
+    const { container } = render(<SearchPriorityBadge searchPriority={null} />);
+    expect(container).toBeEmptyDOMElement();
+  });
+});
+
+describe('CandidateCountryFitBadge — International Job Discovery Phase 2', () => {
+  it('renders "Country Fit: Very High"', () => {
+    render(<CandidateCountryFitBadge fit="VERY_HIGH" />);
+    expect(screen.getByText(/country fit: very high/i)).toBeInTheDocument();
+  });
+
+  it('renders nothing when the country has no curated intelligence', () => {
+    const { container } = render(<CandidateCountryFitBadge fit={null} />);
+    expect(container).toBeEmptyDOMElement();
+  });
+});
+
+describe('IndustryFitBadge — International Job Discovery Phase 2', () => {
+  it('renders Banking for BANKING', () => {
+    render(<IndustryFitBadge industry="BANKING" />);
+    expect(screen.getByText(/banking/i)).toBeInTheDocument();
+  });
+
+  it('renders nothing when unclassifiable, never "Unknown"', () => {
+    const { container } = render(<IndustryFitBadge industry={null} />);
+    expect(container).toBeEmptyDOMElement();
+  });
+});
+
+describe('LanguageFriendlyBadge — International Job Discovery Phase 2', () => {
+  it('renders for a genuinely high score', () => {
+    render(<LanguageFriendlyBadge score={100} />);
+    expect(screen.getByText(/english-friendly market/i)).toBeInTheDocument();
+  });
+
+  it('renders nothing for a middling score (not a blanket claim)', () => {
+    const { container } = render(<LanguageFriendlyBadge score={70} />);
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it('renders nothing when absent', () => {
+    const { container } = render(<LanguageFriendlyBadge score={null} />);
     expect(container).toBeEmptyDOMElement();
   });
 });

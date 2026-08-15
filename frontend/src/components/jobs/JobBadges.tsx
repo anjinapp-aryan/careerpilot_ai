@@ -1,4 +1,4 @@
-import { Clock, Flame, Globe, Plane, Stamp, Star, MapPin, TrendingUp } from 'lucide-react';
+import { Clock, Flame, Globe, Landmark, Plane, Stamp, Star, MapPin, TrendingUp } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/cn';
 import type { Job } from '@/types/workflow';
@@ -112,6 +112,94 @@ export function FreshnessBadge({ freshness }: { freshness?: string | null }) {
   return (
     <Badge tone={freshness === 'VERY_FRESH' || freshness === 'FRESH' ? 'success' : 'neutral'}>
       <Clock className="h-3 w-3" /> {FRESHNESS_LABEL[freshness]}
+    </Badge>
+  );
+}
+
+const SEARCH_PRIORITY_LABEL: Record<string, string> = {
+  PRIMARY: 'Primary',
+  PRIMARY_SPECIALIST: 'Primary · Specialist',
+  SECONDARY: 'Secondary',
+  SELECTIVE: 'Selective',
+};
+const SEARCH_PRIORITY_TONE: Record<string, 'success' | 'primary' | 'neutral' | 'warning'> = {
+  PRIMARY: 'success',
+  PRIMARY_SPECIALIST: 'success',
+  SECONDARY: 'primary',
+  SELECTIVE: 'warning',
+};
+
+/**
+ * International Job Discovery Phase 2 — the business search-priority chip, deliberately separate
+ * from {@link CountryTierBadge} (a different, older classification — see `SearchPriority`'s
+ * backend javadoc for why they aren't merged). Omitted entirely for a country with no assignment
+ * (e.g. UAE) rather than showing a default.
+ */
+export function SearchPriorityBadge({ searchPriority }: { searchPriority?: string | null }) {
+  if (!searchPriority || !SEARCH_PRIORITY_LABEL[searchPriority]) return null;
+  return (
+    <Badge tone={SEARCH_PRIORITY_TONE[searchPriority]}>
+      <MapPin className="h-3 w-3" /> {SEARCH_PRIORITY_LABEL[searchPriority]}
+    </Badge>
+  );
+}
+
+const COUNTRY_FIT_LABEL: Record<string, string> = {
+  VERY_HIGH: 'Country Fit: Very High',
+  HIGH: 'Country Fit: High',
+  MEDIUM: 'Country Fit: Medium',
+  LOW: 'Country Fit: Low',
+};
+const COUNTRY_FIT_TONE: Record<string, 'success' | 'primary' | 'neutral' | 'warning'> = {
+  VERY_HIGH: 'success',
+  HIGH: 'primary',
+  MEDIUM: 'neutral',
+  LOW: 'warning',
+};
+
+/**
+ * International Job Discovery Phase 2 — how well this country fits THIS candidate specifically
+ * (not the job's own match score, which stays a separate, dominant number). Omitted when the
+ * country has no curated intelligence to evaluate against — never a guessed default.
+ */
+export function CandidateCountryFitBadge({ fit }: { fit?: string | null }) {
+  if (!fit || !COUNTRY_FIT_LABEL[fit]) return null;
+  return (
+    <Badge tone={COUNTRY_FIT_TONE[fit]}>
+      <TrendingUp className="h-3 w-3" /> {COUNTRY_FIT_LABEL[fit]}
+    </Badge>
+  );
+}
+
+const INDUSTRY_ICON: Record<string, string> = {
+  BANKING: '🏦',
+  FINTECH: '💳',
+  ENTERPRISE: '🏢',
+  CLOUD: '☁️',
+  PLATFORM: '⚙️',
+};
+
+/**
+ * International Job Discovery Phase 2 — the job's own classified industry, from its real text
+ * (title/description/company) via the backend `IndustryFitClassifier` — never inferred from the
+ * job's country. Omitted when unclassifiable rather than shown as "Unknown" (matches this
+ * codebase's honest-omission convention for every other nullable badge on this card).
+ */
+export function IndustryFitBadge({ industry }: { industry?: string | null }) {
+  if (!industry || !INDUSTRY_ICON[industry]) return null;
+  return (
+    <Badge tone="neutral">
+      {INDUSTRY_ICON[industry]} {industry.charAt(0) + industry.slice(1).toLowerCase()}
+    </Badge>
+  );
+}
+
+/** International Job Discovery Phase 2 — curated country language-friendliness, shown only when >= 85 (a genuinely reassuring signal, not a blanket claim). */
+export function LanguageFriendlyBadge({ score }: { score?: number | null }) {
+  if (score == null || score < 85) return null;
+  return (
+    <Badge tone="neutral">
+      <Landmark className="h-3 w-3" /> English-friendly market
     </Badge>
   );
 }

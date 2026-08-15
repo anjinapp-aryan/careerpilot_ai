@@ -25,7 +25,15 @@ import { cn } from '@/lib/cn';
 import { ExplainDialog } from '@/components/jobs/ExplainDialog';
 import { RelevanceDrawer } from '@/components/jobs/RelevanceDrawer';
 import { PrepareApplicationDrawer } from '@/components/jobs/PrepareApplicationDrawer';
-import { JobBadges, SponsorshipBadge, FreshnessBadge } from '@/components/jobs/JobBadges';
+import {
+  JobBadges,
+  SponsorshipBadge,
+  FreshnessBadge,
+  SearchPriorityBadge,
+  CandidateCountryFitBadge,
+  IndustryFitBadge,
+  LanguageFriendlyBadge,
+} from '@/components/jobs/JobBadges';
 import { trackJobEvent } from '@/lib/jobTelemetry';
 import type { RecommendedFilter, RecommendedJob, RecommendedJobsResponse, ScoreBreakdown } from '@/types/workflow';
 
@@ -81,6 +89,8 @@ const COUNTRY_FLAGS: Record<string, string> = {
 export function RecommendedJobs({ onApply, onSave, busy }: RecommendedJobsProps) {
   const [filter, setFilter] = useState<RecommendedFilter>('all');
   const [countryFilter, setCountryFilter] = useState<string | null>(null);
+  const [priorityFilter, setPriorityFilter] = useState<string | null>(null);
+  const [industryFilter, setIndustryFilter] = useState<string | null>(null);
   const [explainJob, setExplainJob] = useState<{
     id: string;
     title: string;
@@ -172,7 +182,18 @@ export function RecommendedJobs({ onApply, onSave, busy }: RecommendedJobsProps)
   const countriesPresent = Array.from(
     new Set(allJobs.map((r) => r.job.country).filter((c): c is string => !!c)),
   ).sort();
-  const jobs = countryFilter ? allJobs.filter((r) => r.job.country === countryFilter) : allJobs;
+  // Tier/industry chips, same client-side-only convention as the country chips: only ever list
+  // values actually present in already-loaded jobs, filter over that same already-fetched data —
+  // no extra API call for any of the three.
+  const PRIORITY_ORDER = ['PRIMARY', 'PRIMARY_SPECIALIST', 'SECONDARY', 'SELECTIVE'];
+  const prioritiesPresent = (Array.from(new Set(allJobs.map((r) => r.searchPriority))).filter(Boolean) as string[])
+    .sort((a, b) => PRIORITY_ORDER.indexOf(a) - PRIORITY_ORDER.indexOf(b));
+  const industriesPresent = (Array.from(new Set(allJobs.map((r) => r.industryFit))).filter(Boolean) as string[])
+    .sort();
+  const jobs = allJobs
+    .filter((r) => !countryFilter || r.job.country === countryFilter)
+    .filter((r) => !priorityFilter || r.searchPriority === priorityFilter)
+    .filter((r) => !industryFilter || r.industryFit === industryFilter);
 
   return (
     <div className="space-y-6">
@@ -255,6 +276,66 @@ export function RecommendedJobs({ onApply, onSave, busy }: RecommendedJobsProps)
               )}
             >
               {COUNTRY_FLAGS[country] ? `${COUNTRY_FLAGS[country]} ` : ''}{country}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {prioritiesPresent.length > 1 && (
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            onClick={() => setPriorityFilter(null)}
+            className={cn(
+              'rounded-full border px-3 py-1 text-xs font-medium transition-colors',
+              priorityFilter === null
+                ? 'border-primary bg-primary/10 text-primary'
+                : 'border-border text-muted-foreground hover:bg-muted',
+            )}
+          >
+            All priorities
+          </button>
+          {prioritiesPresent.map((p) => (
+            <button
+              key={p}
+              onClick={() => setPriorityFilter(p === priorityFilter ? null : p)}
+              className={cn(
+                'rounded-full border px-3 py-1 text-xs font-medium transition-colors',
+                priorityFilter === p
+                  ? 'border-primary bg-primary/10 text-primary'
+                  : 'border-border text-muted-foreground hover:bg-muted',
+              )}
+            >
+              {p.replace('_', ' ').toLowerCase().replace(/^\w/, (c) => c.toUpperCase())}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {industriesPresent.length > 1 && (
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            onClick={() => setIndustryFilter(null)}
+            className={cn(
+              'rounded-full border px-3 py-1 text-xs font-medium transition-colors',
+              industryFilter === null
+                ? 'border-primary bg-primary/10 text-primary'
+                : 'border-border text-muted-foreground hover:bg-muted',
+            )}
+          >
+            All industries
+          </button>
+          {industriesPresent.map((ind) => (
+            <button
+              key={ind}
+              onClick={() => setIndustryFilter(ind === industryFilter ? null : ind)}
+              className={cn(
+                'rounded-full border px-3 py-1 text-xs font-medium transition-colors',
+                industryFilter === ind
+                  ? 'border-primary bg-primary/10 text-primary'
+                  : 'border-border text-muted-foreground hover:bg-muted',
+              )}
+            >
+              {ind.charAt(0) + ind.slice(1).toLowerCase()}
             </button>
           ))}
         </div>
@@ -396,9 +477,14 @@ export function RecommendedJobCard({
         </div>
 
         <JobBadges job={job} className="mt-3" priority={rec.priority} mustApply={rec.mustApply} />
-        {(job.sponsorshipStatus || rec.freshness) && (
+        {(job.sponsorshipStatus || rec.freshness || rec.searchPriority || rec.candidateCountryFit
+          || rec.industryFit || rec.languageFriendlyScore != null) && (
           <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+            <SearchPriorityBadge searchPriority={rec.searchPriority} />
+            <CandidateCountryFitBadge fit={rec.candidateCountryFit} />
             <SponsorshipBadge status={job.sponsorshipStatus} />
+            <IndustryFitBadge industry={rec.industryFit} />
+            <LanguageFriendlyBadge score={rec.languageFriendlyScore} />
             <FreshnessBadge freshness={rec.freshness} />
           </div>
         )}

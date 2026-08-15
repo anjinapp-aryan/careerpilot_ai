@@ -179,6 +179,18 @@ export interface RecommendedJob {
   /** Global Job Discovery Expansion — freshness band computed from postedDate/createdAt. Null
    *  unless career.international.freshness.enabled. */
   freshness?: 'VERY_FRESH' | 'FRESH' | 'RECENT' | 'AGING' | 'STALE' | null;
+  /** International Job Discovery Phase 2 — business search priority for this job's country. Null
+   *  unless career.international.country-priority.enabled, or the country has no assignment. */
+  searchPriority?: 'PRIMARY' | 'PRIMARY_SPECIALIST' | 'SECONDARY' | 'SELECTIVE' | null;
+  /** International Job Discovery Phase 2 — how well this country fits the candidate specifically
+   *  (not the job's own match score). Null unless career.international.industry-fit.enabled. */
+  candidateCountryFit?: 'VERY_HIGH' | 'HIGH' | 'MEDIUM' | 'LOW' | null;
+  /** International Job Discovery Phase 2 — the job's own classified industry, from its real text
+   *  (title/description/company), never inferred from country. Null when unclassifiable/disabled. */
+  industryFit?: 'BANKING' | 'FINTECH' | 'ENTERPRISE' | 'CLOUD' | 'PLATFORM' | null;
+  /** International Job Discovery Phase 2 — curated country language-friendliness (0-100). Null
+   *  unless enabled or the country has no curated value. */
+  languageFriendlyScore?: number | null;
 }
 
 /** `GET /api/jobs/{id}/relevance` response (Phase 3B.1 explainability). Mirrors

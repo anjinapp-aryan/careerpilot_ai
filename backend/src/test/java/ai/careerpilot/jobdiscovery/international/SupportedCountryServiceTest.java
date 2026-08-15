@@ -26,6 +26,12 @@ class SupportedCountryServiceTest {
         return SupportedCountry.builder().countryCode(code).displayName(name).tier(tier).active(active).build();
     }
 
+    private static SupportedCountry country(String code, String name, CountryTier tier, boolean active,
+                                             SearchPriority priority) {
+        return SupportedCountry.builder().countryCode(code).displayName(name).tier(tier).active(active)
+                .searchPriority(priority).build();
+    }
+
     @Test
     void isSupportedTrueForActiveSeededCountry() {
         when(repository.findByCountryCodeIgnoreCase("de"))
@@ -88,5 +94,56 @@ class SupportedCountryServiceTest {
         assertThat(disabled.isSupported("de")).isFalse();
         assertThat(disabled.tierOf("de")).isEmpty();
         assertThat(disabled.byDisplayName("Germany")).isEmpty();
+    }
+
+    // ── International Job Discovery Phase 2 — search priority ──
+
+    @Test
+    void searchPriorityOfReturnsThePrimaryAssignmentForGermanyIrelandNetherlandsUk() {
+        for (String code : new String[]{"de", "ie", "nl", "gb"}) {
+            when(repository.findByCountryCodeIgnoreCase(code))
+                    .thenReturn(Optional.of(country(code, code, CountryTier.TIER_1, true, SearchPriority.PRIMARY)));
+            assertThat(service.searchPriorityOf(code)).contains(SearchPriority.PRIMARY);
+        }
+    }
+
+    @Test
+    void searchPriorityOfReturnsPrimarySpecialistForLuxembourg() {
+        when(repository.findByCountryCodeIgnoreCase("lu"))
+                .thenReturn(Optional.of(country("lu", "Luxembourg", CountryTier.TIER_3, true, SearchPriority.PRIMARY_SPECIALIST)));
+        assertThat(service.searchPriorityOf("lu")).contains(SearchPriority.PRIMARY_SPECIALIST);
+    }
+
+    @Test
+    void searchPriorityOfReturnsSecondaryForPolandSingaporeCanadaAustralia() {
+        for (String code : new String[]{"pl", "sg", "ca", "au"}) {
+            when(repository.findByCountryCodeIgnoreCase(code))
+                    .thenReturn(Optional.of(country(code, code, CountryTier.TIER_2, true, SearchPriority.SECONDARY)));
+            assertThat(service.searchPriorityOf(code)).contains(SearchPriority.SECONDARY);
+        }
+    }
+
+    @Test
+    void searchPriorityOfReturnsSelectiveForUsa() {
+        when(repository.findByCountryCodeIgnoreCase("us"))
+                .thenReturn(Optional.of(country("us", "United States", CountryTier.TIER_1, true, SearchPriority.SELECTIVE)));
+        assertThat(service.searchPriorityOf("us")).contains(SearchPriority.SELECTIVE);
+    }
+
+    @Test
+    void searchPriorityOfIsEmptyForACountryWithNoAssignment() {
+        // UAE remains a supported country but is deliberately outside this 10-country priority
+        // strategy — searchPriority stays NULL, never a guessed default.
+        when(repository.findByCountryCodeIgnoreCase("ae"))
+                .thenReturn(Optional.of(country("ae", "United Arab Emirates", CountryTier.TIER_2, true, null)));
+        assertThat(service.searchPriorityOf("ae")).isEmpty();
+    }
+
+    @Test
+    void searchPriorityOfIsEmptyWhenFlagOff() {
+        SupportedCountryService disabled = new SupportedCountryService(repository, false);
+        when(repository.findByCountryCodeIgnoreCase("de"))
+                .thenReturn(Optional.of(country("de", "Germany", CountryTier.TIER_1, true, SearchPriority.PRIMARY)));
+        assertThat(disabled.searchPriorityOf("de")).isEmpty();
     }
 }

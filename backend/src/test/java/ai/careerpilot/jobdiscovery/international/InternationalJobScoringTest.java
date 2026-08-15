@@ -2,6 +2,7 @@ package ai.careerpilot.jobdiscovery.international;
 
 import ai.careerpilot.domain.CountryIntelligence;
 import ai.careerpilot.domain.Job;
+import ai.careerpilot.jobdiscovery.IndustryFitClassifier;
 import ai.careerpilot.jobdiscovery.JobScoring;
 import ai.careerpilot.jobdiscovery.JobTaxonomy;
 import org.junit.jupiter.api.Test;
@@ -9,15 +10,18 @@ import org.junit.jupiter.api.Test;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * International Job Discovery Engine, Phase 1 — {@link InternationalJobScoring}. Pins the exact
- * 40/15/10/10/10/5/5/5 weighted-sum formula from the program spec against known component scores,
- * and confirms it's independent of {@link JobScoring#scoreV2}'s own weights.
+ * International Job Discovery Engine, Phase 1 (+ Phase 2 extended scoring) — {@link
+ * InternationalJobScoring}. Pins the exact 40/15/10/10/10/5/5/5 weighted-sum formula from the
+ * program spec against known component scores when the Phase 2 extended-scoring flag is off, and
+ * confirms it's independent of {@link JobScoring#scoreV2}'s own weights.
  */
 class InternationalJobScoringTest {
 
     private final JobTaxonomy taxonomy = new JobTaxonomy();
     private final JobScoring jobScoring = new JobScoring(taxonomy);
-    private final InternationalJobScoring scoring = new InternationalJobScoring(jobScoring, taxonomy);
+    private final IndustryFitClassifier industryFitClassifier = new IndustryFitClassifier();
+    private final InternationalJobScoring scoring =
+            new InternationalJobScoring(jobScoring, taxonomy, industryFitClassifier, false);
 
     private static CountryIntelligence intel(int visa, int principalGrowth, int aiMarket) {
         return CountryIntelligence.builder()
@@ -139,5 +143,113 @@ class InternationalJobScoringTest {
         var r = scoring.score(job, null, ctx, JobScoring.PreferenceContext.empty(), null);
 
         assertThat(r.rankScore()).isBetween(0, 100);
+    }
+
+    // ── International Job Discovery Phase 2 — extended scoring (flag-gated) ──
+
+    private static CountryIntelligence intelWithLanguageAndIndustry(int visa, int language, String industryFitJson) {
+        return CountryIntelligence.builder()
+                .countryCode("de").visaProbabilityScore(visa).relocationDifficultyScore(50)
+                .languageRequirementScore(50).costOfLivingIndex(50).expectedSavingsScore(50)
+                .jobStabilityScore(50).techMarketScore(50).principalEngineerGrowthScore(50).aiMarketScore(50)
+                .languageFriendlyScore(language).industryFitJson(industryFitJson)
+                .build();
+    }
+
+    @Test
+    void flagOffProducesTheExactPre_Phase2FormulaEvenThoughLanguageAndIndustryAreStillComputed() {
+        Job job = Job.builder().title("Senior Java Engineer").description("Payments platform").company("J.P. Morgan")
+                .companySize("ENTERPRISE").remoteType("REMOTE").build();
+        JobScoring.CandidateContext ctx = new JobScoring.CandidateContext(
+                java.util.List.of("java"), "Senior Java Engineer", java.util.List.of(), 10, null);
+        CountryIntelligence intel = intelWithLanguageAndIndustry(75, 90, "[\"BANKING\"]");
+
+        InternationalJobScoring.InternationalScoreResult r =
+                scoring.score(job, "java", ctx, JobScoring.PreferenceContext.empty(), intel);
+
+        // languageFitScore/industryFitScore are still real, non-placeholder values...
+        assertThat(r.languageFitScore()).isEqualTo(90);
+        assertThat(r.industryFitScore()).isEqualTo(100); // BANKING job, BANKING country intel — overlap
+
+        // ...but rankScore is still the exact pinned 40/15/10/10/10/5/5/5 formula, unaffected by them.
+        int expected = Math.round(r.skillScore() * 0.40f + r.visaProbabilityScore() * 0.15f
+                + r.salaryScore() * 0.10f + r.careerGrowthScore() * 0.10f + r.companyStabilityScore() * 0.10f
+                + r.remoteFlexibilityScore() * 0.05f + r.principalEngineerGrowthScore() * 0.05f
+                + r.aiTechStackScore() * 0.05f);
+        assertThat(r.rankScore()).isEqualTo(Math.min(100, Math.max(0, expected)));
+    }
+
+    @Test
+    void flagOnIncludesLanguageAndIndustryInTheRankScore() {
+        InternationalJobScoring extended =
+                new InternationalJobScoring(jobScoring, taxonomy, industryFitClassifier, true);
+        Job job = Job.builder().title("Senior Java Engineer").description("Payments platform").company("J.P. Morgan")
+                .companySize("ENTERPRISE").remoteType("REMOTE").build();
+        JobScoring.CandidateContext ctx = new JobScoring.CandidateContext(
+                java.util.List.of("java"), "Senior Java Engineer", java.util.List.of(), 10, null);
+        CountryIntelligence intel = intelWithLanguageAndIndustry(75, 90, "[\"BANKING\"]");
+
+        InternationalJobScoring.InternationalScoreResult r =
+                extended.score(job, "java", ctx, JobScoring.PreferenceContext.empty(), intel);
+
+        int expected = Math.round(r.skillScore() * 0.35f + r.visaProbabilityScore() * 0.13f
+                + r.salaryScore() * 0.09f + r.careerGrowthScore() * 0.09f + r.companyStabilityScore() * 0.09f
+                + r.remoteFlexibilityScore() * 0.05f + r.principalEngineerGrowthScore() * 0.05f
+                + r.aiTechStackScore() * 0.05f + r.languageFitScore() * 0.05f + r.industryFitScore() * 0.05f);
+        assertThat(r.rankScore()).isEqualTo(Math.min(100, Math.max(0, expected)));
+    }
+
+    @Test
+    void skillMatchRemainsTheDominantWeightEvenWithExtendedScoringOn() {
+        // A candidate-country/industry mismatch must never outrank raw skill fit — skill is 35% vs
+        // the next-highest term at 13%, 2.7x the weight of any single other factor.
+        InternationalJobScoring extended =
+                new InternationalJobScoring(jobScoring, taxonomy, industryFitClassifier, true);
+        Job strongSkillWeakEverythingElse = Job.builder().title("Senior Java Engineer")
+                .description("Java Spring Boot Kubernetes AWS Kafka").build();
+        JobScoring.CandidateContext ctx = new JobScoring.CandidateContext(
+                java.util.List.of("java", "spring boot", "kubernetes", "aws", "kafka"), "Senior Java Engineer",
+                java.util.List.of(), 10, null);
+        CountryIntelligence poorIntel = intelWithLanguageAndIndustry(20, 20, "[\"UNRELATED\"]");
+
+        var r = extended.score(strongSkillWeakEverythingElse, "java,spring boot,kubernetes,aws,kafka", ctx,
+                JobScoring.PreferenceContext.empty(), poorIntel);
+
+        assertThat(r.skillScore()).isGreaterThanOrEqualTo(80);
+        // Even with weak visa/language/industry, strong skill match keeps rankScore respectable.
+        assertThat(r.rankScore()).isGreaterThan(40);
+    }
+
+    @Test
+    void languageFitScoreIsNeutral50WhenCountryHasNoCuratedValue() {
+        JobScoring.CandidateContext ctx = new JobScoring.CandidateContext(
+                java.util.List.of(), "Backend Engineer", java.util.List.of(), null, null);
+        Job job = Job.builder().title("Backend Engineer").description("").build();
+        CountryIntelligence noLanguageScore = intel(50, 50, 50); // uses the original helper — no languageFriendlyScore set
+
+        assertThat(scoring.score(job, null, ctx, JobScoring.PreferenceContext.empty(), noLanguageScore).languageFitScore())
+                .isEqualTo(50);
+    }
+
+    @Test
+    void industryFitScoreIsNeutral50WhenJobIndustryIsUnclassifiable() {
+        JobScoring.CandidateContext ctx = new JobScoring.CandidateContext(
+                java.util.List.of(), "Backend Engineer", java.util.List.of(), null, null);
+        Job unclassifiable = Job.builder().title("Barista").description("Make coffee").build();
+        CountryIntelligence intel = intelWithLanguageAndIndustry(75, 75, "[\"BANKING\"]");
+
+        assertThat(scoring.score(unclassifiable, null, ctx, JobScoring.PreferenceContext.empty(), intel).industryFitScore())
+                .isEqualTo(50);
+    }
+
+    @Test
+    void industryFitScoreIsLowWhenJobIndustryDoesNotOverlapCountryIndustries() {
+        JobScoring.CandidateContext ctx = new JobScoring.CandidateContext(
+                java.util.List.of(), "Backend Engineer", java.util.List.of(), null, null);
+        Job cloudJob = Job.builder().title("Cloud Engineer").description("AWS Terraform cloud migration").build();
+        CountryIntelligence bankingOnlyCountry = intelWithLanguageAndIndustry(75, 75, "[\"BANKING\"]");
+
+        assertThat(scoring.score(cloudJob, null, ctx, JobScoring.PreferenceContext.empty(), bankingOnlyCountry).industryFitScore())
+                .isEqualTo(30);
     }
 }

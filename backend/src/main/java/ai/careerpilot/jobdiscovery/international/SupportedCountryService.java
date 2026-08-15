@@ -51,6 +51,17 @@ public class SupportedCountryService {
     }
 
     /**
+     * International Job Discovery Phase 2 — the business PRIMARY/PRIMARY_SPECIALIST/SECONDARY/
+     * SELECTIVE priority, independent of {@link #tierOf}. Empty for a country never assigned one
+     * (e.g. UAE, deliberately outside this phase's 10-country strategy) — never a guessed default.
+     */
+    public Optional<SearchPriority> searchPriorityOf(String countryCode) {
+        if (!enabled || countryCode == null || countryCode.isBlank()) return Optional.empty();
+        return repository.findByCountryCodeIgnoreCase(countryCode.trim())
+                .map(SupportedCountry::getSearchPriority).filter(java.util.Objects::nonNull);
+    }
+
+    /**
      * Resolve by the display name stored on {@link ai.careerpilot.domain.Job#getCountry()} (e.g.
      * "Germany") — the identifier space {@code jobs.country}/{@code InternationalScopeStrategy}
      * actually use, distinct from the ISO {@code country_code} this table is keyed on.

@@ -26,6 +26,8 @@ interface SupportedCountry {
   countryCode: string;
   displayName: string;
   tier: string;
+  /** International Job Discovery Phase 2 — additive; may be absent for countries outside the priority strategy (e.g. UAE). */
+  searchPriority?: string | null;
 }
 
 const TIER_LABEL: Record<string, string> = {

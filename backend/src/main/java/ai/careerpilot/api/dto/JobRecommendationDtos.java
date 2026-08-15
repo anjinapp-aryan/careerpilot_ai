@@ -36,13 +36,28 @@ public final class JobRecommendationDtos {
             Integer priorityScore,
             Boolean mustApply,
             String atsPlatform,
-            String freshness) {
+            String freshness,
+            // ── International Job Discovery Phase 2 — additive, all nullable, all honestly-omitted
+            // rather than guessed when the underlying data/flag isn't there ──
+            String searchPriority,
+            String candidateCountryFit,
+            String industryFit,
+            Integer languageFriendlyScore) {
 
         /**
-         * Backward-compatible constructor preserving the pre-existing 11-arg shape (post-atsPlatform)
-         * — every prior call site keeps compiling and serializing exactly as before, with
-         * {@code freshness} defaulting to {@code null} (not computed) rather than a guess.
+         * Backward-compatible constructor preserving the pre-existing 12-arg shape (post-freshness)
+         * — every prior call site keeps compiling and serializing exactly as before, with the four
+         * Phase 2 fields defaulting to {@code null} (not computed) rather than a guess.
          */
+        public RecommendedJob(Job job, int matchScore, List<String> matchedSkills, List<String> missingSkills,
+                              String confidenceLevel, ScoreBreakdown scoreBreakdown, String category,
+                              String priority, Integer priorityScore, Boolean mustApply, String atsPlatform,
+                              String freshness) {
+            this(job, matchScore, matchedSkills, missingSkills, confidenceLevel, scoreBreakdown, category,
+                    priority, priorityScore, mustApply, atsPlatform, freshness, null, null, null, null);
+        }
+
+        /** Backward-compatible constructor preserving the pre-existing 11-arg shape (post-atsPlatform). */
         public RecommendedJob(Job job, int matchScore, List<String> matchedSkills, List<String> missingSkills,
                               String confidenceLevel, ScoreBreakdown scoreBreakdown, String category,
                               String priority, Integer priorityScore, Boolean mustApply, String atsPlatform) {
